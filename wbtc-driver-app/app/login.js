@@ -9,10 +9,11 @@ const DRIVER_KEY = "wbtc_driver_profile";
 const CONDUCTOR_KEY = "wbtc_conductor_profile";
 const OWNER_KEY = "wbtc_owner_profile";
 const USER_ROLE_KEY = "wbtc_user_role";
+const PRODUCTION_API_BASE = "https://wbtc-aduk.onrender.com";
 
 export default function Login() {
   const router = useRouter();
-  const [apiBase, setApiBase] = useState("https://wbtc-aduk.onrender.com");
+  const [apiBase, setApiBase] = useState(PRODUCTION_API_BASE);
   const [empId, setEmpId] = useState("");
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
@@ -25,7 +26,12 @@ export default function Login() {
       const storedBase = await AsyncStorage.getItem(API_BASE_KEY);
       const token = await AsyncStorage.getItem(TOKEN_KEY);
       const savedRole = await AsyncStorage.getItem(USER_ROLE_KEY);
-      if (storedBase) setApiBase(storedBase);
+      const normalizedBase =
+        storedBase && !storedBase.includes("localhost") && !storedBase.includes("192.168.")
+          ? storedBase
+          : PRODUCTION_API_BASE;
+      setApiBase(normalizedBase);
+      await AsyncStorage.setItem(API_BASE_KEY, normalizedBase);
       if (savedRole === "CONDUCTOR") setRole("CONDUCTOR");
       if (savedRole === "OWNER") setRole("OWNER");
       if (token) {
@@ -112,14 +118,10 @@ export default function Login() {
       </View>
 
       <View style={styles.card}>
-        <Text style={styles.label}>API Base URL</Text>
-        <TextInput
-          style={styles.input}
-          value={apiBase}
-          onChangeText={setApiBase}
-          placeholder="192.168.1.37:5000"
-          autoCapitalize="none"
-        />
+        <View style={styles.serverPill}>
+          <Text style={styles.serverLabel}>Server</Text>
+          <Text style={styles.serverValue}>{apiBase}</Text>
+        </View>
 
         {role === "OWNER" ? (
           <>
@@ -183,7 +185,7 @@ export default function Login() {
         </TouchableOpacity>
       </View>
 
-      <Text style={styles.help}>Tip: use your PC IP when testing from Expo Go.</Text>
+      <Text style={styles.help}>This app is connected to the live WBTC server.</Text>
     </View>
   );
 }
@@ -253,6 +255,27 @@ const styles = StyleSheet.create({
     fontSize: 16,
     color: "#0F172A",
     backgroundColor: "#F8FAFC",
+  },
+  serverPill: {
+    backgroundColor: "#EFF6FF",
+    borderWidth: 1,
+    borderColor: "#BFDBFE",
+    borderRadius: 12,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+  },
+  serverLabel: {
+    fontSize: 11,
+    textTransform: "uppercase",
+    letterSpacing: 0.8,
+    color: "#1D4ED8",
+    fontWeight: "700",
+  },
+  serverValue: {
+    marginTop: 4,
+    color: "#0F172A",
+    fontSize: 13,
+    fontWeight: "600",
   },
   button: {
     marginTop: 18,
