@@ -1,0 +1,35 @@
+{
+  "expo": {
+    "name": "WBTC Driver",
+    "slug": "wbtc-driver-app",
+    "version": "1.0.1",
+    "scheme": "wbtcdriver",
+    "plugins": [
+      "expo-router",
+      "@react-native-community/datetimepicker"
+    ],
+    "android": {
+      "package": "com.wbtc.driver",
+      "versionCode": 2,
+      "usesCleartextTraffic": true,
+      "config": {
+        "googleMaps": {
+          "apiKey": "AIzaSyAxS1Ck3izjweHzFk8tW2RpMyigLVSE-0o"
+        }
+      },
+      "permissions": [
+        "BLUETOOTH",
+        "BLUETOOTH_ADMIN",
+        "BLUETOOTH_CONNECT",
+        "BLUETOOTH_SCAN",
+        "ACCESS_FINE_LOCATION"
+      ]
+    },
+    "extra": {
+      "router": {},
+      "eas": {
+        "projectId": "14a16611-0399-4ee4-b027-d98b0f986d94"
+      }
+    }
+  }
+}
