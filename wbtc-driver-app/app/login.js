@@ -12,7 +12,7 @@ const USER_ROLE_KEY = "wbtc_user_role";
 
 export default function Login() {
   const router = useRouter();
-  const [apiBase, setApiBase] = useState("http://localhost:5000");
+  const [apiBase, setApiBase] = useState("https://wbtc-aduk.onrender.com");
   const [empId, setEmpId] = useState("");
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");

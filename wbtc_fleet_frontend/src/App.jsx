@@ -17,7 +17,7 @@ import PaymentsOverview from "./pages/PaymentsOverview.jsx";
 import Login from "./pages/Login.jsx";
 import Register from "./pages/Register.jsx";
 
-const defaultApiBase = "http://localhost:5000";
+const defaultApiBase = "https://wbtc-aduk.onrender.com";
 
 function App() {
   const [apiBase, setApiBase] = useState(defaultApiBase);
