@@ -568,25 +568,28 @@ exports.listTripOffers = asyncHandler(async (req, res) => {
     }
 
     const startLocation = getStartLocation(route, trip.direction);
-    const tripBusId = String(trip.busId?._id || trip.busId || "");
+    let tripBusId = String(trip.busId?._id || trip.busId || "");
     let inferredBusForTrip = null;
 
     if (mappedBusIds.size > 0) {
       if (tripBusId) {
         if (!mappedBusIds.has(tripBusId)) {
           trackSkip(trip, "trip_bus_not_mapped_to_driver");
-          continue;
+          tripBusId = "";
         }
-        const mappedBus = mappedBusById.get(tripBusId);
-        if (
-          startLocation &&
-          normalizeLocation(mappedBus?.currentLocation) &&
-          normalizeLocation(mappedBus.currentLocation) !== normalizeLocation(startLocation)
-        ) {
-          trackSkip(trip, "mapped_bus_not_at_pickup_location");
-          continue;
+        if (tripBusId) {
+          const mappedBus = mappedBusById.get(tripBusId);
+          if (
+            startLocation &&
+            normalizeLocation(mappedBus?.currentLocation) &&
+            normalizeLocation(mappedBus.currentLocation) !== normalizeLocation(startLocation)
+          ) {
+            trackSkip(trip, "mapped_bus_not_at_pickup_location");
+            tripBusId = "";
+          }
         }
-      } else {
+      }
+      if (!tripBusId) {
         const eligibleMappedForRoute = mappedBusDocs.filter((bus) => {
           if (!bus?._id) return false;
           if (String(bus.status || "") !== "Active") return false;

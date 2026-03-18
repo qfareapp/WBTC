@@ -120,16 +120,6 @@ export default function ActiveTrips() {
       const data = text ? JSON.parse(text) : {};
       if (!response.ok) throw new Error(data.message || t("driverActive", "failedLoadOffers"));
       setOffers(data.offers || []);
-      if ((data.offers || []).length === 0 && data.debug?.summary) {
-        const topReasons = Object.entries(data.debug.summary)
-          .sort((a, b) => b[1] - a[1])
-          .slice(0, 3)
-          .map(([reason, count]) => `${reason} (${count})`)
-          .join(", ");
-        if (topReasons) {
-          setNotice(t("driverActive", "noOffersReasons", { reasons: topReasons }));
-        }
-      }
     } catch (err) {
       setNotice(err.message);
     } finally {
