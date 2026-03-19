@@ -764,22 +764,39 @@ exports.listConductorTickets = asyncHandler(async (req, res) => {
         .lean()
     : [];
   const tripById = new Map(tripDocs.map((trip) => [String(trip._id), trip]));
+  const routeIds = Array.from(
+    new Set(
+      tickets
+        .map((ticket) => String(ticket.routeId || "").trim())
+        .filter(Boolean)
+    )
+  );
+  const routeDocs = routeIds.length
+    ? await Route.find({ _id: { $in: routeIds } })
+        .select("routeCode routeName source destination")
+        .lean()
+    : [];
+  const routeById = new Map(routeDocs.map((route) => [String(route._id), route]));
 
   const groups = new Map();
   for (const ticket of tickets) {
     const tripId = String(ticket.tripInstanceId || "UNMAPPED");
     const trip = tripById.get(String(ticket.tripInstanceId || "")) || null;
-    const route = trip?.routeId || null;
+    const route = trip?.routeId || routeById.get(String(ticket.routeId || "")) || null;
     const tripKey = tripId;
+    const fallbackRouteName =
+      route?.routeName ||
+      [ticket.source, ticket.destination].filter(Boolean).join(" - ") ||
+      "Route";
 
     if (!groups.has(tripKey)) {
       groups.set(tripKey, {
         tripInstanceId: tripId === "UNMAPPED" ? null : tripId,
         route: {
-          routeCode: route?.routeCode || String(ticket.routeId || "--"),
-          routeName: route?.routeName || "--",
-          source: route?.source || "--",
-          destination: route?.destination || "--",
+          routeCode: route?.routeCode || "Route",
+          routeName: fallbackRouteName,
+          source: route?.source || ticket.source || "--",
+          destination: route?.destination || ticket.destination || "--",
         },
         timing: {
           startTime: trip?.startTime || "--",
