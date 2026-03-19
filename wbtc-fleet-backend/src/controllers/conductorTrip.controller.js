@@ -152,6 +152,36 @@ const getFareForStops = async (routeId, source, destination) => {
   };
 };
 
+const cleanupStaleConductorAssignments = async ({ conductorId, date }) => {
+  const openAssignments = await ConductorAssignment.find({
+    conductorId,
+    date,
+    status: { $in: ["Scheduled", "Active"] },
+  }).select("_id tripInstanceId");
+
+  if (!openAssignments.length) return;
+
+  const tripIds = openAssignments.map((item) => item.tripInstanceId).filter(Boolean);
+  const trips = tripIds.length
+    ? await TripInstance.find({ _id: { $in: tripIds } }).select("_id status")
+    : [];
+  const tripStatusById = new Map(trips.map((trip) => [String(trip._id), String(trip.status || "")]));
+
+  const staleAssignmentIds = openAssignments
+    .filter((assignment) => {
+      const tripStatus = tripStatusById.get(String(assignment.tripInstanceId || ""));
+      return !tripStatus || tripStatus === "Completed";
+    })
+    .map((assignment) => assignment._id);
+
+  if (!staleAssignmentIds.length) return;
+
+  await ConductorAssignment.updateMany(
+    { _id: { $in: staleAssignmentIds } },
+    { $set: { status: "Completed" } }
+  );
+};
+
 exports.listConductorOffers = asyncHandler(async (req, res) => {
   const conductorId = req.user.userId;
   const date = req.query.date || today();
@@ -174,6 +204,8 @@ exports.listConductorOffers = asyncHandler(async (req, res) => {
   };
   const conductor = await Conductor.findById(conductorId);
   if (!conductor) throw new ApiError(404, "Conductor not found");
+
+  await cleanupStaleConductorAssignments({ conductorId, date });
 
   if (conductor.status !== "Available") {
     return res.json(debugNoOffers("conductor_not_available"));
@@ -366,6 +398,10 @@ exports.acceptConductorOffer = asyncHandler(async (req, res) => {
   const { tripInstanceId } = req.body;
   const conductorId = req.user.userId;
   if (!tripInstanceId) throw new ApiError(400, "tripInstanceId required");
+
+  const targetTrip = await TripInstance.findById(tripInstanceId).select("date");
+  if (!targetTrip) throw new ApiError(404, "Trip not found");
+  await cleanupStaleConductorAssignments({ conductorId, date: targetTrip.date });
 
   const [conductor, trip] = await Promise.all([
     Conductor.findById(conductorId),
