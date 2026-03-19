@@ -213,6 +213,7 @@ exports.listConductorOffers = asyncHandler(async (req, res) => {
   const mappedBusIdList = Array.from(
     new Set(mappedRows.map((row) => String(row.busId?._id || row.busId || "")).filter(Boolean))
   );
+  const { nowMinutes } = getOpsNowParts();
 
   const driverAcceptedRows = await DriverAssignment.find({
     date,
@@ -292,6 +293,12 @@ exports.listConductorOffers = asyncHandler(async (req, res) => {
     }
     if (rejectedSet.has(String(trip._id))) {
       trackSkip(trip, "conductor_rejected_trip");
+      continue;
+    }
+
+    const tripStartMinutes = toMinutes(trip.startTime);
+    if (tripStartMinutes !== null && tripStartMinutes < nowMinutes - 10) {
+      trackSkip(trip, "trip_offer_expired");
       continue;
     }
 
