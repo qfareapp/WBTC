@@ -310,28 +310,9 @@ exports.listConductorOffers = asyncHandler(async (req, res) => {
     }
     const mappedBus = mappedBusById.get(mappedBusId);
 
-    if (
-      pickupLocation &&
-      normalizeLocation(mappedBus?.currentLocation) &&
-      normalizeLocation(mappedBus.currentLocation) !== normalizeLocation(pickupLocation)
-    ) {
-      trackSkip(trip, "mapped_bus_not_at_pickup_location");
-      continue;
-    }
-
     const eligibility = await ensureConductorEligibleForBus({ busId: mappedBusId, conductorId, date });
     if (!eligibility.ok) {
       trackSkip(trip, `conductor_not_eligible:${eligibility.reason || "unknown"}`);
-      continue;
-    }
-
-    const effectiveConductorLocation = mappedBus?.currentLocation || conductor.currentLocation || null;
-    if (
-      normalizeLocation(effectiveConductorLocation) &&
-      normalizeLocation(pickupLocation) &&
-      normalizeLocation(effectiveConductorLocation) !== normalizeLocation(pickupLocation)
-    ) {
-      trackSkip(trip, "conductor_location_mismatch");
       continue;
     }
 
