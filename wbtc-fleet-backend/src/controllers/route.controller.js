@@ -384,13 +384,6 @@ exports.activateRouteDay = asyncHandler(async (req, res) => {
     throw new ApiError(400, "Route schedule not configured");
   }
 
-  if (normalizedUp.length === 0 && upTimeline.length > 0) {
-    throw new ApiError(400, "No eligible UP buses found. Owners must set bus location to route source.");
-  }
-  if (normalizedDown.length === 0 && downTimeline.length > 0) {
-    throw new ApiError(400, "No eligible DOWN buses found. Owners must set bus location to route destination.");
-  }
-
   const overlap = normalizedUp.filter((id) => normalizedDown.includes(id));
   if (overlap.length > 0) {
     throw new ApiError(400, "A bus can be assigned only once: UP or DOWN");
@@ -471,11 +464,13 @@ exports.activateRouteDay = asyncHandler(async (req, res) => {
   };
 
   for (let i = 0; i < upTimeline.length; i += 1) {
+    if (!finalBusIdsUp.length) break;
     const trip = upTimeline[i];
     const busId = finalBusIdsUp[i % finalBusIdsUp.length];
     await createOrUpdateTrip(trip, busId);
   }
   for (let i = 0; i < downTimeline.length; i += 1) {
+    if (!finalBusIdsDown.length) break;
     const trip = downTimeline[i];
     const busId = finalBusIdsDown[i % finalBusIdsDown.length];
     await createOrUpdateTrip(trip, busId);
@@ -488,6 +483,14 @@ exports.activateRouteDay = asyncHandler(async (req, res) => {
     busIdsUp: finalBusIdsUp,
     busIdsDown: finalBusIdsDown,
     autoOffersEnabled: true,
+    warnings: [
+      ...(upTimeline.length > 0 && finalBusIdsUp.length === 0
+        ? ["No eligible UP buses found. Route activated without UP trip allocation."]
+        : []),
+      ...(downTimeline.length > 0 && finalBusIdsDown.length === 0
+        ? ["No eligible DOWN buses found. Route activated without DOWN trip allocation."]
+        : []),
+    ],
   });
 });
 
