@@ -318,11 +318,6 @@ export default function ActiveTrips() {
               </View>
               <Text style={styles.cardRow}>{t("driverActive", "pickup")}: {offer.pickupLocation || "--"}</Text>
               <Text style={styles.cardRow}>{t("driverActive", "drop")}: {offer.dropLocation || "--"}</Text>
-              {offer.busOptions?.length ? (
-                <Text style={styles.mutedInfo}>
-                  {t("driverActive", "availableBuses", { buses: offer.busOptions.map((bus) => bus.busNumber).join(", ") })}
-                </Text>
-              ) : null}
               <View style={styles.offerActions}>
                 <TouchableOpacity
                   style={[styles.primary, { flex: 1 }]}

@@ -168,6 +168,46 @@ function RouteTimeline({ apiBase, token }) {
     }
   }, [apiBase, routeId, selectedDate, token]);
 
+  const loadBuses = useCallback(async () => {
+    if (!route?.depotId) return;
+    try {
+      const response = await fetch(`${apiBase}/api/buses`, {
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+      });
+      const text = await response.text();
+      const data = parseApiText(text);
+      if (!response.ok) throw new Error(data.message || "Failed to load buses");
+      const filtered = (data.buses || []).filter(
+        (bus) => (bus.depotId?._id || bus.depotId) === route.depotId
+      );
+      setBuses(filtered);
+    } catch (error) {
+      showNotice("error", error.message);
+    }
+  }, [apiBase, route?.depotId, token]);
+
+  const loadDrivers = useCallback(async () => {
+    if (!route?.depotId) return;
+    try {
+      const response = await fetch(`${apiBase}/api/drivers`, {
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+      });
+      const text = await response.text();
+      const data = parseApiText(text);
+      if (!response.ok) throw new Error(data.message || "Failed to load drivers");
+      const filtered = (data.drivers || []).filter(
+        (driver) => (driver.depotId?._id || driver.depotId) === route.depotId
+      );
+      setDrivers(filtered);
+    } catch (error) {
+      showNotice("error", error.message);
+    }
+  }, [apiBase, route?.depotId, token]);
+
   const loadDayStatus = useCallback(async () => {
     if (!routeId || !selectedDate) return;
     try {
@@ -206,48 +246,18 @@ function RouteTimeline({ apiBase, token }) {
 
   useEffect(() => {
     if (!route?.depotId) return;
-
-    const loadBuses = async () => {
-      try {
-        const response = await fetch(`${apiBase}/api/buses`, {
-          headers: {
-            Authorization: `Bearer ${token}`,
-          },
-        });
-        const text = await response.text();
-        const data = parseApiText(text);
-        if (!response.ok) throw new Error(data.message || "Failed to load buses");
-        const filtered = (data.buses || []).filter(
-          (bus) => (bus.depotId?._id || bus.depotId) === route.depotId
-        );
-        setBuses(filtered);
-      } catch (error) {
-        showNotice("error", error.message);
-      }
-    };
-
-    const loadDrivers = async () => {
-      try {
-        const response = await fetch(`${apiBase}/api/drivers`, {
-          headers: {
-            Authorization: `Bearer ${token}`,
-          },
-        });
-        const text = await response.text();
-        const data = parseApiText(text);
-        if (!response.ok) throw new Error(data.message || "Failed to load drivers");
-        const filtered = (data.drivers || []).filter(
-          (driver) => (driver.depotId?._id || driver.depotId) === route.depotId
-        );
-        setDrivers(filtered);
-      } catch (error) {
-        showNotice("error", error.message);
-      }
-    };
-
     loadBuses();
     loadDrivers();
-  }, [apiBase, route, token]);
+  }, [loadBuses, loadDrivers, route?.depotId]);
+
+  useEffect(() => {
+    if (!route?.depotId || !selectedDate) return undefined;
+    const interval = setInterval(() => {
+      loadBuses();
+      loadDrivers();
+    }, 5000);
+    return () => clearInterval(interval);
+  }, [loadBuses, loadDrivers, route?.depotId, selectedDate]);
 
   useEffect(() => {
     setAutoBusUpIds((prev) => prev.filter((busId) => buses.some((bus) => bus._id === busId)));
@@ -643,15 +653,25 @@ function RouteTimeline({ apiBase, token }) {
     [selectedDate]
   );
 
+  const isBusAvailableForDirection = useCallback(
+    (bus, startLocation) => {
+      if (!bus || activeBusIds.has(bus._id)) return false;
+      const attachedRouteId = String(bus.attachedRouteId?._id || bus.attachedRouteId || "");
+      if (attachedRouteId && attachedRouteId !== String(routeId)) return false;
+      return normalizeLocation(bus.currentLocation) === normalizeLocation(startLocation);
+    },
+    [activeBusIds, routeId]
+  );
+
   const availableUpBusList = useMemo(() => {
     if (!routeActivatedForDate && !dayStatus.activated) return [];
-    return buses.filter((bus) => effectivePlannedUpBusIdsForDate.has(bus._id) && !activeBusIds.has(bus._id));
-  }, [routeActivatedForDate, dayStatus.activated, buses, effectivePlannedUpBusIdsForDate, activeBusIds]);
+    return buses.filter((bus) => isBusAvailableForDirection(bus, upStartLocation));
+  }, [routeActivatedForDate, dayStatus.activated, buses, isBusAvailableForDirection, upStartLocation]);
 
   const availableDownBusList = useMemo(() => {
     if (!routeActivatedForDate && !dayStatus.activated) return [];
-    return buses.filter((bus) => effectivePlannedDownBusIdsForDate.has(bus._id) && !activeBusIds.has(bus._id));
-  }, [routeActivatedForDate, dayStatus.activated, buses, effectivePlannedDownBusIdsForDate, activeBusIds]);
+    return buses.filter((bus) => isBusAvailableForDirection(bus, downStartLocation));
+  }, [routeActivatedForDate, dayStatus.activated, buses, isBusAvailableForDirection, downStartLocation]);
 
   const availableUpBuses = availableUpBusList.length;
   const availableDownBuses = availableDownBusList.length;

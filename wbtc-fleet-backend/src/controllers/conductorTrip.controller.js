@@ -703,15 +703,6 @@ exports.completeConductorTrip = asyncHandler(async (req, res) => {
     throw new ApiError(409, "Driver must complete trip before conductor can end it");
   }
 
-  // Safety sync: ensure bus location is aligned with completed trip endpoint.
-  if (trip.busId && trip.routeId) {
-    const route = await Route.findById(trip.routeId).select("source destination");
-    const endLocation = getEndLocation(route, trip.direction);
-    if (endLocation) {
-      await Bus.findByIdAndUpdate(trip.busId, { $set: { currentLocation: endLocation } });
-    }
-  }
-
   assignment.status = "Completed";
   await assignment.save();
 
@@ -737,7 +728,10 @@ exports.listConductorTickets = asyncHandler(async (req, res) => {
     issuedByRole: "CONDUCTOR",
     issuedById: { $in: issuedByIdFilters },
     status: "PAID",
-    bookedAt: { $gte: start, $lt: end },
+    $or: [
+      { bookedAt: { $gte: start, $lt: end } },
+      { bookedAt: null, createdAt: { $gte: start, $lt: end } },
+    ],
   })
     .sort({ bookedAt: -1 })
     .select(

@@ -6,6 +6,11 @@ const Bus = require("../models/Bus");
 const Depot = require("../models/Depot");
 const RouteDayActivation = require("../models/RouteDayActivation");
 const TicketBooking = require("../models/TicketBooking");
+const Driver = require("../models/Driver");
+const Conductor = require("../models/Conductor");
+const DriverAssignment = require("../models/DriverAssignment");
+const ConductorAssignment = require("../models/ConductorAssignment");
+const BusCrewMapping = require("../models/BusCrewMapping");
 const ApiError = require("../utils/ApiError");
 const asyncHandler = require("../utils/asyncHandler");
 
@@ -391,8 +396,10 @@ exports.activateRouteDay = asyncHandler(async (req, res) => {
 
   const finalBusIdsUp = normalizedUp;
   const finalBusIdsDown = normalizedDown;
+  const schedulingBusIdsUp = finalBusIdsUp.length ? finalBusIdsUp : finalBusIdsDown;
+  const schedulingBusIdsDown = finalBusIdsDown.length ? finalBusIdsDown : finalBusIdsUp;
 
-  const allIds = Array.from(new Set([...finalBusIdsUp, ...finalBusIdsDown]));
+  const allIds = Array.from(new Set([...schedulingBusIdsUp, ...schedulingBusIdsDown]));
   const buses = await Bus.find({ _id: { $in: allIds } });
   if (buses.length !== allIds.length) throw new ApiError(404, "One or more buses not found");
   if (buses.some((bus) => String(bus.depotId) !== String(route.depotId))) {
@@ -464,15 +471,15 @@ exports.activateRouteDay = asyncHandler(async (req, res) => {
   };
 
   for (let i = 0; i < upTimeline.length; i += 1) {
-    if (!finalBusIdsUp.length) break;
+    if (!schedulingBusIdsUp.length) break;
     const trip = upTimeline[i];
-    const busId = finalBusIdsUp[i % finalBusIdsUp.length];
+    const busId = schedulingBusIdsUp[i % schedulingBusIdsUp.length];
     await createOrUpdateTrip(trip, busId);
   }
   for (let i = 0; i < downTimeline.length; i += 1) {
-    if (!finalBusIdsDown.length) break;
+    if (!schedulingBusIdsDown.length) break;
     const trip = downTimeline[i];
-    const busId = finalBusIdsDown[i % finalBusIdsDown.length];
+    const busId = schedulingBusIdsDown[i % schedulingBusIdsDown.length];
     await createOrUpdateTrip(trip, busId);
   }
 
@@ -484,10 +491,10 @@ exports.activateRouteDay = asyncHandler(async (req, res) => {
     busIdsDown: finalBusIdsDown,
     autoOffersEnabled: true,
     warnings: [
-      ...(upTimeline.length > 0 && finalBusIdsUp.length === 0
+      ...(upTimeline.length > 0 && schedulingBusIdsUp.length === 0
         ? ["No eligible UP buses found. Route activated without UP trip allocation."]
         : []),
-      ...(downTimeline.length > 0 && finalBusIdsDown.length === 0
+      ...(downTimeline.length > 0 && schedulingBusIdsDown.length === 0
         ? ["No eligible DOWN buses found. Route activated without DOWN trip allocation."]
         : []),
     ],
@@ -503,17 +510,103 @@ exports.deactivateRouteDay = asyncHandler(async (req, res) => {
   const activation = await RouteDayActivation.findOne({ date, routeId: route._id });
   if (!activation) throw new ApiError(404, "Route is not activated for this date");
 
-  activation.autoOffersEnabled = false;
-  activation.deactivatedAt = new Date();
-  activation.deactivatedBy = req.user?.userId || null;
-  await activation.save();
+  const activeTrip = await TripInstance.findOne({
+    date,
+    routeId: route._id,
+    status: "Active",
+    releasedForReuse: { $ne: true },
+  }).select("_id");
+  if (activeTrip) {
+    throw new ApiError(409, "Cannot deactivate route while an active trip is running");
+  }
+
+  const tripBusIds = await TripInstance.distinct("busId", {
+    date,
+    routeId: route._id,
+    busId: { $ne: null },
+  });
+  const assignedBusIds = Array.from(
+    new Set([
+      ...(activation.busIdsUp || []).map((id) => String(id)),
+      ...(activation.busIdsDown || []).map((id) => String(id)),
+      ...tripBusIds.map((id) => String(id || "")).filter(Boolean),
+    ])
+  );
+
+  await Promise.all([
+    TripInstance.updateMany(
+      {
+        date,
+        routeId: route._id,
+        status: "Scheduled",
+      },
+      {
+        $set: {
+          status: "Cancelled",
+          releasedForReuse: true,
+        },
+      }
+    ),
+    DriverAssignment.deleteMany({
+      date,
+      routeId: route._id,
+      status: "Scheduled",
+    }),
+    ConductorAssignment.deleteMany({
+      date,
+      routeId: route._id,
+      status: "Scheduled",
+    }),
+  ]);
+
+  if (assignedBusIds.length) {
+    const activeMappings = await BusCrewMapping.find({
+      busId: { $in: assignedBusIds },
+      isActive: true,
+    }).select("driverId conductorId");
+
+    const driverIds = Array.from(
+      new Set(activeMappings.map((mapping) => String(mapping.driverId || "").trim()).filter(Boolean))
+    );
+    const conductorIds = Array.from(
+      new Set(activeMappings.map((mapping) => String(mapping.conductorId || "").trim()).filter(Boolean))
+    );
+
+    const resetUpdates = [
+      Bus.updateMany(
+        { _id: { $in: assignedBusIds } },
+        { $set: { currentLocation: null } }
+      ),
+    ];
+    if (driverIds.length) {
+      resetUpdates.push(
+        Driver.updateMany(
+          { _id: { $in: driverIds } },
+          { $set: { currentLocation: null } }
+        )
+      );
+    }
+    if (conductorIds.length) {
+      resetUpdates.push(
+        Conductor.updateMany(
+          { _id: { $in: conductorIds } },
+          { $set: { currentLocation: null } }
+        )
+      );
+    }
+    await Promise.all(resetUpdates);
+  }
+
+  const deactivatedAt = new Date();
+  await RouteDayActivation.deleteOne({ _id: activation._id });
 
   res.json({
     ok: true,
     date,
     routeId: route._id,
     autoOffersEnabled: false,
-    deactivatedAt: activation.deactivatedAt,
+    deactivatedAt,
+    resetBusIds: assignedBusIds,
   });
 });
 

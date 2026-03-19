@@ -3,6 +3,7 @@ const TripInstance = require("../models/TripInstance");
 const Route = require("../models/Route");
 const Bus = require("../models/Bus");
 const Driver = require("../models/Driver");
+const Conductor = require("../models/Conductor");
 const TripOffer = require("../models/TripOffer");
 const BusCrewMapping = require("../models/BusCrewMapping");
 const RouteModel = require("../models/Route");
@@ -98,6 +99,36 @@ const buildSummary = async (driverId, startDate, endDate, now) => {
     driveMinutes,
     driveHours: Number((driveMinutes / 60).toFixed(2)),
   };
+};
+
+const cleanupStaleDriverAssignments = async ({ driverId, date }) => {
+  const openAssignments = await DriverAssignment.find({
+    driverId,
+    date,
+    status: { $in: ["Scheduled", "Active"] },
+  }).select("_id tripInstanceId");
+
+  if (!openAssignments.length) return;
+
+  const tripIds = openAssignments.map((item) => item.tripInstanceId).filter(Boolean);
+  const trips = tripIds.length
+    ? await TripInstance.find({ _id: { $in: tripIds } }).select("_id status")
+    : [];
+  const tripStatusById = new Map(trips.map((trip) => [String(trip._id), String(trip.status || "")]));
+
+  const staleAssignmentIds = openAssignments
+    .filter((assignment) => {
+      const tripStatus = tripStatusById.get(String(assignment.tripInstanceId || ""));
+      return !tripStatus || tripStatus === "Completed";
+    })
+    .map((assignment) => assignment._id);
+
+  if (!staleAssignmentIds.length) return;
+
+  await DriverAssignment.updateMany(
+    { _id: { $in: staleAssignmentIds } },
+    { $set: { status: "Completed" } }
+  );
 };
 
 const getStartLocation = (route, direction) => {
@@ -202,6 +233,19 @@ const mapAssignment = (assignment, busById = new Map()) => {
     pickupLocation,
     dropLocation,
   };
+};
+
+const isMappedBusEligibleForTrip = ({ bus, route, startLocation, activeBusSet, strictRouteMatch = true }) => {
+  if (!bus?._id) return false;
+  if (activeBusSet?.has(String(bus._id))) return false;
+  if (strictRouteMatch) {
+    const attachedRouteId = String(bus.attachedRouteId || "");
+    if (attachedRouteId && String(route?._id || "") && attachedRouteId !== String(route._id || "")) {
+      return false;
+    }
+  }
+  if (!startLocation) return true;
+  return normalizeLocation(bus.currentLocation) === normalizeLocation(startLocation);
 };
 
 const cancelExpiredTrips = async (date, nowMinutes) => {
@@ -384,7 +428,23 @@ exports.completeDriverTrip = asyncHandler(async (req, res) => {
         })
       );
     }
-    if (assignment.driverId) {
+    if (trip.busId) {
+      const activeMappings = await BusCrewMapping.find({ busId: trip.busId, isActive: true }).select("driverId conductorId");
+      const driverIds = Array.from(
+        new Set(activeMappings.map((mapping) => String(mapping.driverId || "").trim()).filter(Boolean))
+      );
+      const conductorIds = Array.from(
+        new Set(activeMappings.map((mapping) => String(mapping.conductorId || "").trim()).filter(Boolean))
+      );
+      if (driverIds.length) {
+        updates.push(Driver.updateMany({ _id: { $in: driverIds } }, { $set: { currentLocation: endLocation } }));
+      } else if (assignment.driverId) {
+        updates.push(Driver.findByIdAndUpdate(assignment.driverId, { $set: { currentLocation: endLocation } }));
+      }
+      if (conductorIds.length) {
+        updates.push(Conductor.updateMany({ _id: { $in: conductorIds } }, { $set: { currentLocation: endLocation } }));
+      }
+    } else if (assignment.driverId) {
       updates.push(Driver.findByIdAndUpdate(assignment.driverId, { $set: { currentLocation: endLocation } }));
     }
     if (updates.length) await Promise.all(updates);
@@ -457,6 +517,8 @@ exports.listTripOffers = asyncHandler(async (req, res) => {
   const driver = await Driver.findById(driverId);
   if (!driver) throw new ApiError(404, "Driver not found");
 
+  await cleanupStaleDriverAssignments({ driverId, date });
+
   if (driver.status !== "Available") {
     return res.json({ ok: true, date, offers: [] });
   }
@@ -481,18 +543,19 @@ exports.listTripOffers = asyncHandler(async (req, res) => {
   const mappedBusDocs = mappedRows.map((row) => row.busId).filter(Boolean);
   const mappedBusIds = new Set(mappedBusDocs.map((bus) => String(bus._id)));
   const mappedBusById = new Map(mappedBusDocs.map((bus) => [String(bus._id), bus]));
+  if (mappedBusIds.size === 0) {
+    return res.json({ ok: true, date, offers: [] });
+  }
+  const mappedRouteBusDocs = mappedBusDocs.filter((bus) => String(bus.status || "") === "Active");
 
   const now = new Date();
   const nowMinutes = now.getHours() * 60 + now.getMinutes();
   await cancelExpiredTrips(date, nowMinutes);
 
-  const windowStart = fromMinutes(nowMinutes);
-  const windowEnd = fromMinutes(nowMinutes + 120);
-
   const trips = await TripInstance.find({
     date,
     status: "Scheduled",
-    startTime: { $gte: fromMinutes(Math.max(0, nowMinutes - 10)), $lte: windowEnd },
+    startTime: { $gte: fromMinutes(Math.max(0, nowMinutes - 10)) },
   })
     .populate("routeId", "routeCode routeName source destination assignmentMode depotId")
     .populate("busId", "busNumber busType currentLocation")
@@ -568,99 +631,49 @@ exports.listTripOffers = asyncHandler(async (req, res) => {
     }
 
     const startLocation = getStartLocation(route, trip.direction);
-    let tripBusId = String(trip.busId?._id || trip.busId || "");
-    let inferredBusForTrip = null;
-
-    if (mappedBusIds.size > 0) {
-      if (tripBusId) {
-        if (!mappedBusIds.has(tripBusId)) {
-          trackSkip(trip, "trip_bus_not_mapped_to_driver");
-          tripBusId = "";
-        }
-        if (tripBusId) {
-          const mappedBus = mappedBusById.get(tripBusId);
-          if (
-            startLocation &&
-            normalizeLocation(mappedBus?.currentLocation) &&
-            normalizeLocation(mappedBus.currentLocation) !== normalizeLocation(startLocation)
-          ) {
-            trackSkip(trip, "mapped_bus_not_at_pickup_location");
-            tripBusId = "";
-          }
-        }
-      }
-      if (!tripBusId) {
-        const eligibleMappedForRoute = mappedBusDocs.filter((bus) => {
-          if (!bus?._id) return false;
-          if (String(bus.status || "") !== "Active") return false;
-          if (activeBusSet.has(String(bus._id))) return false;
-          if (String(bus.depotId || "") !== String(route.depotId || "")) return false;
-          if (String(bus.attachedRouteId || "") !== String(route._id || "")) return false;
-          if (!startLocation) return true;
-          if (!bus.currentLocation) return true;
-          return normalizeLocation(bus.currentLocation) === normalizeLocation(startLocation);
+    let eligibleMappedForRoute = mappedRouteBusDocs.filter((bus) => {
+      if (String(bus.depotId || "") !== String(route.depotId || "")) return false;
+      return isMappedBusEligibleForTrip({
+        bus,
+        route,
+        startLocation,
+        activeBusSet,
+        strictRouteMatch: true,
+      });
+    });
+    if (!eligibleMappedForRoute.length) {
+      eligibleMappedForRoute = mappedRouteBusDocs.filter((bus) => {
+        if (String(bus.depotId || "") !== String(route.depotId || "")) return false;
+        return isMappedBusEligibleForTrip({
+          bus,
+          route,
+          startLocation,
+          activeBusSet,
+          strictRouteMatch: false,
         });
-        if (!eligibleMappedForRoute.length) {
-          trackSkip(trip, "trip_without_assigned_bus");
-          continue;
-        }
-        inferredBusForTrip = eligibleMappedForRoute[0];
-      }
+      });
+    }
+    if (!eligibleMappedForRoute.length) {
+      trackSkip(trip, "trip_without_assigned_bus");
+      continue;
     }
 
-    const effectiveBusId = tripBusId || String(inferredBusForTrip?._id || "");
+    const inferredBusForTrip = eligibleMappedForRoute[0];
+    const effectiveBusId = String(inferredBusForTrip?._id || "");
     const eligibility = await ensureDriverEligibleForBus({ busId: effectiveBusId || null, driverId, date });
     if (!eligibility.ok) {
       trackSkip(trip, `driver_not_eligible:${eligibility.reason || "unknown"}`);
       continue;
     }
 
-    if (
-      normalizeLocation(driver.currentLocation) &&
-      normalizeLocation(startLocation) &&
-      normalizeLocation(driver.currentLocation) !== normalizeLocation(startLocation)
-    ) {
-      trackSkip(trip, "driver_location_mismatch");
-      continue;
-    }
-
-    let resolvedBusOptions = [];
-    if (mappedBusIds.size > 0) {
-      const mappedCandidates = tripBusId
-        ? mappedBusDocs.filter((bus) => String(bus._id) === tripBusId)
-        : mappedBusDocs.filter((bus) => String(bus.attachedRouteId || "") === String(route._id || ""));
-      resolvedBusOptions = mappedCandidates
-        .filter((bus) => {
-          if (String(bus.status || "") !== "Active") return false;
-          if (activeBusSet.has(String(bus._id))) return false;
-          if (startLocation && normalizeLocation(bus.currentLocation) && normalizeLocation(bus.currentLocation) !== normalizeLocation(startLocation)) {
-            return false;
-          }
-          return true;
-        })
-        .map((bus) => ({
-          id: bus._id,
-          busNumber: bus.busNumber,
-          busType: bus.busType,
-          currentLocation: bus.currentLocation || null,
-        }));
-    } else {
-      const buses = await Bus.find({ depotId: route.depotId, status: "Active" })
-        .select("busNumber busType currentLocation");
-      resolvedBusOptions = buses
-        .filter((bus) => {
-          if (activeBusSet.has(String(bus._id))) return false;
-          if (!startLocation) return true;
-          if (!bus.currentLocation) return true;
-          return normalizeLocation(bus.currentLocation) === normalizeLocation(startLocation);
-        })
-        .map((bus) => ({
-          id: bus._id,
-          busNumber: bus.busNumber,
-          busType: bus.busType,
-          currentLocation: bus.currentLocation || null,
-        }));
-    }
+    const resolvedBusOptions = eligibleMappedForRoute
+      .filter((bus) => !activeBusSet.has(String(bus._id)))
+      .map((bus) => ({
+        id: bus._id,
+        busNumber: bus.busNumber,
+        busType: bus.busType,
+        currentLocation: bus.currentLocation || null,
+      }));
 
     offers.push({
       tripInstanceId: trip._id,
@@ -674,30 +687,34 @@ exports.listTripOffers = asyncHandler(async (req, res) => {
       direction: trip.direction,
       startTime: trip.startTime,
       endTime: trip.endTime,
-      busAssigned: trip.busId
+      busAssigned: inferredBusForTrip
         ? {
-            id: trip.busId._id,
-            busNumber: trip.busId.busNumber,
-            busType: trip.busId.busType,
+            id: inferredBusForTrip._id,
+            busNumber: inferredBusForTrip.busNumber,
+            busType: inferredBusForTrip.busType,
           }
-        : inferredBusForTrip
-          ? {
-              id: inferredBusForTrip._id,
-              busNumber: inferredBusForTrip.busNumber,
-              busType: inferredBusForTrip.busType,
-            }
-          : null,
+        : null,
       busOptions: resolvedBusOptions,
       pickupLocation: startLocation,
       dropLocation: getEndLocation(route, trip.direction),
     });
   }
 
+  offers.sort((a, b) => {
+    const aMinutes = toMinutes(a.startTime);
+    const bMinutes = toMinutes(b.startTime);
+    if (aMinutes === null && bMinutes === null) return 0;
+    if (aMinutes === null) return 1;
+    if (bMinutes === null) return -1;
+    return aMinutes - bMinutes;
+  });
+  const limitedOffers = offers.slice(0, 5);
+
   res.set("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate");
   res.set("Pragma", "no-cache");
   res.set("Expires", "0");
   if (!debug) {
-    return res.json({ ok: true, date, offers });
+    return res.json({ ok: true, date, offers: limitedOffers });
   }
   const summary = skipped.reduce((acc, item) => {
     acc[item.reason] = (acc[item.reason] || 0) + 1;
@@ -706,7 +723,7 @@ exports.listTripOffers = asyncHandler(async (req, res) => {
   return res.json({
     ok: true,
     date,
-    offers,
+    offers: limitedOffers,
     debug: {
       enabled: true,
       totalCandidates: trips.length,
@@ -756,41 +773,41 @@ exports.acceptTripOffer = asyncHandler(async (req, res) => {
     .lean();
   const mappedBusDocs = mappedRows.map((row) => row.busId).filter(Boolean);
   const mappedBusIds = new Set(mappedBusDocs.map((bus) => String(bus._id)));
-  if (
-    normalizeLocation(driver.currentLocation) &&
-    normalizeLocation(startLocation) &&
-    normalizeLocation(driver.currentLocation) !== normalizeLocation(startLocation)
-  ) {
-    throw new ApiError(409, "Driver not at pickup location");
+  const mappedBusById = new Map(mappedBusDocs.map((bus) => [String(bus._id), bus]));
+  if (mappedBusIds.size === 0) {
+    throw new ApiError(409, "No owner-assigned bus found for this driver");
   }
 
   let assignedBusId = trip.busId?._id || trip.busId || null;
   if (assignedBusId && mappedBusIds.size > 0 && !mappedBusIds.has(String(assignedBusId))) {
-    // Self-heal: remap on accept to driver's mapped route bus instead of hard-failing.
     assignedBusId = null;
   }
   if (!assignedBusId) {
-    const candidateBuses = mappedBusIds.size > 0
-      ? mappedBusDocs.filter(
-          (bus) =>
-            String(bus.status || "") === "Active" &&
-            String(bus.attachedRouteId || "") === String(trip.routeId._id || "")
-        )
-      : await Bus.find({
-          depotId: trip.routeId.depotId,
-          status: "Active",
-        }).select("_id currentLocation");
-
-    const candidateIds = candidateBuses
-      .filter((bus) => {
-        if (!startLocation) return true;
-        if (!bus.currentLocation) return true;
-        return normalizeLocation(bus.currentLocation) === normalizeLocation(startLocation);
+    let candidateBuses = mappedBusDocs.filter((bus) =>
+      isMappedBusEligibleForTrip({
+        bus,
+        route: trip.routeId,
+        startLocation,
+        activeBusSet: new Set(),
+        strictRouteMatch: true,
       })
-      .map((bus) => String(bus._id));
+    );
+    if (!candidateBuses.length) {
+      candidateBuses = mappedBusDocs.filter((bus) =>
+        isMappedBusEligibleForTrip({
+          bus,
+          route: trip.routeId,
+          startLocation,
+          activeBusSet: new Set(),
+          strictRouteMatch: false,
+        })
+      );
+    }
+
+    const candidateIds = candidateBuses.map((bus) => String(bus._id));
 
     if (!candidateIds.length) {
-      throw new ApiError(409, "No eligible bus available for this trip");
+      throw new ApiError(409, "No owner-assigned route bus available for this trip");
     }
 
     const blockedBusIds = await DriverAssignment.distinct("busId", {
@@ -807,6 +824,18 @@ exports.acceptTripOffer = asyncHandler(async (req, res) => {
     assignedBusId = freeBusId;
     trip.busId = freeBusId;
     await trip.save();
+  } else if (String(trip.busId || "") !== String(assignedBusId)) {
+    trip.busId = assignedBusId;
+    await trip.save();
+  }
+
+  const assignedBus = mappedBusById.get(String(assignedBusId || ""));
+  if (
+    startLocation &&
+    normalizeLocation(assignedBus?.currentLocation) &&
+    normalizeLocation(assignedBus.currentLocation) !== normalizeLocation(startLocation)
+  ) {
+    throw new ApiError(409, "Your assigned bus is not at the pickup location");
   }
 
   const eligibility = await ensureDriverEligibleForBus({
