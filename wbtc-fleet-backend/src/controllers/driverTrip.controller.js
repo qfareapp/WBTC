@@ -924,7 +924,12 @@ exports.cancelAcceptedTrip = asyncHandler(async (req, res) => {
   }
 
   await DriverAssignment.deleteOne({ _id: assignment._id });
-  await TripOffer.deleteOne({ tripInstanceId, driverId, status: "Accepted" });
+  // Keep a rejection marker so a cancelled offer is not immediately re-offered to the same driver.
+  await TripOffer.findOneAndUpdate(
+    { tripInstanceId, driverId },
+    { status: "Rejected" },
+    { upsert: true, new: true }
+  );
 
   res.json({ ok: true, tripInstanceId });
 });

@@ -1,8 +1,9 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { View, Text, StyleSheet, TouchableOpacity, ScrollView, RefreshControl } from "react-native";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useConductorLanguage } from "../../contexts/conductor-language";
 
 const API_BASE_KEY = "wbtc_api_base";
@@ -32,6 +33,7 @@ const formatTicketTime = (value) => {
 
 export default function ConductorTickets() {
   const router = useRouter();
+  const insets = useSafeAreaInsets();
   const { t } = useConductorLanguage();
   const [refreshing, setRefreshing] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -39,7 +41,7 @@ export default function ConductorTickets() {
   const [tripGroups, setTripGroups] = useState([]);
   const [expandedTripIds, setExpandedTripIds] = useState({});
 
-  const getAuth = async () => {
+  const getAuth = useCallback(async () => {
     const [apiBase, token, role] = await Promise.all([
       AsyncStorage.getItem(API_BASE_KEY),
       AsyncStorage.getItem(TOKEN_KEY),
@@ -50,9 +52,9 @@ export default function ConductorTickets() {
       return null;
     }
     return { apiBase, token };
-  };
+  }, [router]);
 
-  const loadTickets = async () => {
+  const loadTickets = useCallback(async () => {
     setLoading(true);
     try {
       const auth = await getAuth();
@@ -71,11 +73,11 @@ export default function ConductorTickets() {
     } finally {
       setLoading(false);
     }
-  };
+  }, [getAuth]);
 
   useEffect(() => {
     loadTickets();
-  }, []);
+  }, [loadTickets]);
 
   const totalFare = useMemo(
     () => tripGroups.reduce((sum, trip) => sum + (Number(trip.fareCollected) || 0), 0),
@@ -90,6 +92,16 @@ export default function ConductorTickets() {
         0
       ),
     [tripGroups]
+  );
+
+  const todayLabel = useMemo(
+    () =>
+      new Date().toLocaleDateString([], {
+        weekday: "short",
+        day: "2-digit",
+        month: "short",
+      }),
+    []
   );
 
   const onRefresh = async () => {
@@ -114,12 +126,22 @@ export default function ConductorTickets() {
             <Text style={styles.title}>{t("tickets", "title")}</Text>
             <Text style={styles.subtitle}>{t("tickets", "subtitle")}</Text>
           </View>
+          <View style={styles.headerBadge}>
+            <Ionicons name="calendar-outline" size={14} color="#9CCBFF" />
+            <Text style={styles.headerBadgeText}>{todayLabel}</Text>
+          </View>
         </View>
       </View>
 
-      {notice ? <Text style={styles.notice}>{notice}</Text> : null}
+      {notice ? (
+        <View style={styles.noticeCard}>
+          <Ionicons name="alert-circle-outline" size={16} color="#FCA5A5" />
+          <Text style={styles.notice}>{notice}</Text>
+        </View>
+      ) : null}
 
       <View style={styles.statsCard}>
+        <View style={styles.statsGlow} />
         <View style={styles.statsBar} />
         <View style={styles.statsRow}>
           <View style={styles.statsItem}>
@@ -149,7 +171,7 @@ export default function ConductorTickets() {
       </View>
 
       <ScrollView
-        contentContainerStyle={styles.list}
+        contentContainerStyle={[styles.list, { paddingBottom: insets.bottom + 96 }]}
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor="#9CCBFF" />}
       >
         <View style={styles.sectionHeader}>
@@ -177,12 +199,15 @@ export default function ConductorTickets() {
           const expanded = Boolean(expandedTripIds[tripKey]);
           const routeCode = trip.route?.routeCode || "--";
           const routeName = trip.route?.routeName || "--";
-          const [routeFrom, routeTo] = String(routeName).split("-");
+          const [routeFrom, routeTo] = String(routeName)
+            .split("-")
+            .map((part) => part.trim());
           const ticketRows = Array.isArray(trip.tickets) ? trip.tickets : [];
           const tripPassengerCount = ticketRows.reduce((sum, ticket) => sum + (Number(ticket.passengerCount) || 0), 0);
 
           return (
             <View key={`trip-${tripKey}`} style={styles.card}>
+              <View style={styles.cardGlow} />
               <View style={styles.cardAccent} />
 
               <View style={styles.cardInner}>
@@ -250,37 +275,46 @@ export default function ConductorTickets() {
                 {expanded ? (
                   <View style={styles.breakdownWrap}>
                     <Text style={styles.breakdownTitle}>{t("tickets", "ticketBreakdown")}</Text>
-
-                    <View style={styles.tableHeader}>
-                      <Text style={[styles.tableHeadText, styles.tableHeadWide]}>{t("tickets", "ticketId")}</Text>
-                      <Text style={[styles.tableHeadText, styles.tableHeadTime]}>{t("tickets", "bookingTime")}</Text>
-                      <Text style={[styles.tableHeadText, styles.tableHeadWide]}>{t("tickets", "from")}</Text>
-                      <Text style={[styles.tableHeadText, styles.tableHeadWide]}>{t("tickets", "to")}</Text>
-                      <Text style={styles.tableHeadText}>{t("tickets", "pax")}</Text>
-                      <Text style={styles.tableHeadText}>{t("tickets", "amount")}</Text>
-                    </View>
-
-                    <View style={styles.tableBody}>
-                      {ticketRows.map((ticket, ticketIndex) => (
-                        <View
-                          key={`ticket-${tripKey}-${ticket.bookingId || ticketIndex}`}
-                          style={[styles.tableRow, ticketIndex % 2 === 0 ? styles.tableRowAlt : null]}
-                        >
-                          <Text style={[styles.tableCell, styles.tableCellWide]}>{ticket.bookingId || "--"}</Text>
-                          <Text style={[styles.tableCell, styles.tableCellTime]}>{formatTicketTime(ticket.bookedAt)}</Text>
-                          <Text style={[styles.tableCell, styles.tableCellWide]}>{ticket.source || "--"}</Text>
-                          <Text style={[styles.tableCell, styles.tableCellWide]}>{ticket.destination || "--"}</Text>
-                          <Text style={[styles.tableCell, styles.tableCellPax]}>{ticket.passengerCount || 1}</Text>
-                          <Text style={[styles.tableCell, styles.tableCellAmount]}>Rs {formatMoney(ticket.fare)}</Text>
+                    <ScrollView
+                      horizontal
+                      showsHorizontalScrollIndicator={false}
+                      contentContainerStyle={styles.tableScrollContent}
+                    >
+                      <View style={styles.tableWrap}>
+                        <View style={styles.tableHeader}>
+                          <Text style={[styles.tableHeadText, styles.tableHeadWide]}>{t("tickets", "ticketId")}</Text>
+                          <Text style={[styles.tableHeadText, styles.tableHeadTime]}>{t("tickets", "bookingTime")}</Text>
+                          <Text style={[styles.tableHeadText, styles.tableHeadWide]}>{t("tickets", "from")}</Text>
+                          <Text style={[styles.tableHeadText, styles.tableHeadWide]}>{t("tickets", "to")}</Text>
+                          <Text style={styles.tableHeadText}>{t("tickets", "pax")}</Text>
+                          <Text style={styles.tableHeadText}>{t("tickets", "amount")}</Text>
                         </View>
-                      ))}
 
-                      <View style={styles.tableTotalRow}>
-                        <Text style={[styles.tableTotalLabel, { flex: 3.8 }]}>{t("tickets", "total")}</Text>
-                        <Text style={[styles.tableTotalPax, styles.tableCellPax]}>{tripPassengerCount}</Text>
-                        <Text style={[styles.tableTotalAmount, styles.tableCellAmount]}>Rs {formatMoney(trip.fareCollected)}</Text>
+                        <View style={styles.tableBody}>
+                          {ticketRows.map((ticket, ticketIndex) => (
+                            <View
+                              key={`ticket-${tripKey}-${ticket.bookingId || ticketIndex}`}
+                              style={[styles.tableRow, ticketIndex % 2 === 0 ? styles.tableRowAlt : null]}
+                            >
+                              <Text style={[styles.tableCell, styles.tableCellWide]}>{ticket.bookingId || "--"}</Text>
+                              <Text style={[styles.tableCell, styles.tableCellTime]}>{formatTicketTime(ticket.bookedAt)}</Text>
+                              <Text style={[styles.tableCell, styles.tableCellWide]}>{ticket.source || "--"}</Text>
+                              <Text style={[styles.tableCell, styles.tableCellWide]}>{ticket.destination || "--"}</Text>
+                              <Text style={[styles.tableCell, styles.tableCellPax]}>{ticket.passengerCount || 1}</Text>
+                              <Text style={[styles.tableCell, styles.tableCellAmount]}>Rs {formatMoney(ticket.fare)}</Text>
+                            </View>
+                          ))}
+
+                          <View style={styles.tableTotalRow}>
+                            <Text style={[styles.tableTotalLabel, { flex: 3.8 }]}>{t("tickets", "total")}</Text>
+                            <Text style={[styles.tableTotalPax, styles.tableCellPax]}>{tripPassengerCount}</Text>
+                            <Text style={[styles.tableTotalAmount, styles.tableCellAmount]}>
+                              Rs {formatMoney(trip.fareCollected)}
+                            </Text>
+                          </View>
+                        </View>
                       </View>
-                    </View>
+                    </ScrollView>
                   </View>
                 ) : null}
               </View>
@@ -328,6 +362,22 @@ const styles = StyleSheet.create({
   headerCopy: {
     flex: 1,
   },
+  headerBadge: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 999,
+    backgroundColor: "rgba(255,255,255,0.05)",
+    borderWidth: 1,
+    borderColor: "rgba(156,203,255,0.18)",
+  },
+  headerBadgeText: {
+    color: "#D8EAFE",
+    fontSize: 12,
+    fontWeight: "700",
+  },
   kicker: {
     color: "rgba(255,255,255,0.4)",
     fontSize: 12,
@@ -347,9 +397,22 @@ const styles = StyleSheet.create({
     fontSize: 13,
     lineHeight: 20,
   },
-  notice: {
+  noticeCard: {
     marginTop: 12,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: "rgba(248,113,113,0.24)",
+    backgroundColor: "rgba(127,29,29,0.24)",
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+  },
+  notice: {
     color: "#FCA5A5",
+    flex: 1,
+    lineHeight: 18,
   },
   statsCard: {
     marginTop: 20,
@@ -358,6 +421,12 @@ const styles = StyleSheet.create({
     backgroundColor: "rgba(255,255,255,0.04)",
     borderWidth: 1,
     borderColor: "rgba(255,255,255,0.08)",
+    position: "relative",
+  },
+  statsGlow: {
+    position: "absolute",
+    inset: 0,
+    backgroundColor: "rgba(255,255,255,0.015)",
   },
   statsBar: {
     height: 3,
@@ -447,10 +516,10 @@ const styles = StyleSheet.create({
   },
   emptyCard: {
     marginTop: 8,
-    backgroundColor: "rgba(255,255,255,0.03)",
+    backgroundColor: "rgba(255,255,255,0.035)",
     borderWidth: 1,
     borderStyle: "dashed",
-    borderColor: "rgba(255,255,255,0.08)",
+    borderColor: "rgba(255,255,255,0.12)",
     borderRadius: 20,
     paddingVertical: 32,
     paddingHorizontal: 20,
@@ -485,6 +554,16 @@ const styles = StyleSheet.create({
     borderColor: "rgba(255,255,255,0.09)",
     borderRadius: 20,
     overflow: "hidden",
+    position: "relative",
+  },
+  cardGlow: {
+    position: "absolute",
+    top: -80,
+    right: -32,
+    width: 150,
+    height: 150,
+    borderRadius: 999,
+    backgroundColor: "rgba(0,144,224,0.08)",
   },
   cardAccent: {
     position: "absolute",
@@ -517,6 +596,7 @@ const styles = StyleSheet.create({
     color: "#FFFFFF",
     fontSize: 22,
     fontWeight: "800",
+    letterSpacing: 0.4,
   },
   completedPill: {
     backgroundColor: "rgba(0,144,224,0.12)",
@@ -540,7 +620,7 @@ const styles = StyleSheet.create({
     flexWrap: "wrap",
   },
   routeName: {
-    color: "rgba(255,255,255,0.46)",
+    color: "rgba(255,255,255,0.56)",
     fontSize: 13,
     fontWeight: "500",
   },
@@ -568,6 +648,7 @@ const styles = StyleSheet.create({
   },
   metaChip: {
     minWidth: "30%",
+    flex: 1,
     flexDirection: "row",
     alignItems: "center",
     gap: 8,
@@ -627,6 +708,12 @@ const styles = StyleSheet.create({
     textTransform: "uppercase",
     marginBottom: 10,
   },
+  tableScrollContent: {
+    paddingBottom: 2,
+  },
+  tableWrap: {
+    minWidth: 640,
+  },
   tableHeader: {
     flexDirection: "row",
     alignItems: "center",
@@ -670,7 +757,7 @@ const styles = StyleSheet.create({
   tableCell: {
     flex: 1,
     color: "rgba(255,255,255,0.72)",
-    fontSize: 12.5,
+    fontSize: 12,
     fontWeight: "500",
   },
   tableCellWide: {
@@ -682,10 +769,12 @@ const styles = StyleSheet.create({
   tableCellPax: {
     color: "#A78BFA",
     fontWeight: "700",
+    textAlign: "center",
   },
   tableCellAmount: {
     color: "#00C87A",
     fontWeight: "700",
+    textAlign: "right",
   },
   tableTotalRow: {
     flexDirection: "row",
@@ -706,11 +795,13 @@ const styles = StyleSheet.create({
     color: "#A78BFA",
     fontSize: 13,
     fontWeight: "800",
+    textAlign: "center",
   },
   tableTotalAmount: {
     flex: 1,
     color: "#00C87A",
     fontSize: 13,
     fontWeight: "800",
+    textAlign: "right",
   },
 });
