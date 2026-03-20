@@ -23,6 +23,13 @@ const formatMoney = (value) => {
   return num.toFixed(2);
 };
 
+const formatTicketTime = (value) => {
+  if (!value) return "--";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "--";
+  return date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+};
+
 export default function ConductorTickets() {
   const router = useRouter();
   const { t } = useConductorLanguage();
@@ -245,6 +252,8 @@ export default function ConductorTickets() {
                     <Text style={styles.breakdownTitle}>{t("tickets", "ticketBreakdown")}</Text>
 
                     <View style={styles.tableHeader}>
+                      <Text style={[styles.tableHeadText, styles.tableHeadWide]}>{t("tickets", "ticketId")}</Text>
+                      <Text style={[styles.tableHeadText, styles.tableHeadTime]}>{t("tickets", "bookingTime")}</Text>
                       <Text style={[styles.tableHeadText, styles.tableHeadWide]}>{t("tickets", "from")}</Text>
                       <Text style={[styles.tableHeadText, styles.tableHeadWide]}>{t("tickets", "to")}</Text>
                       <Text style={styles.tableHeadText}>{t("tickets", "pax")}</Text>
@@ -257,6 +266,8 @@ export default function ConductorTickets() {
                           key={`ticket-${tripKey}-${ticket.bookingId || ticketIndex}`}
                           style={[styles.tableRow, ticketIndex % 2 === 0 ? styles.tableRowAlt : null]}
                         >
+                          <Text style={[styles.tableCell, styles.tableCellWide]}>{ticket.bookingId || "--"}</Text>
+                          <Text style={[styles.tableCell, styles.tableCellTime]}>{formatTicketTime(ticket.bookedAt)}</Text>
                           <Text style={[styles.tableCell, styles.tableCellWide]}>{ticket.source || "--"}</Text>
                           <Text style={[styles.tableCell, styles.tableCellWide]}>{ticket.destination || "--"}</Text>
                           <Text style={[styles.tableCell, styles.tableCellPax]}>{ticket.passengerCount || 1}</Text>
@@ -265,7 +276,7 @@ export default function ConductorTickets() {
                       ))}
 
                       <View style={styles.tableTotalRow}>
-                        <Text style={[styles.tableTotalLabel, styles.tableCellWide, { flex: 2 }]}>{t("tickets", "total")}</Text>
+                        <Text style={[styles.tableTotalLabel, { flex: 3.8 }]}>{t("tickets", "total")}</Text>
                         <Text style={[styles.tableTotalPax, styles.tableCellPax]}>{tripPassengerCount}</Text>
                         <Text style={[styles.tableTotalAmount, styles.tableCellAmount]}>Rs {formatMoney(trip.fareCollected)}</Text>
                       </View>
@@ -636,6 +647,9 @@ const styles = StyleSheet.create({
   tableHeadWide: {
     flex: 1.4,
   },
+  tableHeadTime: {
+    flex: 1.1,
+  },
   tableBody: {
     borderWidth: 1,
     borderTopWidth: 0,
@@ -661,6 +675,9 @@ const styles = StyleSheet.create({
   },
   tableCellWide: {
     flex: 1.4,
+  },
+  tableCellTime: {
+    flex: 1.1,
   },
   tableCellPax: {
     color: "#A78BFA",

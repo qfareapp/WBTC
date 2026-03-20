@@ -84,6 +84,8 @@ const translations = {
       hideDetails: "Hide Details",
       showDetails: "View Details",
       ticketBreakdown: "Ticket Breakdown",
+      ticketId: "Ticket ID",
+      bookingTime: "Booking Time",
       from: "From",
       to: "To",
       passengers: "Passengers",
