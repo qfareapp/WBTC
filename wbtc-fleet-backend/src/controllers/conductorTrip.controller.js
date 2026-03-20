@@ -41,15 +41,6 @@ const getOpsNowParts = () => {
 
 const today = () => getOpsNowParts().date;
 
-const getOpsDayWindow = (isoDate) => {
-  // Operations run in IST; use IST day boundaries for all daily filters.
-  const start = new Date(`${isoDate}T00:00:00+05:30`);
-  if (Number.isNaN(start.getTime())) return null;
-  const end = new Date(start);
-  end.setUTCDate(end.getUTCDate() + 1);
-  return { start, end };
-};
-
 const toMinutes = (time) => {
   if (!time) return null;
   const [hh, mm] = String(time).split(":").map(Number);
