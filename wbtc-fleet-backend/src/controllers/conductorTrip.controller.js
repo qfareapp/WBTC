@@ -170,7 +170,7 @@ const cleanupStaleConductorAssignments = async ({ conductorId, date }) => {
   const staleAssignmentIds = openAssignments
     .filter((assignment) => {
       const tripStatus = tripStatusById.get(String(assignment.tripInstanceId || ""));
-      return !tripStatus || tripStatus === "Completed";
+      return !tripStatus || tripStatus === "Completed" || tripStatus === "Cancelled";
     })
     .map((assignment) => assignment._id);
 
@@ -251,7 +251,6 @@ exports.listConductorOffers = asyncHandler(async (req, res) => {
     date,
     status: { $in: ["Scheduled", "Active"] },
     driverId: { $in: mappedDriverIds },
-    busId: { $in: mappedBusIdList },
   })
     .select("tripInstanceId driverId busId startTime");
   if (!driverAcceptedRows.length) {
@@ -335,12 +334,12 @@ exports.listConductorOffers = asyncHandler(async (req, res) => {
     }
 
     const pickupLocation = getStartLocation(route, trip.direction);
-    const mappedBusId = String(acceptedDriverRow.busId || "");
-    if (!mappedBusId || (mappedBusIds.size > 0 && !mappedBusIds.has(mappedBusId))) {
-      trackSkip(trip, "driver_bus_not_mapped_to_conductor");
+    const mappedBusId = String(acceptedDriverRow.busId || trip.busId?._id || trip.busId || "");
+    if (!mappedBusId) {
+      trackSkip(trip, "driver_trip_without_bus");
       continue;
     }
-    const mappedBus = mappedBusById.get(mappedBusId);
+    const mappedBus = mappedBusById.get(mappedBusId) || trip.busId || null;
 
     const eligibility = await ensureConductorEligibleForBus({ busId: mappedBusId, conductorId, date });
     if (!eligibility.ok) {

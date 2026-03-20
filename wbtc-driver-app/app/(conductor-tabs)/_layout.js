@@ -1,8 +1,11 @@
 import { Tabs } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import { ConductorLanguageProvider } from "../../contexts/conductor-language";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 export default function ConductorTabsLayout() {
+  const insets = useSafeAreaInsets();
+
   return (
     <ConductorLanguageProvider>
       <Tabs
@@ -13,8 +16,8 @@ export default function ConductorTabsLayout() {
           tabBarStyle: {
             backgroundColor: "#0F172A",
             borderTopColor: "#1E293B",
-            height: 64,
-            paddingBottom: 8,
+            height: 56 + insets.bottom,
+            paddingBottom: Math.max(8, insets.bottom),
             paddingTop: 8,
           },
           tabBarLabelStyle: {
