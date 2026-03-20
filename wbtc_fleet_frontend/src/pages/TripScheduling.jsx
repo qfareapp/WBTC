@@ -2,15 +2,9 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import OperatorToggle from "../components/OperatorToggle.jsx";
 import "../App.css";
+import { getOpsDate } from "../utils/opsTime.js";
 
-const localIsoDate = () => {
-  const date = new Date();
-  const year = date.getFullYear();
-  const month = String(date.getMonth() + 1).padStart(2, "0");
-  const day = String(date.getDate()).padStart(2, "0");
-  return `${year}-${month}-${day}`;
-};
-const today = localIsoDate();
+const today = getOpsDate();
 const frequencyMin = 30;
 
 function TripScheduling({ apiBase, token, operatorScope, setOperatorScope }) {

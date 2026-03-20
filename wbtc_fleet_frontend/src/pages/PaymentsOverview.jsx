@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import "../App.css";
+import { getOpsDate } from "../utils/opsTime.js";
 
-const today = () => new Date().toISOString().slice(0, 10);
+const today = () => getOpsDate();
 
 const monthFromDate = (isoDate) => String(isoDate || today()).slice(0, 7);
 

@@ -13,6 +13,7 @@ const ConductorAssignment = require("../models/ConductorAssignment");
 const BusCrewMapping = require("../models/BusCrewMapping");
 const ApiError = require("../utils/ApiError");
 const asyncHandler = require("../utils/asyncHandler");
+const { getOpsDate, getOpsMonth, toOpsIsoDay, getOpsPeriodWindow } = require("../utils/opsTime");
 
 const validateSlabs = (slabs) => {
   const normalized = slabs
@@ -65,9 +66,7 @@ const normalizeDepotScope = (req) => {
 };
 
 const toIsoDay = (value) => {
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return null;
-  return date.toISOString().slice(0, 10);
+  return toOpsIsoDay(value);
 };
 
 const toPct = (num, den) => (den ? Number(((num / den) * 100).toFixed(1)) : 0);
@@ -687,34 +686,15 @@ exports.getRoutePerformance = asyncHandler(async (req, res) => {
   const scopeDepotId = normalizeDepotScope(req);
   const depotId = scopeDepotId || requestedDepotId || null;
 
-  const now = new Date();
   let periodStart;
   let periodEnd;
 
   if (mode === "daily") {
-    const date = req.query.date || now.toISOString().slice(0, 10);
-    const start = new Date(`${date}T00:00:00.000Z`);
-    if (Number.isNaN(start.getTime())) throw new ApiError(400, "Invalid date. Use YYYY-MM-DD");
-    periodStart = start;
-    periodEnd = new Date(start);
-    periodEnd.setUTCDate(periodEnd.getUTCDate() + 1);
+    ({ start: periodStart, end: periodEnd } = getOpsPeriodWindow("daily", { date: req.query.date || getOpsDate() }));
   } else if (mode === "monthly") {
-    const month = String(req.query.month || now.toISOString().slice(0, 7));
-    const start = new Date(`${month}-01T00:00:00.000Z`);
-    if (Number.isNaN(start.getTime())) throw new ApiError(400, "Invalid month. Use YYYY-MM");
-    periodStart = start;
-    periodEnd = new Date(start);
-    periodEnd.setUTCMonth(periodEnd.getUTCMonth() + 1);
+    ({ start: periodStart, end: periodEnd } = getOpsPeriodWindow("monthly", { month: req.query.month || getOpsMonth() }));
   } else if (mode === "custom") {
-    const start = new Date(`${String(req.query.startDate || "")}T00:00:00.000Z`);
-    const end = new Date(`${String(req.query.endDate || "")}T00:00:00.000Z`);
-    if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) {
-      throw new ApiError(400, "Invalid startDate/endDate. Use YYYY-MM-DD");
-    }
-    if (start > end) throw new ApiError(400, "startDate must be <= endDate");
-    periodStart = start;
-    periodEnd = new Date(end);
-    periodEnd.setUTCDate(periodEnd.getUTCDate() + 1);
+    ({ start: periodStart, end: periodEnd } = getOpsPeriodWindow("custom", req.query));
   } else {
     throw new ApiError(400, "mode must be daily, monthly, or custom");
   }

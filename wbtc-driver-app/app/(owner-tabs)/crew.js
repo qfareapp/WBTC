@@ -12,18 +12,13 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import { useRouter } from "expo-router";
 import { useFocusEffect } from "@react-navigation/native";
 import { useAppLanguage } from "../../contexts/shared-language";
+import { getOpsDate } from "../../utils/opsTime";
 
 const API_BASE_KEY = "wbtc_api_base";
 const TOKEN_KEY = "wbtc_driver_token";
 const USER_ROLE_KEY = "wbtc_user_role";
 
-const today = () => {
-  const date = new Date();
-  const year = date.getFullYear();
-  const month = String(date.getMonth() + 1).padStart(2, "0");
-  const day = String(date.getDate()).padStart(2, "0");
-  return `${year}-${month}-${day}`;
-};
+const today = () => getOpsDate();
 
 const avatarPalette = ["#0090E0", "#00C87A", "#A78BFA", "#FB923C", "#F472B6", "#22C55E"];
 

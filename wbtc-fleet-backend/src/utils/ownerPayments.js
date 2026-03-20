@@ -3,37 +3,17 @@ const Bus = require("../models/Bus");
 const TicketBooking = require("../models/TicketBooking");
 const OwnerPaymentSettlement = require("../models/OwnerPaymentSettlement");
 const ApiError = require("./ApiError");
-
-const toIsoDay = (date) => date.toISOString().slice(0, 10);
+const { getOpsDate, getOpsMonth, getOpsPeriodWindow } = require("./opsTime");
 
 const getPeriodWindow = (mode, query) => {
-  const now = new Date();
   if (mode === "daily") {
-    const date = query.date || toIsoDay(now);
-    const start = new Date(`${date}T00:00:00.000Z`);
-    if (Number.isNaN(start.getTime())) throw new ApiError(400, "Invalid date. Use YYYY-MM-DD");
-    const end = new Date(start);
-    end.setUTCDate(end.getUTCDate() + 1);
-    return { start, end };
+    return getOpsPeriodWindow("daily", { date: query.date || getOpsDate() });
   }
   if (mode === "monthly") {
-    const month = String(query.month || now.toISOString().slice(0, 7));
-    const start = new Date(`${month}-01T00:00:00.000Z`);
-    if (Number.isNaN(start.getTime())) throw new ApiError(400, "Invalid month. Use YYYY-MM");
-    const end = new Date(start);
-    end.setUTCMonth(end.getUTCMonth() + 1);
-    return { start, end };
+    return getOpsPeriodWindow("monthly", { month: query.month || getOpsMonth() });
   }
   if (mode === "custom") {
-    const start = new Date(`${String(query.startDate || "")}T00:00:00.000Z`);
-    const endInput = new Date(`${String(query.endDate || "")}T00:00:00.000Z`);
-    if (Number.isNaN(start.getTime()) || Number.isNaN(endInput.getTime())) {
-      throw new ApiError(400, "Invalid startDate/endDate. Use YYYY-MM-DD");
-    }
-    if (start > endInput) throw new ApiError(400, "startDate must be <= endDate");
-    const end = new Date(endInput);
-    end.setUTCDate(end.getUTCDate() + 1);
-    return { start, end };
+    return getOpsPeriodWindow("custom", query);
   }
   throw new ApiError(400, "mode must be daily, monthly, or custom");
 };

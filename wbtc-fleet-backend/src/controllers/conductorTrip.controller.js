@@ -13,6 +13,7 @@ const TicketBooking = require("../models/TicketBooking");
 const ApiError = require("../utils/ApiError");
 const asyncHandler = require("../utils/asyncHandler");
 const { ensureConductorEligibleForBus } = require("../utils/crewPolicy");
+const { getOpsDayWindow } = require("../utils/opsTime");
 
 const OPS_TIMEZONE = "Asia/Kolkata";
 
@@ -69,8 +70,11 @@ const getEndLocation = (route, direction) => {
 const normalizeLocation = (value) => String(value || "").trim().toLowerCase();
 
 const parseDate = (dateStr) => {
-  const date = new Date(`${String(dateStr)}T00:00:00.000Z`);
-  return Number.isNaN(date.getTime()) ? null : date;
+  try {
+    return getOpsDayWindow(String(dateStr)).start;
+  } catch {
+    return null;
+  }
 };
 
 const buildActiveOnDateFilter = (dateStr) => {

@@ -5,6 +5,7 @@ import { useRouter } from "expo-router";
 import { Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
 import AppLanguageToggle from "../../components/AppLanguageToggle";
 import { useAppLanguage } from "../../contexts/shared-language";
+import { getOpsDate } from "../../utils/opsTime";
 
 const TOKEN_KEY = "wbtc_driver_token";
 const USER_ROLE_KEY = "wbtc_user_role";
@@ -33,7 +34,7 @@ export default function OwnerProfile() {
     if (!apiBase || !token) return;
     try {
       setRefreshing(true);
-      const month = new Date().toISOString().slice(0, 7);
+      const month = getOpsDate().slice(0, 7);
       const response = await fetch(`${apiBase}/api/owner/payment-summary?mode=monthly&month=${month}`, {
         headers: { Authorization: `Bearer ${token}` },
       });

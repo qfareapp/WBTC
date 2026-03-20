@@ -12,6 +12,7 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import { useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import { useAppLanguage } from "../../contexts/shared-language";
+import { getOpsDate } from "../../utils/opsTime";
 
 const API_BASE_KEY = "wbtc_api_base";
 const TOKEN_KEY = "wbtc_driver_token";
@@ -24,7 +25,7 @@ const toIsoDate = (date) => {
   return `${year}-${month}-${day}`;
 };
 
-const today = () => toIsoDate(new Date());
+const today = () => getOpsDate();
 
 const yesterday = () => {
   const date = new Date();

@@ -1,9 +1,13 @@
 const Bus = require("../models/Bus");
 const BusCrewMapping = require("../models/BusCrewMapping");
+const { getOpsDayWindow } = require("./opsTime");
 
 const parseDate = (dateStr) => {
-  const date = new Date(`${String(dateStr)}T00:00:00.000Z`);
-  return Number.isNaN(date.getTime()) ? null : date;
+  try {
+    return getOpsDayWindow(String(dateStr)).start;
+  } catch {
+    return null;
+  }
 };
 
 const buildActiveOnDateFilter = (dateStr) => {

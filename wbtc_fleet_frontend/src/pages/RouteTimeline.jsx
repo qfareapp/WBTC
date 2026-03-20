@@ -1,15 +1,9 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import "../App.css";
+import { getOpsDate, getOpsNowMinutes } from "../utils/opsTime.js";
 
-const localIsoDate = () => {
-  const date = new Date();
-  const year = date.getFullYear();
-  const month = String(date.getMonth() + 1).padStart(2, "0");
-  const day = String(date.getDate()).padStart(2, "0");
-  return `${year}-${month}-${day}`;
-};
-const today = localIsoDate();
+const today = getOpsDate();
 
 const toMinutes = (time) => {
   if (!time) return null;
@@ -642,11 +636,10 @@ function RouteTimeline({ apiBase, token }) {
       if (!hasNoTaker) return "scheduled";
       const tripStartMin = toMinutes(trip?.startTime);
       if (tripStartMin === null) return "scheduled";
-      const now = new Date();
-      const currentDate = localIsoDate();
+      const currentDate = getOpsDate();
       const dateCmp = selectedDate.localeCompare(currentDate);
       if (dateCmp > 0) return "scheduled";
-      const cutoffMin = dateCmp < 0 ? 24 * 60 : now.getHours() * 60 + now.getMinutes();
+      const cutoffMin = dateCmp < 0 ? 24 * 60 : getOpsNowMinutes();
       if (tripStartMin + 30 <= cutoffMin) return "cancelled";
       return "scheduled";
     },

@@ -6,17 +6,9 @@ const FareSlab = require("../models/FareSlab");
 const TicketBooking = require("../models/TicketBooking");
 const ApiError = require("../utils/ApiError");
 const asyncHandler = require("../utils/asyncHandler");
+const { OPS_TIMEZONE, getOpsDate, toOpsIsoDay, toOpsMonthKey, getOpsDayWindow } = require("../utils/opsTime");
 
 const normalizeBusNumber = (value) => String(value || "").trim();
-
-const startOfUtcDay = (date) =>
-  new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()));
-
-const formatDayKey = (date) => date.toISOString().slice(0, 10);
-const formatMonthKey = (date) => date.toISOString().slice(0, 7);
-
-const monthStartUtc = (date) =>
-  new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), 1));
 
 const addUtcDays = (date, days) => {
   const next = new Date(date);
@@ -46,7 +38,7 @@ const findLiveTripForBus = async (busId, date) => {
   const query = {
     busId,
     status: "Active",
-    date: String(date || new Date().toISOString().slice(0, 10)),
+    date: String(date || getOpsDate()),
   };
   return TripInstance.findOne(query)
     .sort({ actualStartTime: -1, updatedAt: -1 })
@@ -131,7 +123,7 @@ exports.listPublicRoutes = asyncHandler(async (req, res) => {
 
 exports.getRouteLiveStatus = asyncHandler(async (req, res) => {
   const { routeId } = req.params;
-  const date = req.query.date ? String(req.query.date) : new Date().toISOString().slice(0, 10);
+  const date = req.query.date ? String(req.query.date) : getOpsDate();
 
   const route = await Route.findById(routeId);
   if (!route) throw new ApiError(404, "Route not found");
@@ -214,12 +206,10 @@ exports.getBookingAnalytics = asyncHandler(async (req, res) => {
   const depotFilter = scopeDepotId || req.query.depotId || null;
   const operatorType = req.query.operatorType || null;
   const operatorFilter = buildOperatorFilter(operatorType);
-  const now = new Date();
-
-  const dayEnd = startOfUtcDay(now);
+  const { start: dayEnd } = getOpsDayWindow(getOpsDate());
   const dayStart = addUtcDays(dayEnd, -(days - 1));
 
-  const monthEnd = monthStartUtc(now);
+  const monthEnd = new Date(`${toOpsMonthKey(new Date())}-01T00:00:00+05:30`);
   const monthStart = addUtcMonths(monthEnd, -(months - 1));
 
   const baseMatch = { status: "PAID" };
@@ -242,7 +232,7 @@ exports.getBookingAnalytics = asyncHandler(async (req, res) => {
       },
       {
         $group: {
-          _id: { $dateToString: { format: "%Y-%m-%d", date: "$bookedAt" } },
+          _id: { $dateToString: { format: "%Y-%m-%d", date: "$bookedAt", timezone: OPS_TIMEZONE } },
           passengers: { $sum: { $ifNull: ["$passengerCount", 1] } },
         },
       },
@@ -257,7 +247,7 @@ exports.getBookingAnalytics = asyncHandler(async (req, res) => {
       },
       {
         $group: {
-          _id: { $dateToString: { format: "%Y-%m", date: "$bookedAt" } },
+          _id: { $dateToString: { format: "%Y-%m", date: "$bookedAt", timezone: OPS_TIMEZONE } },
           passengers: { $sum: { $ifNull: ["$passengerCount", 1] } },
         },
       },
@@ -277,14 +267,14 @@ exports.getBookingAnalytics = asyncHandler(async (req, res) => {
   const daily = [];
   for (let i = 0; i < days; i += 1) {
     const pointDate = addUtcDays(dayStart, i);
-    const key = formatDayKey(pointDate);
+    const key = toOpsIsoDay(pointDate);
     daily.push({ label: key, passengers: dayMap[key] || 0 });
   }
 
   const monthly = [];
   for (let i = 0; i < months; i += 1) {
     const pointMonth = addUtcMonths(monthStart, i);
-    const key = formatMonthKey(pointMonth);
+    const key = toOpsMonthKey(pointMonth);
     monthly.push({ label: key, passengers: monthMap[key] || 0 });
   }
 

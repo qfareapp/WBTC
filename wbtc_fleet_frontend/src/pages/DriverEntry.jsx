@@ -88,9 +88,16 @@ function DriverEntry({ apiBase, token, operatorScope, setOperatorScope }) {
 
   const toDateInput = (value) => {
     if (!value) return "";
+    const direct = String(value).match(/^(\d{4}-\d{2}-\d{2})/);
+    if (direct) return direct[1];
     const date = new Date(value);
     if (Number.isNaN(date.getTime())) return "";
-    return date.toISOString().slice(0, 10);
+    return new Intl.DateTimeFormat("en-CA", {
+      timeZone: "Asia/Kolkata",
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+    }).format(date);
   };
 
   const startEditDriver = (driver) => {

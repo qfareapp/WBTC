@@ -11,13 +11,34 @@ const RouteDayActivation = require("../models/RouteDayActivation");
 const ApiError = require("../utils/ApiError");
 const asyncHandler = require("../utils/asyncHandler");
 const { ensureDriverEligibleForBus } = require("../utils/crewPolicy");
+const { getOpsDayWindow } = require("../utils/opsTime");
+
+const OPS_TIMEZONE = "Asia/Kolkata";
+
+const getOpsNowParts = () => {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: OPS_TIMEZONE,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  }).formatToParts(new Date());
+
+  const byType = parts.reduce((acc, part) => {
+    if (part.type !== "literal") acc[part.type] = part.value;
+    return acc;
+  }, {});
+
+  return {
+    date: `${byType.year}-${byType.month}-${byType.day}`,
+    nowMinutes: Number(byType.hour) * 60 + Number(byType.minute),
+  };
+};
 
 const today = () => {
-  const date = new Date();
-  const year = date.getFullYear();
-  const month = String(date.getMonth() + 1).padStart(2, "0");
-  const day = String(date.getDate()).padStart(2, "0");
-  return `${year}-${month}-${day}`;
+  return getOpsNowParts().date;
 };
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 
@@ -119,7 +140,7 @@ const cleanupStaleDriverAssignments = async ({ driverId, date }) => {
   const staleAssignmentIds = openAssignments
     .filter((assignment) => {
       const tripStatus = tripStatusById.get(String(assignment.tripInstanceId || ""));
-      return !tripStatus || tripStatus === "Completed";
+      return !tripStatus || tripStatus === "Completed" || tripStatus === "Cancelled";
     })
     .map((assignment) => assignment._id);
 
@@ -144,8 +165,11 @@ const getEndLocation = (route, direction) => {
 const normalizeLocation = (value) => String(value || "").trim().toLowerCase();
 
 const parseDate = (dateStr) => {
-  const date = new Date(`${String(dateStr)}T00:00:00.000Z`);
-  return Number.isNaN(date.getTime()) ? null : date;
+  try {
+    return getOpsDayWindow(String(dateStr)).start;
+  } catch {
+    return null;
+  }
 };
 
 const buildActiveOnDateFilter = (dateStr) => {
@@ -548,8 +572,7 @@ exports.listTripOffers = asyncHandler(async (req, res) => {
   }
   const mappedRouteBusDocs = mappedBusDocs.filter((bus) => String(bus.status || "") === "Active");
 
-  const now = new Date();
-  const nowMinutes = now.getHours() * 60 + now.getMinutes();
+  const { nowMinutes } = getOpsNowParts();
   await cancelExpiredTrips(date, nowMinutes);
 
   const trips = await TripInstance.find({
@@ -739,6 +762,9 @@ exports.acceptTripOffer = asyncHandler(async (req, res) => {
   const driverId = req.user.userId;
   if (!tripInstanceId) throw new ApiError(400, "tripInstanceId required");
 
+  const { nowMinutes } = getOpsNowParts();
+  await cancelExpiredTrips(today(), nowMinutes);
+
   const [driver, trip] = await Promise.all([
     Driver.findById(driverId),
     TripInstance.findById(tripInstanceId).populate("routeId", "routeCode routeName source destination assignmentMode depotId"),
@@ -754,10 +780,8 @@ exports.acceptTripOffer = asyncHandler(async (req, res) => {
   }
   if (driver.status !== "Available") throw new ApiError(409, "Driver not on duty");
 
-  const now = new Date();
-  const nowMinutes = now.getHours() * 60 + now.getMinutes();
   const tripStartMinutes = toMinutes(trip.startTime);
-  if (tripStartMinutes !== null && tripStartMinutes < nowMinutes - 10) {
+  if (tripStartMinutes !== null && tripStartMinutes < nowMinutes - 30) {
     throw new ApiError(409, "Trip offer expired");
   }
 

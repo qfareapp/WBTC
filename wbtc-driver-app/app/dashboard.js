@@ -2,12 +2,13 @@ import { useEffect, useState } from "react";
 import { View, Text, StyleSheet, TouchableOpacity, ScrollView } from "react-native";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { useRouter } from "expo-router";
+import { getOpsDate } from "../utils/opsTime";
 
 const API_BASE_KEY = "wbtc_api_base";
 const TOKEN_KEY = "wbtc_driver_token";
 const DRIVER_KEY = "wbtc_driver_profile";
 
-const today = () => new Date().toISOString().slice(0, 10);
+const today = () => getOpsDate();
 
 export default function Dashboard() {
   const router = useRouter();

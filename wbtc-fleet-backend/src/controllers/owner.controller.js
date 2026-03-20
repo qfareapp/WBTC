@@ -10,44 +10,19 @@ const BusCrewMapping = require("../models/BusCrewMapping");
 const ApiError = require("../utils/ApiError");
 const asyncHandler = require("../utils/asyncHandler");
 const { computeOwnerPaymentRows } = require("../utils/ownerPayments");
+const { getOpsDate, getOpsMonth, toOpsIsoDay, getOpsDayWindow, getOpsPeriodWindow } = require("../utils/opsTime");
 
-const toIsoDay = (date) => date.toISOString().slice(0, 10);
-const dayWindowFromIso = (isoDate) => {
-  const start = new Date(`${isoDate}T00:00:00.000Z`);
-  if (Number.isNaN(start.getTime())) throw new ApiError(400, "Invalid date. Use YYYY-MM-DD");
-  const end = new Date(start);
-  end.setUTCDate(end.getUTCDate() + 1);
-  return { start, end };
-};
+const dayWindowFromIso = (isoDate) => getOpsDayWindow(isoDate);
 
 const getPeriodWindow = (mode, query) => {
-  const now = new Date();
   if (mode === "daily") {
-    const date = query.date || toIsoDay(now);
-    const start = new Date(`${date}T00:00:00.000Z`);
-    if (Number.isNaN(start.getTime())) throw new ApiError(400, "Invalid date. Use YYYY-MM-DD");
-    const end = new Date(start);
-    end.setUTCDate(end.getUTCDate() + 1);
-    return { start, end };
+    return getOpsPeriodWindow("daily", { date: query.date || getOpsDate() });
   }
   if (mode === "monthly") {
-    const month = String(query.month || now.toISOString().slice(0, 7));
-    const start = new Date(`${month}-01T00:00:00.000Z`);
-    if (Number.isNaN(start.getTime())) throw new ApiError(400, "Invalid month. Use YYYY-MM");
-    const end = new Date(start);
-    end.setUTCMonth(end.getUTCMonth() + 1);
-    return { start, end };
+    return getOpsPeriodWindow("monthly", { month: query.month || getOpsMonth() });
   }
   if (mode === "custom") {
-    const start = new Date(`${String(query.startDate || "")}T00:00:00.000Z`);
-    const endInput = new Date(`${String(query.endDate || "")}T00:00:00.000Z`);
-    if (Number.isNaN(start.getTime()) || Number.isNaN(endInput.getTime())) {
-      throw new ApiError(400, "Invalid startDate/endDate. Use YYYY-MM-DD");
-    }
-    if (start > endInput) throw new ApiError(400, "startDate must be <= endDate");
-    const end = new Date(endInput);
-    end.setUTCDate(end.getUTCDate() + 1);
-    return { start, end };
+    return getOpsPeriodWindow("custom", query);
   }
   throw new ApiError(400, "mode must be daily, monthly, or custom");
 };
@@ -82,8 +57,8 @@ exports.getOwnerFleetDashboard = asyncHandler(async (req, res) => {
   const ownerId = req.user.userId;
   const mode = String(req.query.mode || "daily").toLowerCase();
   const { start, end } = getPeriodWindow(mode, req.query);
-  const dateStart = toIsoDay(start);
-  const dateEnd = toIsoDay(new Date(end.getTime() - 1));
+  const dateStart = toOpsIsoDay(start);
+  const dateEnd = toOpsIsoDay(new Date(end.getTime() - 1));
 
   const buses = await loadOwnerBuses(ownerId);
   if (!buses.length) {
@@ -138,16 +113,16 @@ exports.getOwnerFleetDashboard = asyncHandler(async (req, res) => {
     TripInstance.find({
       busId: { $in: busIds },
       status: "Active",
-      date: toIsoDay(new Date()),
+      date: getOpsDate(),
     })
       .select("busId routeId lastLatitude lastLongitude lastLocationAt")
       .populate("routeId", "routeCode routeName")
       .lean(),
-    DriverAssignment.find({ date: toIsoDay(new Date()), busId: { $in: busIds } })
+    DriverAssignment.find({ date: getOpsDate(), busId: { $in: busIds } })
       .populate("driverId", "name empId")
       .sort({ updatedAt: -1 })
       .lean(),
-    ConductorAssignment.find({ date: toIsoDay(new Date()), busId: { $in: busIds } })
+    ConductorAssignment.find({ date: getOpsDate(), busId: { $in: busIds } })
       .populate("conductorId", "name empId")
       .sort({ updatedAt: -1 })
       .lean(),
@@ -527,7 +502,7 @@ exports.resetOwnerBusCrew = asyncHandler(async (req, res) => {
 
 exports.getOwnerAssignCrewContext = asyncHandler(async (req, res) => {
   const ownerId = req.user.userId;
-  const date = String(req.query.date || toIsoDay(new Date()));
+  const date = String(req.query.date || getOpsDate());
   const { start, end } = dayWindowFromIso(date);
 
   const buses = await loadOwnerBuses(ownerId);
@@ -612,7 +587,7 @@ exports.assignOwnerDailyCrew = asyncHandler(async (req, res) => {
   const { busId, driverId, conductorId, date } = req.body;
   if (!busId || !driverId || !conductorId) throw new ApiError(400, "busId, driverId and conductorId are required");
 
-  const targetDate = String(date || toIsoDay(new Date()));
+  const targetDate = String(date || getOpsDate());
   const { start, end } = dayWindowFromIso(targetDate);
 
   const bus = await Bus.findOne({ _id: busId, ownerId }).select("busNumber depotId currentLocation");
@@ -708,8 +683,8 @@ exports.getOwnerPaymentSummary = asyncHandler(async (req, res) => {
   const mode = String(req.query.mode || "monthly").toLowerCase();
   const { start, end } = getPeriodWindow(mode, req.query);
   const period = {
-    startDate: toIsoDay(start),
-    endDate: toIsoDay(new Date(end.getTime() - 1)),
+    startDate: toOpsIsoDay(start),
+    endDate: toOpsIsoDay(new Date(end.getTime() - 1)),
   };
 
   const rows = await computeOwnerPaymentRows({ ownerIds: [ownerId], start, end });

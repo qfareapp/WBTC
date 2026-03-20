@@ -5,13 +5,14 @@ import { useRouter } from "expo-router";
 import DateTimePicker from "@react-native-community/datetimepicker";
 import AppLanguageToggle from "../../components/AppLanguageToggle";
 import { useAppLanguage } from "../../contexts/shared-language";
+import { getOpsDate } from "../../utils/opsTime";
 
 const API_BASE_KEY = "wbtc_api_base";
 const TOKEN_KEY = "wbtc_driver_token";
 const DRIVER_KEY = "wbtc_driver_profile";
 const CONDUCTOR_KEY = "wbtc_conductor_profile";
 const USER_ROLE_KEY = "wbtc_user_role";
-const today = () => new Date().toISOString().slice(0, 10);
+const today = () => getOpsDate();
 const monthStart = () => {
   const now = new Date();
   const year = now.getFullYear();

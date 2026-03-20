@@ -7,6 +7,7 @@ const TicketBooking = require("../models/TicketBooking");
 const ApiError = require("../utils/ApiError");
 const asyncHandler = require("../utils/asyncHandler");
 const { ensureDriverEligibleForBus } = require("../utils/crewPolicy");
+const { getOpsDate, getOpsClockMinutes, getOpsDayWindow } = require("../utils/opsTime");
 
 const normalizeDepotScope = (req) => {
   if (req.user.role === "ADMIN") return null;
@@ -28,10 +29,7 @@ const toMinutes = (time) => {
 };
 
 const toClockMinutes = (value) => {
-  if (!value) return null;
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return null;
-  return date.getHours() * 60 + date.getMinutes();
+  return getOpsClockMinutes(value);
 };
 
 const addMinutes = (time, minutes) => {
@@ -85,7 +83,7 @@ exports.listTrips = asyncHandler(async (req, res) => {
 });
 
 exports.getLiveTrips = asyncHandler(async (req, res) => {
-  const date = req.query.date || new Date().toISOString().slice(0, 10);
+  const date = req.query.date || getOpsDate();
   const { depotId } = req.query;
   const scopeDepotId = normalizeDepotScope(req);
   const finalDepotId = scopeDepotId || depotId || null;
@@ -294,7 +292,7 @@ exports.getOtpSummary = asyncHandler(async (req, res) => {
 });
 
 exports.getTodaySummary = asyncHandler(async (req, res) => {
-  const date = req.query.date || new Date().toISOString().slice(0, 10);
+  const date = req.query.date || getOpsDate();
   const { depotId, operatorType } = req.query;
 
   const scopeDepotId = normalizeDepotScope(req);
@@ -334,8 +332,8 @@ exports.getTodaySummary = asyncHandler(async (req, res) => {
     DriverAssignment.distinct("driverId", assignmentFilter),
   ]);
 
-  const dayStart = new Date(`${date}T00:00:00.000Z`);
-  const dayEnd = new Date(`${date}T23:59:59.999Z`);
+  const { start: dayStart, end: nextDayStart } = getOpsDayWindow(date);
+  const dayEnd = new Date(nextDayStart.getTime() - 1);
   const now = new Date();
   const bookingWindowEnd = now < dayEnd ? now : dayEnd;
   const passengerAgg = await TicketBooking.aggregate([
