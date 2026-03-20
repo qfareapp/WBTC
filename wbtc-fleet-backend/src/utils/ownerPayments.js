@@ -126,7 +126,6 @@ const computeOwnerPaymentRows = async ({ ownerIds, start, end }) => {
 };
 
 module.exports = {
-  toIsoDay,
   getPeriodWindow,
   computeOwnerPaymentRows,
 };
