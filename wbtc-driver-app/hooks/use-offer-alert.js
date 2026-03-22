@@ -1,7 +1,7 @@
 import { useEffect, useRef } from "react";
 import { Platform, Vibration } from "react-native";
 
-const OFFER_ALERT_SOUND = require("../assets/sounds/offer-alert.wav");
+const OFFER_ALERT_SOUND = require("../assets/sounds/qfare-bus-jingle.wav");
 
 let audioConfigured = false;
 let audioModule = undefined;

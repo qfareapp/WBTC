@@ -1,6 +1,7 @@
 import { Stack } from "expo-router";
 import { StatusBar } from "expo-status-bar";
 import { AppLanguageProvider } from "../contexts/shared-language";
+import PushNotificationBridge from "../components/PushNotificationBridge";
 
 export const unstable_settings = {
   initialRouteName: "login",
@@ -11,6 +12,7 @@ export default function RootLayout() {
     <AppLanguageProvider>
       <>
         <StatusBar style="light" backgroundColor="#0A1628" />
+        <PushNotificationBridge />
         <Stack screenOptions={{ headerShown: false }}>
           <Stack.Screen name="index" />
           <Stack.Screen name="login" />

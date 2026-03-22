@@ -6,6 +6,7 @@ import DateTimePicker from "@react-native-community/datetimepicker";
 import AppLanguageToggle from "../../components/AppLanguageToggle";
 import { useAppLanguage } from "../../contexts/shared-language";
 import { getOpsDate } from "../../utils/opsTime";
+import { unregisterStoredDriverPushToken } from "../../utils/pushNotifications";
 
 const API_BASE_KEY = "wbtc_api_base";
 const TOKEN_KEY = "wbtc_driver_token";
@@ -117,6 +118,7 @@ export default function DriverProfile() {
   };
 
   const handleLogout = async () => {
+    await unregisterStoredDriverPushToken({ role: "DRIVER" });
     await AsyncStorage.multiRemove([TOKEN_KEY, USER_ROLE_KEY, DRIVER_KEY, CONDUCTOR_KEY, API_BASE_KEY]);
     router.replace("/login");
   };

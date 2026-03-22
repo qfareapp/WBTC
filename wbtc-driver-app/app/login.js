@@ -1,7 +1,10 @@
 import { useEffect, useState } from "react";
-import { View, Text, TextInput, TouchableOpacity, StyleSheet } from "react-native";
+import { View, Text, TextInput, TouchableOpacity, StyleSheet, ScrollView } from "react-native";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { useRouter } from "expo-router";
+import { Ionicons } from "@expo/vector-icons";
+import QfareLogo from "../components/QfareLogo";
+import { syncDriverPushTokenRegistration, unregisterStoredDriverPushToken } from "../utils/pushNotifications";
 
 const API_BASE_KEY = "wbtc_api_base";
 const TOKEN_KEY = "wbtc_driver_token";
@@ -10,6 +13,11 @@ const CONDUCTOR_KEY = "wbtc_conductor_profile";
 const OWNER_KEY = "wbtc_owner_profile";
 const USER_ROLE_KEY = "wbtc_user_role";
 const PRODUCTION_API_BASE = "https://wbtc-aduk.onrender.com";
+const roleMeta = {
+  DRIVER: { label: "Driver", icon: "car-sport-outline", accent: "#0090E0" },
+  CONDUCTOR: { label: "Conductor", icon: "ticket-outline", accent: "#00C87A" },
+  OWNER: { label: "Owner", icon: "briefcase-outline", accent: "#FB923C" },
+};
 
 export default function Login() {
   const router = useRouter();
@@ -69,6 +77,11 @@ export default function Login() {
     setError("");
     setBusy(true);
     try {
+      const [previousApiBase, previousAuthToken, previousRole] = await Promise.all([
+        AsyncStorage.getItem(API_BASE_KEY),
+        AsyncStorage.getItem(TOKEN_KEY),
+        AsyncStorage.getItem(USER_ROLE_KEY),
+      ]);
       const loginPath = role === "CONDUCTOR"
         ? "/api/conductor-auth/login"
         : role === "OWNER"
@@ -86,6 +99,14 @@ export default function Login() {
       const text = await response.text();
       const data = text ? JSON.parse(text) : {};
       if (!response.ok) throw new Error(data.message || "Login failed");
+
+      if (previousRole === "DRIVER" && previousApiBase && previousAuthToken) {
+        await unregisterStoredDriverPushToken({
+          apiBase: previousApiBase,
+          authToken: previousAuthToken,
+          role: "DRIVER",
+        });
+      }
 
       await AsyncStorage.setItem(API_BASE_KEY, activeApiBase);
       await AsyncStorage.setItem(TOKEN_KEY, data.token);
@@ -107,6 +128,11 @@ export default function Login() {
         await AsyncStorage.removeItem(CONDUCTOR_KEY);
         await AsyncStorage.removeItem(OWNER_KEY);
         await AsyncStorage.setItem(DRIVER_KEY, JSON.stringify(data.driver || {}));
+        await syncDriverPushTokenRegistration({
+          apiBase: activeApiBase,
+          authToken: data.token,
+          role: "DRIVER",
+        });
         router.replace("/(tabs)/active");
       }
     } catch (err) {
@@ -118,106 +144,148 @@ export default function Login() {
 
   return (
     <View style={styles.container}>
-      <View style={styles.hero}>
-        <View style={styles.badge}>
-          <Text style={styles.badgeText}>WBTC</Text>
+      <View style={styles.glowTop} />
+      <View style={styles.glowBottom} />
+
+      <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
+        <View style={styles.hero}>
+        <View style={styles.logoShell}>
+          <QfareLogo />
         </View>
-        <Text style={styles.title}>Driver Console</Text>
-        <Text style={styles.subtitle}>Secure access to your assigned trips.</Text>
       </View>
 
-      <View style={styles.card}>
-        <TouchableOpacity
-          style={styles.serverPill}
-          activeOpacity={0.9}
-          onLongPress={() => setDevModeEnabled((prev) => !prev)}
-        >
-          <Text style={styles.serverLabel}>Server</Text>
-          <Text style={styles.serverValue}>{devModeEnabled && devApiBase.trim() ? devApiBase : apiBase}</Text>
-          <Text style={styles.serverHint}>Long press to {devModeEnabled ? "disable" : "enable"} dev mode</Text>
-        </TouchableOpacity>
+        <View style={styles.card}>
+          <View style={styles.cardBar} />
 
-        {devModeEnabled ? (
-          <>
-            <Text style={styles.label}>Development API URL</Text>
-            <TextInput
-              style={styles.input}
-              value={devApiBase}
-              onChangeText={setDevApiBase}
-              placeholder="http://192.168.1.37:5000"
-              autoCapitalize="none"
-              autoCorrect={false}
-            />
-          </>
-        ) : null}
-
-        {role === "OWNER" ? (
-          <>
-            <Text style={styles.label}>Username</Text>
-            <TextInput
-              style={styles.input}
-              value={username}
-              onChangeText={setUsername}
-              placeholder="owner username"
-              autoCapitalize="none"
-            />
-            <Text style={styles.label}>Password</Text>
-            <TextInput
-              style={styles.input}
-              value={password}
-              onChangeText={setPassword}
-              placeholder="Password"
-              secureTextEntry
-              autoCapitalize="none"
-            />
-          </>
-        ) : (
-          <>
-            <Text style={styles.label}>Employee ID</Text>
-            <TextInput
-              style={styles.input}
-              value={empId}
-              onChangeText={setEmpId}
-              placeholder="EMP123"
-              autoCapitalize="characters"
-            />
-          </>
-        )}
-
-        <Text style={styles.label}>Role</Text>
-        <View style={styles.roleRow}>
           <TouchableOpacity
-            style={[styles.roleOption, role === "DRIVER" ? styles.roleOptionActive : null]}
-            onPress={() => setRole("DRIVER")}
+            style={styles.serverPill}
+            activeOpacity={0.9}
+            onLongPress={() => setDevModeEnabled((prev) => !prev)}
           >
-            <Text style={[styles.roleText, role === "DRIVER" ? styles.roleTextActive : null]}>Driver</Text>
+            <View style={styles.serverIconWrap}>
+              <Ionicons name="globe-outline" size={16} color="#60A5FA" />
+            </View>
+            <View style={styles.serverCopy}>
+              <Text style={styles.serverLabel}>Server</Text>
+              <Text style={styles.serverValue}>{devModeEnabled && devApiBase.trim() ? devApiBase : apiBase}</Text>
+              <Text style={styles.serverHint}>Long press to {devModeEnabled ? "disable" : "enable"} dev mode</Text>
+            </View>
+            <View style={styles.serverStatusDot} />
           </TouchableOpacity>
+
+          {devModeEnabled ? (
+            <>
+              <Text style={styles.label}>Development API URL</Text>
+              <TextInput
+                style={styles.input}
+                value={devApiBase}
+                onChangeText={setDevApiBase}
+                placeholder="http://192.168.1.37:5000"
+                placeholderTextColor="rgba(255,255,255,0.24)"
+                autoCapitalize="none"
+                autoCorrect={false}
+              />
+            </>
+          ) : null}
+
+          {role === "OWNER" ? (
+            <>
+              <Text style={styles.label}>Username</Text>
+              <TextInput
+                style={styles.input}
+                value={username}
+                onChangeText={setUsername}
+                placeholder="owner username"
+                placeholderTextColor="rgba(255,255,255,0.24)"
+                autoCapitalize="none"
+              />
+              <Text style={styles.label}>Password</Text>
+              <TextInput
+                style={styles.input}
+                value={password}
+                onChangeText={setPassword}
+                placeholder="Password"
+                placeholderTextColor="rgba(255,255,255,0.24)"
+                secureTextEntry
+                autoCapitalize="none"
+              />
+            </>
+          ) : (
+            <>
+              <Text style={styles.label}>Employee ID</Text>
+              <TextInput
+                style={styles.input}
+                value={empId}
+                onChangeText={setEmpId}
+                placeholder="EMP123"
+                placeholderTextColor="rgba(255,255,255,0.24)"
+                autoCapitalize="characters"
+              />
+            </>
+          )}
+
+          <Text style={styles.label}>Role</Text>
+          <View style={styles.roleRow}>
+            {Object.entries(roleMeta).map(([key, item]) => {
+              const active = role === key;
+              return (
+                <TouchableOpacity
+                  key={key}
+                  style={[
+                    styles.roleOption,
+                    active ? { borderColor: `${item.accent}88`, backgroundColor: `${item.accent}18` } : null,
+                  ]}
+                  onPress={() => setRole(key)}
+                  activeOpacity={0.9}
+                >
+                  <Ionicons
+                    name={item.icon}
+                    size={20}
+                    color={active ? item.accent : "rgba(255,255,255,0.4)"}
+                  />
+                  <Text
+                    style={[
+                      styles.roleText,
+                      active ? { color: item.accent, fontWeight: "700" } : null,
+                    ]}
+                  >
+                    {item.label}
+                  </Text>
+                </TouchableOpacity>
+              );
+            })}
+          </View>
+
+          {!!error && <Text style={styles.error}>{error}</Text>}
+
           <TouchableOpacity
-            style={[styles.roleOption, role === "CONDUCTOR" ? styles.roleOptionActive : null]}
-            onPress={() => setRole("CONDUCTOR")}
+            style={[
+              styles.button,
+              busy ? styles.buttonBusy : null,
+              !busy &&
+              !(
+                role === "OWNER"
+                  ? username.trim() && password.trim()
+                  : empId.trim()
+              )
+                ? styles.buttonDisabled
+                : null,
+            ]}
+            onPress={handleLogin}
+            disabled={busy}
+            activeOpacity={0.9}
           >
-            <Text style={[styles.roleText, role === "CONDUCTOR" ? styles.roleTextActive : null]}>Conductor</Text>
-          </TouchableOpacity>
-          <TouchableOpacity
-            style={[styles.roleOption, role === "OWNER" ? styles.roleOptionActive : null]}
-            onPress={() => setRole("OWNER")}
-          >
-            <Text style={[styles.roleText, role === "OWNER" ? styles.roleTextActive : null]}>Owner</Text>
+            {busy ? <Ionicons name="sync-outline" size={18} color="#FFFFFF" style={styles.buttonIcon} /> : null}
+            <Text style={styles.buttonText}>{busy ? "Signing in..." : "Login"}</Text>
           </TouchableOpacity>
         </View>
 
-        {!!error && <Text style={styles.error}>{error}</Text>}
-
-        <TouchableOpacity style={styles.button} onPress={handleLogin} disabled={busy}>
-          <Text style={styles.buttonText}>{busy ? "Signing in..." : "Login"}</Text>
-        </TouchableOpacity>
-      </View>
-
-      <Text style={styles.help}>
-        {devModeEnabled
-          ? "Development mode is enabled. The app will use your custom API URL."
-          : "This app is connected to the live WBTC server."}
-      </Text>
+        <Text style={styles.help}>
+          {devModeEnabled
+            ? "Development mode is enabled. The app will use your custom API URL."
+            : "Connected to the live WBTC server"}
+        </Text>
+      </ScrollView>
     </View>
   );
 }
@@ -225,141 +293,196 @@ export default function Login() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    alignItems: "center",
+    backgroundColor: "#0A1628",
+  },
+  glowTop: {
+    position: "absolute",
+    top: -120,
+    right: -70,
+    width: 220,
+    height: 220,
+    borderRadius: 999,
+    backgroundColor: "rgba(0,144,224,0.12)",
+  },
+  glowBottom: {
+    position: "absolute",
+    bottom: -100,
+    left: -50,
+    width: 180,
+    height: 180,
+    borderRadius: 999,
+    backgroundColor: "rgba(0,200,122,0.08)",
+  },
+  content: {
+    flexGrow: 1,
     justifyContent: "center",
-    backgroundColor: "#F1F5F9",
-    padding: 24,
+    paddingHorizontal: 24,
+    paddingVertical: 40,
   },
   hero: {
     alignItems: "center",
-    marginBottom: 18,
+    marginBottom: 28,
   },
-  badge: {
-    backgroundColor: "#0F172A",
-    paddingHorizontal: 14,
-    paddingVertical: 6,
-    borderRadius: 999,
-    marginBottom: 10,
-  },
-  badgeText: {
-    color: "#F8FAFC",
-    fontWeight: "700",
-    letterSpacing: 1.2,
-  },
-  title: {
-    fontSize: 28,
-    fontWeight: "700",
-    color: "#0F172A",
-  },
-  subtitle: {
-    marginTop: 6,
-    fontSize: 15,
-    color: "#64748B",
+  logoShell: {
+    width: "100%",
+    maxWidth: 250,
+    paddingVertical: 18,
+    paddingHorizontal: 26,
+    borderRadius: 24,
+    backgroundColor: "#0A1628",
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.08)",
+    shadowColor: "#000000",
+    shadowOpacity: 0.28,
+    shadowRadius: 24,
+    shadowOffset: { width: 0, height: 14 },
+    elevation: 10,
+    marginBottom: 14,
   },
   card: {
     width: "100%",
-    marginTop: 24,
-    backgroundColor: "#FFFFFF",
-    borderRadius: 16,
-    padding: 20,
+    maxWidth: 390,
+    alignSelf: "center",
+    backgroundColor: "rgba(255,255,255,0.04)",
+    borderRadius: 24,
+    padding: 22,
     borderWidth: 1,
-    borderColor: "#E2E8F0",
-    shadowColor: "#0F172A",
-    shadowOpacity: 0.08,
-    shadowRadius: 12,
-    shadowOffset: { width: 0, height: 8 },
-    elevation: 3,
+    borderColor: "rgba(255,255,255,0.09)",
+    overflow: "hidden",
+  },
+  cardBar: {
+    position: "absolute",
+    top: 0,
+    left: 0,
+    right: 0,
+    height: 3,
+    backgroundColor: "#00C87A",
   },
   label: {
-    fontSize: 12,
-    color: "#64748B",
-    marginTop: 12,
+    fontSize: 11,
+    color: "rgba(255,255,255,0.38)",
+    marginTop: 14,
     textTransform: "uppercase",
-    letterSpacing: 0.8,
+    letterSpacing: 1.1,
+    fontWeight: "700",
   },
   input: {
-    marginTop: 6,
+    marginTop: 8,
     borderWidth: 1,
-    borderColor: "#CBD5F5",
-    borderRadius: 10,
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-    fontSize: 16,
-    color: "#0F172A",
-    backgroundColor: "#F8FAFC",
+    borderColor: "rgba(255,255,255,0.1)",
+    borderRadius: 14,
+    paddingHorizontal: 14,
+    paddingVertical: 14,
+    fontSize: 15,
+    color: "#FFFFFF",
+    backgroundColor: "rgba(255,255,255,0.06)",
   },
   serverPill: {
-    backgroundColor: "#EFF6FF",
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
+    backgroundColor: "rgba(255,255,255,0.03)",
     borderWidth: 1,
-    borderColor: "#BFDBFE",
+    borderColor: "rgba(255,255,255,0.07)",
     borderRadius: 12,
     paddingHorizontal: 12,
-    paddingVertical: 10,
+    paddingVertical: 12,
+  },
+  serverIconWrap: {
+    width: 30,
+    height: 30,
+    borderRadius: 9,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "rgba(0,144,224,0.12)",
+    borderWidth: 1,
+    borderColor: "rgba(0,144,224,0.18)",
+  },
+  serverCopy: {
+    flex: 1,
   },
   serverLabel: {
-    fontSize: 11,
+    fontSize: 10,
     textTransform: "uppercase",
-    letterSpacing: 0.8,
-    color: "#1D4ED8",
+    letterSpacing: 1,
+    color: "rgba(255,255,255,0.3)",
     fontWeight: "700",
   },
   serverValue: {
-    marginTop: 4,
-    color: "#0F172A",
-    fontSize: 13,
+    marginTop: 3,
+    color: "rgba(255,255,255,0.62)",
+    fontSize: 12.5,
     fontWeight: "600",
   },
   serverHint: {
     marginTop: 6,
-    color: "#64748B",
-    fontSize: 11,
+    color: "rgba(255,255,255,0.22)",
+    fontSize: 11.2,
+  },
+  serverStatusDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 999,
+    backgroundColor: "#00C87A",
   },
   button: {
-    marginTop: 18,
-    backgroundColor: "#2563EB",
-    paddingVertical: 12,
-    borderRadius: 10,
+    marginTop: 22,
+    backgroundColor: "#0090E0",
+    paddingVertical: 16,
+    borderRadius: 16,
     alignItems: "center",
+    justifyContent: "center",
+    flexDirection: "row",
+    shadowColor: "#0090E0",
+    shadowOpacity: 0.28,
+    shadowRadius: 18,
+    shadowOffset: { width: 0, height: 10 },
+    elevation: 6,
+  },
+  buttonBusy: {
+    opacity: 0.92,
+  },
+  buttonDisabled: {
+    backgroundColor: "rgba(255,255,255,0.06)",
+    shadowOpacity: 0,
+    elevation: 0,
+  },
+  buttonIcon: {
+    marginRight: 8,
   },
   buttonText: {
     color: "#FFFFFF",
-    fontWeight: "700",
+    fontWeight: "800",
     fontSize: 16,
+    letterSpacing: 0.3,
   },
   error: {
-    marginTop: 10,
-    color: "#B91C1C",
+    marginTop: 12,
+    color: "#FCA5A5",
   },
   roleRow: {
-    marginTop: 8,
+    marginTop: 10,
     flexDirection: "row",
     gap: 10,
   },
   roleOption: {
     flex: 1,
     borderWidth: 1,
-    borderColor: "#CBD5F5",
-    backgroundColor: "#F8FAFC",
-    borderRadius: 10,
-    paddingVertical: 10,
+    borderColor: "rgba(255,255,255,0.08)",
+    backgroundColor: "rgba(255,255,255,0.04)",
+    borderRadius: 14,
+    paddingVertical: 12,
     alignItems: "center",
-  },
-  roleOptionActive: {
-    borderColor: "#2563EB",
-    backgroundColor: "#DBEAFE",
+    gap: 6,
   },
   roleText: {
-    color: "#0F172A",
-    fontWeight: "600",
-  },
-  roleTextActive: {
-    color: "#1D4ED8",
-    fontWeight: "700",
+    color: "rgba(255,255,255,0.45)",
+    fontWeight: "500",
   },
   help: {
-    marginTop: 16,
+    marginTop: 20,
     fontSize: 12,
-    color: "#94A3B8",
+    color: "rgba(255,255,255,0.2)",
     textAlign: "center",
   },
 });

@@ -14,6 +14,13 @@ const DriverSchema = new mongoose.Schema(
     shiftType: { type: String, enum: ["Morning", "Evening", "General"], default: "General" },
     status: { type: String, enum: ["Available", "OnLeave", "Suspended"], default: "Available", index: true },
     phone: { type: String },
+    pushTokens: [
+      {
+        token: { type: String, required: true },
+        platform: { type: String, default: null },
+        updatedAt: { type: Date, default: Date.now },
+      },
+    ],
   },
   { timestamps: true }
 );

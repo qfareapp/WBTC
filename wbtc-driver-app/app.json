@@ -6,7 +6,15 @@
     "scheme": "wbtcdriver",
     "plugins": [
       "expo-router",
-      "@react-native-community/datetimepicker"
+      "@react-native-community/datetimepicker",
+      [
+        "expo-notifications",
+        {
+          "sounds": [
+            "./assets/sounds/qfare-bus-jingle.wav"
+          ]
+        }
+      ]
     ],
     "android": {
       "package": "com.wbtc.driver",

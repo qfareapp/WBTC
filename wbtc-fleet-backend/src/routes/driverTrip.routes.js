@@ -9,6 +9,8 @@ const {
   updateDriverLocation,
   updateDriverDuty,
   updateDriverDutyLocation,
+  registerPushToken,
+  unregisterPushToken,
   listTripOffers,
   acceptTripOffer,
   rejectTripOffer,
@@ -22,6 +24,8 @@ router.use(auth, requireRole("DRIVER"));
 router.get("/", listDriverTrips);
 router.get("/summary", getDriverSummary);
 router.get("/locations", listDutyLocations);
+router.post("/push-token", registerPushToken);
+router.delete("/push-token", unregisterPushToken);
 router.get("/offers", listTripOffers);
 router.get("/:tripInstanceId", getDriverTrip);
 router.post("/start", startDriverTrip);

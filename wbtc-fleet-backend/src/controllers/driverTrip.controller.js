@@ -534,17 +534,18 @@ exports.updateDriverDutyLocation = asyncHandler(async (req, res) => {
   throw new ApiError(403, "Driver duty location is managed automatically from assigned bus start point");
 });
 
-exports.listTripOffers = asyncHandler(async (req, res) => {
-  const driverId = req.user.userId;
-  const date = req.query.date || today();
-  const debug = String(req.query.debug || "").toLowerCase() === "true";
+const collectEligibleTripOffersForDriver = async ({ driverId, date = today(), debug = false }) => {
   const driver = await Driver.findById(driverId);
   if (!driver) throw new ApiError(404, "Driver not found");
 
   await cleanupStaleDriverAssignments({ driverId, date });
 
   if (driver.status !== "Available") {
-    return res.json({ ok: true, date, offers: [] });
+    return {
+      date,
+      offers: [],
+      debug: debug ? { enabled: true, totalCandidates: 0, skippedCount: 0, summary: {}, skipped: [] } : undefined,
+    };
   }
 
   const activeAssignment = await DriverAssignment.findOne({
@@ -553,7 +554,11 @@ exports.listTripOffers = asyncHandler(async (req, res) => {
     status: { $in: ["Scheduled", "Active"] },
   }).select("_id");
   if (activeAssignment) {
-    return res.json({ ok: true, date, offers: [] });
+    return {
+      date,
+      offers: [],
+      debug: debug ? { enabled: true, totalCandidates: 0, skippedCount: 0, summary: {}, skipped: [] } : undefined,
+    };
   }
 
   const mappedRows = await BusCrewMapping.find({
@@ -566,9 +571,12 @@ exports.listTripOffers = asyncHandler(async (req, res) => {
     .lean();
   const mappedBusDocs = mappedRows.map((row) => row.busId).filter(Boolean);
   const mappedBusIds = new Set(mappedBusDocs.map((bus) => String(bus._id)));
-  const mappedBusById = new Map(mappedBusDocs.map((bus) => [String(bus._id), bus]));
   if (mappedBusIds.size === 0) {
-    return res.json({ ok: true, date, offers: [] });
+    return {
+      date,
+      offers: [],
+      debug: debug ? { enabled: true, totalCandidates: 0, skippedCount: 0, summary: {}, skipped: [] } : undefined,
+    };
   }
   const mappedRouteBusDocs = mappedBusDocs.filter((bus) => String(bus.status || "") === "Active");
 
@@ -584,7 +592,13 @@ exports.listTripOffers = asyncHandler(async (req, res) => {
     .populate("busId", "busNumber busType currentLocation")
     .sort({ startTime: 1 });
 
-  if (!trips.length) return res.json({ ok: true, date, offers: [] });
+  if (!trips.length) {
+    return {
+      date,
+      offers: [],
+      debug: debug ? { enabled: true, totalCandidates: 0, skippedCount: 0, summary: {}, skipped: [] } : undefined,
+    };
+  }
 
   const routeIds = Array.from(
     new Set(trips.map((trip) => String(trip.routeId?._id || trip.routeId)).filter(Boolean))
@@ -620,6 +634,7 @@ exports.listTripOffers = asyncHandler(async (req, res) => {
       reason,
     });
   };
+
   for (const trip of trips) {
     const route = trip.routeId;
     if (!route) {
@@ -731,20 +746,16 @@ exports.listTripOffers = asyncHandler(async (req, res) => {
     if (bMinutes === null) return -1;
     return aMinutes - bMinutes;
   });
-  const limitedOffers = offers.slice(0, 5);
 
-  res.set("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate");
-  res.set("Pragma", "no-cache");
-  res.set("Expires", "0");
-  if (!debug) {
-    return res.json({ ok: true, date, offers: limitedOffers });
-  }
+  const limitedOffers = offers.slice(0, 5);
+  if (!debug) return { date, offers: limitedOffers };
+
   const summary = skipped.reduce((acc, item) => {
     acc[item.reason] = (acc[item.reason] || 0) + 1;
     return acc;
   }, {});
-  return res.json({
-    ok: true,
+
+  return {
     date,
     offers: limitedOffers,
     debug: {
@@ -754,7 +765,56 @@ exports.listTripOffers = asyncHandler(async (req, res) => {
       summary,
       skipped,
     },
-  });
+  };
+};
+
+exports.listTripOffers = asyncHandler(async (req, res) => {
+  const driverId = req.user.userId;
+  const date = req.query.date || today();
+  const debug = String(req.query.debug || "").toLowerCase() === "true";
+  const result = await collectEligibleTripOffersForDriver({ driverId, date, debug });
+
+  res.set("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate");
+  res.set("Pragma", "no-cache");
+  res.set("Expires", "0");
+  if (!debug) return res.json({ ok: true, date: result.date, offers: result.offers });
+  return res.json({ ok: true, date: result.date, offers: result.offers, debug: result.debug });
+});
+
+exports.registerPushToken = asyncHandler(async (req, res) => {
+  const driverId = req.user.userId;
+  const normalizedToken = String(req.body?.token || "").trim();
+  const normalizedPlatform = String(req.body?.platform || "").trim() || null;
+
+  if (!normalizedToken) throw new ApiError(400, "token required");
+
+  const driver = await Driver.findById(driverId);
+  if (!driver) throw new ApiError(404, "Driver not found");
+
+  const existingTokens = Array.isArray(driver.pushTokens) ? driver.pushTokens : [];
+  driver.pushTokens = [
+    { token: normalizedToken, platform: normalizedPlatform, updatedAt: new Date() },
+    ...existingTokens.filter((item) => String(item?.token || "") !== normalizedToken),
+  ].slice(0, 5);
+  await driver.save();
+
+  res.json({ ok: true, tokens: driver.pushTokens.length });
+});
+
+exports.unregisterPushToken = asyncHandler(async (req, res) => {
+  const driverId = req.user.userId;
+  const normalizedToken = String(req.body?.token || "").trim();
+
+  const driver = await Driver.findById(driverId);
+  if (!driver) throw new ApiError(404, "Driver not found");
+
+  const existingTokens = Array.isArray(driver.pushTokens) ? driver.pushTokens : [];
+  driver.pushTokens = normalizedToken
+    ? existingTokens.filter((item) => String(item?.token || "") !== normalizedToken)
+    : [];
+  await driver.save();
+
+  res.json({ ok: true, tokens: driver.pushTokens.length });
 });
 
 exports.acceptTripOffer = asyncHandler(async (req, res) => {
@@ -978,6 +1038,8 @@ exports.listDutyLocations = asyncHandler(async (req, res) => {
 
   res.json({ ok: true, locations });
 });
+
+exports.collectEligibleTripOffersForDriver = collectEligibleTripOffersForDriver;
 
 exports.getDriverSummary = asyncHandler(async (req, res) => {
   const driverId = req.user.userId;

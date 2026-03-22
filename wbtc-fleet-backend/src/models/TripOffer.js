@@ -4,7 +4,8 @@ const TripOfferSchema = new mongoose.Schema(
   {
     tripInstanceId: { type: mongoose.Schema.Types.ObjectId, ref: "TripInstance", required: true, index: true },
     driverId: { type: mongoose.Schema.Types.ObjectId, ref: "Driver", required: true, index: true },
-    status: { type: String, enum: ["Rejected", "Accepted"], required: true, index: true },
+    status: { type: String, enum: ["Pending", "Rejected", "Accepted"], required: true, index: true },
+    notifiedAt: { type: Date, default: null },
   },
   { timestamps: true }
 );
