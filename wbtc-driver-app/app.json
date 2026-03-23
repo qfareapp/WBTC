@@ -11,13 +11,14 @@
         "expo-notifications",
         {
           "sounds": [
-            "./assets/sounds/qfare-bus-jingle.wav"
+            "./assets/sounds/qfare_bus_jingle.wav"
           ]
         }
       ]
     ],
     "android": {
       "package": "com.wbtc.driver",
+      "googleServicesFile": "./google-services.json",
       "versionCode": 2,
       "usesCleartextTraffic": true,
       "config": {

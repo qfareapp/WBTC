@@ -34,7 +34,7 @@ const ensureAndroidOfferChannel = async () => {
       importance: Notifications.AndroidImportance.MAX,
       vibrationPattern: [0, 250, 120, 250],
       lightColor: "#00C87A",
-      sound: "qfare-bus-jingle.wav",
+      sound: "qfare_bus_jingle.wav",
       lockscreenVisibility: Notifications.AndroidNotificationVisibility.PUBLIC,
     }).catch(() => {});
   }

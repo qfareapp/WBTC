@@ -100,7 +100,7 @@ const notifyDriverForOffers = async (driver, date) => {
     },
     priority: "high",
     channelId: "trip-offers",
-    sound: "qfare-bus-jingle.wav",
+    sound: "qfare_bus_jingle.wav",
   }));
 
   const pushResult = await sendExpoPushNotifications(messages);
