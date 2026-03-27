@@ -15,6 +15,7 @@ const TicketBookingSchema = new mongoose.Schema(
     issuedByRole: { type: String, enum: ["PASSENGER_APP", "CONDUCTOR"], default: "PASSENGER_APP", index: true },
     issuedById: { type: mongoose.Schema.Types.ObjectId, default: null, index: true },
     passengerCount: { type: Number, default: 1 },
+    passengerPushToken: { type: String, default: null },
     bookedAt: { type: Date, default: Date.now, index: true },
   },
   { timestamps: true }

@@ -12,6 +12,7 @@ const {
   deactivateRouteDay,
   releaseRouteBusForDate,
   getRoutePerformance,
+  searchStops,
 } = require("../controllers/route.controller");
 
 router.use(auth);
@@ -24,6 +25,7 @@ router.post("/:id/activate-day", requireRole("ADMIN", "DEPOT_MANAGER", "SCHEDULE
 router.post("/:id/deactivate-day", requireRole("ADMIN", "DEPOT_MANAGER", "SCHEDULER"), deactivateRouteDay);
 router.post("/:id/release-bus", requireRole("ADMIN", "DEPOT_MANAGER"), releaseRouteBusForDate);
 router.get("/performance", requireRole("ADMIN", "DEPOT_MANAGER", "SCHEDULER", "VIEWER"), getRoutePerformance);
+router.get("/stops/search", requireRole("ADMIN", "DEPOT_MANAGER", "SCHEDULER", "VIEWER"), searchStops);
 router.get("/", requireRole("ADMIN", "DEPOT_MANAGER", "SCHEDULER", "VIEWER"), listRoutes);
 router.get("/:id", requireRole("ADMIN", "DEPOT_MANAGER", "SCHEDULER", "VIEWER"), getRouteFare);
 

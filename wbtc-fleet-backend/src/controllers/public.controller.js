@@ -4,11 +4,31 @@ const Route = require("../models/Route");
 const RouteStop = require("../models/RouteStop");
 const FareSlab = require("../models/FareSlab");
 const TicketBooking = require("../models/TicketBooking");
+const StopGeocode = require("../models/StopGeocode");
 const ApiError = require("../utils/ApiError");
 const asyncHandler = require("../utils/asyncHandler");
 const { OPS_TIMEZONE, getOpsDate, toOpsIsoDay, toOpsMonthKey, getOpsDayWindow } = require("../utils/opsTime");
+const { forwardGeocode } = require("../utils/nominatim");
+const { getDrivingEta } = require("../utils/openrouteservice");
 
 const normalizeBusNumber = (value) => String(value || "").trim();
+
+/**
+ * Returns the conductor's GPS location for a trip.
+ * The conductor rides the bus, so their GPS is the bus location.
+ * Driver GPS is intentionally excluded — the driver may be off-bus.
+ */
+const resolveBestLocation = (trip) => {
+  if (trip.lastLatitude) {
+    return {
+      lat: trip.lastLatitude,
+      lng: trip.lastLongitude,
+      at: trip.lastLocationAt,
+      name: trip.lastLocationName || null,
+    };
+  }
+  return null;
+};
 
 const addUtcDays = (date, days) => {
   const next = new Date(date);
@@ -128,24 +148,41 @@ exports.getRouteLiveStatus = asyncHandler(async (req, res) => {
   const route = await Route.findById(routeId);
   if (!route) throw new ApiError(404, "Route not found");
 
-  const trips = await TripInstance.find({ routeId, date, status: "Active" })
-    .populate("busId", "busNumber")
-    .sort({ startTime: 1 });
+  const [trips, stops] = await Promise.all([
+    TripInstance.find({
+      routeId, date,
+      status: { $in: ["Scheduled", "Active"] },
+      lastLatitude: { $ne: null },
+      conductorEndedAt: null,  // exclude trips the conductor has already ended
+    })
+      .populate("busId", "busNumber")
+      .select("direction startTime endTime actualStartTime busId lastLatitude lastLongitude lastLocationAt lastLocationName approachingStop passedStops driverLastLatitude driverLastLongitude driverLastLocationAt")
+      .sort({ startTime: 1 }),
+    RouteStop.find({ routeId: route._id })
+      .sort({ index: 1 })
+      .select("index name latitude longitude"),
+  ]);
 
-  const payload = trips.map((trip) => ({
-    id: trip._id,
-    direction: trip.direction,
-    startTime: trip.startTime,
-    endTime: trip.endTime,
-    actualStartTime: trip.actualStartTime,
-    lastLatitude: trip.lastLatitude,
-    lastLongitude: trip.lastLongitude,
-    lastLocationAt: trip.lastLocationAt,
-    bus: {
-      id: trip.busId?._id || null,
-      busNumber: trip.busId?.busNumber || null,
-    },
-  }));
+  const payload = trips.map((trip) => {
+    const loc = resolveBestLocation(trip);
+    return {
+      id: trip._id,
+      direction: trip.direction,
+      startTime: trip.startTime,
+      endTime: trip.endTime,
+      actualStartTime: trip.actualStartTime,
+      lastLatitude: loc?.lat ?? null,
+      lastLongitude: loc?.lng ?? null,
+      lastLocationAt: loc?.at ?? null,
+      lastLocationName: loc?.name ?? null,
+      approachingStop: trip.approachingStop || null,
+      passedStops: trip.passedStops || [],
+      bus: {
+        id: trip.busId?._id || null,
+        busNumber: trip.busId?.busNumber || null,
+      },
+    };
+  });
 
   res.json({
     ok: true,
@@ -157,12 +194,127 @@ exports.getRouteLiveStatus = asyncHandler(async (req, res) => {
       destination: route.destination,
       standardTripTimeMin: route.standardTripTimeMin || 0,
     },
+    stops: stops.map((s) => ({
+      index: s.index,
+      name: s.name,
+      latitude: s.latitude ?? null,
+      longitude: s.longitude ?? null,
+    })),
     trips: payload,
   });
 });
 
+/**
+ * Lookup or cache the geocoded coordinates for a bus-stop name.
+ * Bus stops don't move so we cache forever in StopGeocode.
+ */
+const getOrCacheStopCoords = async (stopName) => {
+  const key = stopName.trim();
+  const cached = await StopGeocode.findOne({ stopName: key });
+  if (cached) return { lat: cached.latitude, lng: cached.longitude };
+
+  const result = await forwardGeocode(key);
+  if (!result) return null;
+
+  // Save to cache — ignore duplicate-key errors from parallel requests
+  await StopGeocode.create({
+    stopName: key,
+    latitude: result.lat,
+    longitude: result.lng,
+    displayName: result.displayName,
+  }).catch(() => {});
+
+  return { lat: result.lat, lng: result.lng };
+};
+
+/**
+ * GET /api/public/trips/:tripId/eta?userStop=StopName
+ *
+ * Returns the estimated arrival time for a live bus at the passenger's stop.
+ *
+ * Algorithm:
+ *   1. Get bus current lat/lng from TripInstance.
+ *   2. Geocode the passenger's stop (cached in StopGeocode).
+ *   3. Call OpenRouteService for road-distance ETA.
+ *      Falls back to Haversine × 1.35 road-factor at 20 km/h if ORS is unavailable.
+ *
+ * Response:
+ *   { ok, eta: { minutes, distanceKm, text, source, busLocationName, updatedAt } }
+ *   eta is null if the bus has no recorded position yet.
+ */
+exports.getTripEta = asyncHandler(async (req, res) => {
+  const { tripId } = req.params;
+  const userStop = String(req.query.userStop || "").trim();
+
+  if (!userStop) throw new ApiError(400, "userStop query param required");
+
+  const trip = await TripInstance.findById(tripId).select(
+    "lastLatitude lastLongitude lastLocationAt lastLocationName driverLastLatitude driverLastLongitude driverLastLocationAt status"
+  );
+  if (!trip) throw new ApiError(404, "Trip not found");
+
+  const loc = resolveBestLocation(trip);
+  if (!loc) {
+    return res.json({
+      ok: true,
+      eta: null,
+      busLocationName: trip.lastLocationName || null,
+      reason: "bus_location_unavailable",
+    });
+  }
+
+  // Resolve stop coordinates:
+  //   1. RouteStop with manually-set lat/lng (most accurate — no geocoding needed)
+  //   2. StopGeocode cache (Nominatim result, cached in MongoDB)
+  //   3. Live Nominatim forward geocode (slowest, last resort)
+  let stopCoords = null;
+  const routeStop = await RouteStop.findOne({
+    name: { $regex: new RegExp(`^${userStop.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`, "i") },
+    latitude: { $ne: null },
+    longitude: { $ne: null },
+  }).select("latitude longitude");
+  if (routeStop) {
+    stopCoords = { lat: routeStop.latitude, lng: routeStop.longitude };
+  } else {
+    stopCoords = await getOrCacheStopCoords(userStop);
+  }
+
+  if (!stopCoords) {
+    return res.json({
+      ok: true,
+      eta: null,
+      busLocationName: trip.lastLocationName || null,
+      reason: "stop_not_geocoded",
+    });
+  }
+
+  const etaResult = await getDrivingEta(
+    loc.lat,
+    loc.lng,
+    stopCoords.lat,
+    stopCoords.lng
+  );
+
+  const etaText =
+    etaResult.durationMin <= 1
+      ? "Arriving soon"
+      : `~${etaResult.durationMin} min away`;
+
+  res.json({
+    ok: true,
+    eta: {
+      minutes: etaResult.durationMin,
+      distanceKm: etaResult.distanceKm,
+      text: etaText,
+      source: etaResult.source,
+      busLocationName: trip.lastLocationName || null,
+      updatedAt: trip.lastLocationAt,
+    },
+  });
+});
+
 exports.createDemoBooking = asyncHandler(async (req, res) => {
-  const { busNumber, routeId, source, destination, fare } = req.body;
+  const { busNumber, routeId, source, destination, fare, passengerCount, passengerPushToken } = req.body;
 
   if (!busNumber) throw new ApiError(400, "busNumber required");
   if (!routeId) throw new ApiError(400, "routeId required");
@@ -185,15 +337,216 @@ exports.createDemoBooking = asyncHandler(async (req, res) => {
     busNumber: normalizedBusNumber,
     routeId: String(routeId),
     depotId: bus?.depotId || null,
+    tripInstanceId: liveTrip._id,
     source: String(source),
     destination: String(destination),
     fare: Number(fare) || 0,
     status: "PAID",
-    passengerCount: 1,
+    passengerCount: Number(passengerCount) || 1,
+    passengerPushToken: passengerPushToken || null,
     bookedAt: new Date(),
   });
 
-  res.status(201).json({ ok: true, booking });
+  res.status(201).json({
+    ok: true,
+    booking: {
+      ...booking.toObject(),
+      tripInstanceId: liveTrip._id,
+    },
+  });
+});
+
+/**
+ * GET /api/public/bookings/:bookingId/status
+ * Returns whether the ticket's trip is still active.
+ * { ok, valid: bool, tripStatus: 'Active'|'Completed'|'Cancelled'|'Scheduled'|null }
+ */
+exports.getBookingStatus = asyncHandler(async (req, res) => {
+  const { bookingId } = req.params;
+  const booking = await TicketBooking.findOne({ bookingId }).select("tripInstanceId status");
+  if (!booking) throw new ApiError(404, "Booking not found");
+
+  if (!booking.tripInstanceId) {
+    return res.json({ ok: true, valid: false, tripStatus: null });
+  }
+
+  const trip = await TripInstance.findById(booking.tripInstanceId).select("status conductorEndedAt actualEndTime");
+  if (!trip) {
+    return res.json({ ok: true, valid: false, tripStatus: null });
+  }
+
+  // Ticket is valid until the conductor explicitly ends the trip.
+  // Driver ending the trip (status → "Completed") is NOT enough —
+  // the conductor must also call completeConductorTrip which sets conductorEndedAt.
+  const conductorEnded = trip.conductorEndedAt != null;
+  const cancelled = trip.status === "Cancelled";
+  const valid = !conductorEnded && !cancelled;
+
+  res.json({
+    ok: true,
+    valid,
+    tripStatus: trip.status,
+    tripEndedAt: trip.conductorEndedAt ?? trip.actualEndTime ?? null,
+  });
+});
+
+/**
+ * GET /api/public/trips/:tripId/load
+ *
+ * Returns estimated bus load based on:
+ *   1. All paid tickets for this trip (source/destination stop names)
+ *   2. Conductor's live GPS position → matched to nearest stop index
+ *   3. Passengers whose source stop index ≤ currentIdx < destination stop index are "onboard"
+ *
+ * Response:
+ *   { ok, onboard, capacity, loadPercent, status, currentStopName, gpsAge }
+ *   status: "empty" | "light" | "available" | "filling" | "packed" | "unavailable"
+ */
+const haversineKm = (lat1, lon1, lat2, lon2) => {
+  const R = 6371;
+  const dLat = ((lat2 - lat1) * Math.PI) / 180;
+  const dLon = ((lon2 - lon1) * Math.PI) / 180;
+  const a =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos((lat1 * Math.PI) / 180) *
+      Math.cos((lat2 * Math.PI) / 180) *
+      Math.sin(dLon / 2) ** 2;
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+};
+
+exports.getTripLoad = asyncHandler(async (req, res) => {
+  const { tripId } = req.params;
+
+  const trip = await TripInstance.findById(tripId)
+    .populate("busId", "busNumber seatingCapacity")
+    .select("routeId busId direction lastLatitude lastLongitude lastLocationAt lastLocationName driverLastLatitude driverLastLongitude driverLastLocationAt status");
+  if (!trip) throw new ApiError(404, "Trip not found");
+
+  const capacity = Number(trip.busId?.seatingCapacity) || 0;
+  const loc = resolveBestLocation(trip);
+  const hasLocation = loc !== null;
+  const gpsAge = loc?.at
+    ? Math.round((Date.now() - new Date(loc.at).getTime()) / 1000)
+    : null;
+
+  // Fetch all paid tickets for this trip upfront (needed for totalBooked fallback too)
+  const tickets = await TicketBooking.find({
+    tripInstanceId: trip._id,
+    status: "PAID",
+  })
+    .select("source destination passengerCount")
+    .lean();
+
+  const totalBooked = tickets.reduce((sum, t) => sum + (Number(t.passengerCount) || 1), 0);
+  console.log(`[getTripLoad] tripId=${tripId} trip._id=${trip._id} tickets=${tickets.length} totalBooked=${totalBooked}`);
+
+  if (!hasLocation) {
+    return res.json({
+      ok: true,
+      onboard: null,
+      totalBooked,
+      capacity,
+      loadPercent: null,
+      status: "unavailable",
+      reason: "bus_location_unavailable",
+      gpsAge,
+    });
+  }
+
+  // Load all stops for this route (need both geocoded + non-geocoded for name→index map)
+  const [geocodedStops, allStops] = await Promise.all([
+    RouteStop.find({ routeId: trip.routeId, latitude: { $ne: null }, longitude: { $ne: null } })
+      .sort({ index: 1 })
+      .select("index name latitude longitude")
+      .lean(),
+    RouteStop.find({ routeId: trip.routeId })
+      .sort({ index: 1 })
+      .select("index name")
+      .lean(),
+  ]);
+
+  if (!geocodedStops.length) {
+    return res.json({
+      ok: true,
+      onboard: null,
+      totalBooked,
+      capacity,
+      loadPercent: null,
+      status: "unavailable",
+      reason: "no_stop_coordinates",
+      gpsAge,
+    });
+  }
+
+  // Find nearest geocoded stop to bus's current position (best available GPS)
+  let nearestStop = geocodedStops[0];
+  let minDist = haversineKm(
+    loc.lat,
+    loc.lng,
+    geocodedStops[0].latitude,
+    geocodedStops[0].longitude
+  );
+  for (const stop of geocodedStops.slice(1)) {
+    const d = haversineKm(loc.lat, loc.lng, stop.latitude, stop.longitude);
+    if (d < minDist) { minDist = d; nearestStop = stop; }
+  }
+  const currentStopIdx = nearestStop.index;
+
+  // Build name → index map (case-insensitive)
+  const stopIndexByName = new Map(
+    allStops.map((s) => [s.name.toLowerCase().trim(), s.index])
+  );
+
+  const direction = trip.direction;
+  let onboard = 0;
+
+  console.log(`[getTripLoad] direction=${direction} currentStopIdx=${currentStopIdx} nearestStop=${nearestStop.name}`);
+  for (const ticket of tickets) {
+    const srcKey = String(ticket.source || "").toLowerCase().trim();
+    const dstKey = String(ticket.destination || "").toLowerCase().trim();
+    const srcIdx = stopIndexByName.get(srcKey);
+    const dstIdx = stopIndexByName.get(dstKey);
+    console.log(`[getTripLoad] ticket src="${ticket.source}"(${srcIdx}) dst="${ticket.destination}"(${dstIdx}) pax=${ticket.passengerCount}`);
+    if (srcIdx === undefined || dstIdx === undefined) continue;
+
+    // UP: bus travels low → high index; DOWN: bus travels high → low index
+    const isOnboard =
+      direction === "UP"
+        ? currentStopIdx >= srcIdx && currentStopIdx < dstIdx
+        : currentStopIdx <= srcIdx && currentStopIdx > dstIdx;
+
+    console.log(`[getTripLoad] isOnboard=${isOnboard} (currentStop=${currentStopIdx} >= src=${srcIdx} && < dst=${dstIdx})`);
+    if (isOnboard) onboard += Number(ticket.passengerCount) || 1;
+  }
+
+  // Derive load status
+  const loadPercent = capacity > 0 ? Math.round((onboard / capacity) * 100) : null;
+  let status;
+  if (loadPercent === null) {
+    // No capacity configured — use raw count buckets
+    status = onboard === 0 ? "empty" : onboard <= 10 ? "light" : onboard <= 25 ? "available" : onboard <= 40 ? "filling" : "packed";
+  } else if (loadPercent === 0) {
+    status = "empty";
+  } else if (loadPercent <= 33) {
+    status = "light";
+  } else if (loadPercent <= 66) {
+    status = "available";
+  } else if (loadPercent <= 90) {
+    status = "filling";
+  } else {
+    status = "packed";
+  }
+
+  res.json({
+    ok: true,
+    onboard,
+    totalBooked,
+    capacity,
+    loadPercent,
+    status,
+    currentStopName: nearestStop.name,
+    gpsAge,
+  });
 });
 
 exports.getBookingAnalytics = asyncHandler(async (req, res) => {

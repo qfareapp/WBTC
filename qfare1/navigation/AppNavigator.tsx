@@ -1,11 +1,16 @@
 import React from 'react';
+import { ActivityIndicator, StyleSheet, View } from 'react-native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
-import { Text } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
 import HomeScreen from '../screens/HomeScreen';
 import QRScannerScreen from '../screens/QRScannerScreen';
 import TicketScreen from '../screens/TicketScreen';
 import ProfileScreen from '../screens/ProfileScreen';
+import LoginScreen from '../screens/LoginScreen';
+import CompleteProfileScreen from '../screens/CompleteProfileScreen';
+import { useAuth } from '../lib/auth';
+import { palette } from '../lib/theme';
 
 export type RootStackParamList = {
   Tabs: undefined;
@@ -13,12 +18,16 @@ export type RootStackParamList = {
     source: string;
     destination: string;
     fare: number;
+    passengerCount: number;
     busNumber: string;
     routeCode: string;
     routeName: string;
     bookingId: string;
     bookedAt: string;
+    tripInstanceId: string | null;
   };
+  Login: undefined;
+  CompleteProfile: undefined;
 };
 
 export type BottomTabParamList = {
@@ -30,13 +39,52 @@ export type BottomTabParamList = {
 const Stack = createNativeStackNavigator<RootStackParamList>();
 const Tab = createBottomTabNavigator<BottomTabParamList>();
 
+type TabIconProps = {
+  icon: React.ComponentProps<typeof Ionicons>['name'];
+  iconActive: React.ComponentProps<typeof Ionicons>['name'];
+  color: string;
+  focused: boolean;
+  isScan?: boolean;
+};
+
+const TabIcon = ({ icon, iconActive, color, focused, isScan }: TabIconProps) => {
+  if (isScan) {
+    return (
+      <View style={[styles.scanTabIcon, focused && styles.scanTabIconActive]}>
+        <Ionicons name={focused ? iconActive : icon} size={22} color={focused ? '#fff' : palette.textFaint} />
+      </View>
+    );
+  }
+  return (
+    <View style={styles.tabIconWrap}>
+      <Ionicons name={focused ? iconActive : icon} size={22} color={color} />
+      {focused && <View style={styles.tabDot} />}
+    </View>
+  );
+};
+
 const TabsNavigator = () => (
   <Tab.Navigator
     screenOptions={{
       headerShown: false,
-      tabBarStyle: { backgroundColor: '#0B1828', borderTopColor: '#1F4C78' },
-      tabBarActiveTintColor: '#4DD4AC',
-      tabBarInactiveTintColor: '#A6BDD8'
+      tabBarStyle: {
+        backgroundColor: palette.surfaceMuted,
+        borderTopColor: palette.border,
+        borderTopWidth: 1,
+        height: 88,
+        paddingTop: 6,
+        paddingBottom: 18
+      },
+      tabBarActiveTintColor: palette.accent,
+      tabBarInactiveTintColor: palette.textFaint,
+      tabBarLabelStyle: {
+        fontSize: 11,
+        fontWeight: '700',
+        letterSpacing: 0.3
+      },
+      tabBarItemStyle: {
+        paddingTop: 2
+      }
     }}
   >
     <Tab.Screen
@@ -44,7 +92,9 @@ const TabsNavigator = () => (
       component={HomeScreen}
       options={{
         tabBarLabel: 'Home',
-        tabBarIcon: ({ color }) => <Text style={{ color }}>H</Text>
+        tabBarIcon: ({ color, focused }) => (
+          <TabIcon icon="home-outline" iconActive="home" color={color} focused={focused} />
+        )
       }}
     />
     <Tab.Screen
@@ -52,7 +102,9 @@ const TabsNavigator = () => (
       component={QRScannerScreen}
       options={{
         tabBarLabel: 'Scan',
-        tabBarIcon: ({ color }) => <Text style={{ color }}>S</Text>
+        tabBarIcon: ({ color, focused }) => (
+          <TabIcon icon="scan-outline" iconActive="scan" color={color} focused={focused} isScan />
+        )
       }}
     />
     <Tab.Screen
@@ -60,17 +112,93 @@ const TabsNavigator = () => (
       component={ProfileScreen}
       options={{
         tabBarLabel: 'Profile',
-        tabBarIcon: ({ color }) => <Text style={{ color }}>P</Text>
+        tabBarIcon: ({ color, focused }) => (
+          <TabIcon icon="person-outline" iconActive="person" color={color} focused={focused} />
+        )
       }}
     />
   </Tab.Navigator>
 );
 
-const AppNavigator = () => (
-  <Stack.Navigator initialRouteName="Tabs">
-    <Stack.Screen name="Tabs" component={TabsNavigator} options={{ headerShown: false }} />
-    <Stack.Screen name="Ticket" component={TicketScreen} />
-  </Stack.Navigator>
-);
+const AppNavigator = () => {
+  const { token, user, loading } = useAuth();
+
+  if (loading) {
+    return (
+      <View style={styles.splash}>
+        <ActivityIndicator size="large" color={palette.accent} />
+      </View>
+    );
+  }
+
+  // Not logged in → show Login
+  if (!token || !user) {
+    return (
+      <Stack.Navigator screenOptions={{ headerShown: false }}>
+        <Stack.Screen name="Login" component={LoginScreen} />
+      </Stack.Navigator>
+    );
+  }
+
+  // Logged in but profile not complete → show CompleteProfile
+  if (!user.profileComplete) {
+    return (
+      <Stack.Navigator screenOptions={{ headerShown: false }}>
+        <Stack.Screen name="CompleteProfile" component={CompleteProfileScreen} />
+      </Stack.Navigator>
+    );
+  }
+
+  // Fully authenticated → show main app
+  return (
+    <Stack.Navigator
+      initialRouteName="Tabs"
+      screenOptions={{
+        headerStyle: { backgroundColor: palette.surfaceMuted },
+        headerTintColor: palette.text,
+        headerTitleStyle: { fontWeight: '800' },
+        contentStyle: { backgroundColor: palette.bg }
+      }}
+    >
+      <Stack.Screen name="Tabs" component={TabsNavigator} options={{ headerShown: false }} />
+      <Stack.Screen name="Ticket" component={TicketScreen} options={{ title: 'Digital Ticket' }} />
+    </Stack.Navigator>
+  );
+};
+
+const styles = StyleSheet.create({
+  splash: {
+    flex: 1,
+    backgroundColor: palette.bg,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  tabIconWrap: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    height: 36,
+    gap: 4
+  },
+  tabDot: {
+    width: 4,
+    height: 4,
+    borderRadius: 2,
+    backgroundColor: palette.accent
+  },
+  scanTabIcon: {
+    width: 52,
+    height: 36,
+    borderRadius: 14,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: palette.cta,
+    borderWidth: 1,
+    borderColor: palette.ctaSoft
+  },
+  scanTabIconActive: {
+    backgroundColor: palette.accentDeep,
+    borderColor: palette.accent
+  }
+});
 
 export default AppNavigator;

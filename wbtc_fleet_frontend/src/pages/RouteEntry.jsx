@@ -1,26 +1,26 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import OperatorToggle from "../components/OperatorToggle.jsx";
 import "../App.css";
 
-  const initialRoute = {
-    routeNo: "",
-    routeName: "",
-    depotId: "",
-    estimatedTripDurationMin: "",
-    frequencyMin: "",
-    firstTripTimeUp: "",
-    firstTripTimeDown: "",
-    lastTripTime: "",
-    assignmentMode: "MANUAL",
-  };
+const initialRoute = {
+  routeNo: "",
+  routeName: "",
+  depotId: "",
+  estimatedTripDurationMin: "",
+  frequencyMin: "",
+  firstTripTimeUp: "",
+  firstTripTimeDown: "",
+  lastTripTime: "",
+  assignmentMode: "MANUAL",
+};
 
-const initialStop = { name: "" };
+const initialStop = { name: "", latitude: "", longitude: "", matchedStopName: "" };
 const initialSlab = { fromKm: "", toKm: "", fare: "" };
 
 function RouteEntry({ apiBase, token, operatorScope, setOperatorScope }) {
   const [route, setRoute] = useState(initialRoute);
-  const [stops, setStops] = useState([initialStop, initialStop]);
+  const [stops, setStops] = useState([{ ...initialStop }, { ...initialStop }]);
   const [fareSlabs, setFareSlabs] = useState([{ ...initialSlab }]);
   const [routes, setRoutes] = useState([]);
   const [depots, setDepots] = useState([]);
@@ -28,13 +28,72 @@ function RouteEntry({ apiBase, token, operatorScope, setOperatorScope }) {
   const [activeRoute, setActiveRoute] = useState(null);
   const [activeFareTable, setActiveFareTable] = useState(null);
   const [editingRouteId, setEditingRouteId] = useState(null);
+  const [stopSuggestions, setStopSuggestions] = useState({});
+  const [stopFocused, setStopFocused] = useState({});
+  const stopTimers = useRef({});
+  const stopRequestSeq = useRef({});
+
+  const updateStop = (idx, updater) => {
+    setStops((prev) => {
+      const next = [...prev];
+      const current = next[idx] || { ...initialStop };
+      next[idx] = typeof updater === "function" ? updater(current) : { ...current, ...updater };
+      return next;
+    });
+  };
+
+  const searchStops = (idx, query) => {
+    clearTimeout(stopTimers.current[idx]);
+    if (!query.trim()) {
+      setStopSuggestions((p) => ({ ...p, [idx]: [] }));
+      return;
+    }
+    stopTimers.current[idx] = setTimeout(async () => {
+      const requestSeq = (stopRequestSeq.current[idx] || 0) + 1;
+      stopRequestSeq.current[idx] = requestSeq;
+      try {
+        const params = new URLSearchParams({
+          q: query,
+          operatorType: operatorScope,
+        });
+        if (editingRouteId) params.set("excludeRouteId", editingRouteId);
+        const res = await fetch(
+          `${apiBase}/api/routes/stops/search?${params.toString()}`,
+          { headers: { Authorization: `Bearer ${token}` } }
+        );
+        const data = await res.json();
+        if (stopRequestSeq.current[idx] !== requestSeq) return;
+        setStopSuggestions((p) => ({ ...p, [idx]: data.stops || [] }));
+      } catch {
+        setStopSuggestions((p) => ({ ...p, [idx]: [] }));
+      }
+    }, 250);
+  };
+
+  const selectStopSuggestion = (idx, suggestion) => {
+    updateStop(idx, (current) => ({
+      ...current,
+      name: suggestion.name,
+      latitude: suggestion.latitude != null ? String(suggestion.latitude) : "",
+      longitude: suggestion.longitude != null ? String(suggestion.longitude) : "",
+      matchedStopName: suggestion.name,
+    }));
+    setStopSuggestions((p) => ({ ...p, [idx]: [] }));
+    setStopFocused((p) => ({ ...p, [idx]: false }));
+  };
+
+  const keepTypedStop = (idx) => {
+    updateStop(idx, { matchedStopName: "" });
+    setStopSuggestions((p) => ({ ...p, [idx]: [] }));
+    setStopFocused((p) => ({ ...p, [idx]: false }));
+  };
 
   const showNotice = (type, message) => {
     setNotice({ type, message });
     setTimeout(() => setNotice(null), 4000);
   };
 
-  const addStop = () => setStops((prev) => [...prev, { name: "" }]);
+  const addStop = () => setStops((prev) => [...prev, { ...initialStop }]);
   const removeStop = (index) => setStops((prev) => prev.filter((_, idx) => idx !== index));
   const moveStop = (index, direction) => {
     setStops((prev) => {
@@ -80,6 +139,20 @@ function RouteEntry({ apiBase, token, operatorScope, setOperatorScope }) {
   }, [fareSlabs]);
 
   const stopNames = stops.map((stop) => stop.name.trim()).filter(Boolean);
+
+  const hasExactSuggestion = (idx) => {
+    const typed = String(stops[idx]?.name || "").trim().toLowerCase();
+    if (!typed) return false;
+    return (stopSuggestions[idx] || []).some((item) => String(item.name || "").trim().toLowerCase() === typed);
+  };
+
+  const visibleRoutes = useMemo(() => {
+    return routes.filter((item) => {
+      const routeOperatorType = item.operatorType || "WBTC";
+      if (operatorScope === "WBTC") return routeOperatorType === "WBTC";
+      return routeOperatorType === operatorScope;
+    });
+  }, [routes, operatorScope]);
 
   const getFareForDistance = (distance) => {
     const slab = fareSlabs.find((item) => {
@@ -147,7 +220,12 @@ function RouteEntry({ apiBase, token, operatorScope, setOperatorScope }) {
         lastTripTime: route.lastTripTime || null,
         assignmentMode: route.assignmentMode || "MANUAL",
         operatorType: operatorScope,
-        stops: stops.map((stop, idx) => ({ index: idx, name: stop.name.trim() })),
+        stops: stops.map((stop, idx) => ({
+          index: idx,
+          name: stop.name.trim(),
+          latitude: stop.latitude !== "" && stop.latitude != null ? Number(stop.latitude) : null,
+          longitude: stop.longitude !== "" && stop.longitude != null ? Number(stop.longitude) : null,
+        })),
         fareSlabs: fareSlabs.map((slab) => ({
           fromKm: Number(slab.fromKm),
         toKm: Number(slab.toKm),
@@ -210,7 +288,12 @@ function RouteEntry({ apiBase, token, operatorScope, setOperatorScope }) {
       setStops(
         (data.stops || [])
           .sort((a, b) => a.index - b.index)
-          .map((stop) => ({ name: stop.name }))
+          .map((stop) => ({
+            name: stop.name,
+            latitude: stop.latitude != null ? String(stop.latitude) : "",
+            longitude: stop.longitude != null ? String(stop.longitude) : "",
+            matchedStopName: "",
+          }))
       );
       setFareSlabs(
         (data.fareSlabs || [])
@@ -225,8 +308,10 @@ function RouteEntry({ apiBase, token, operatorScope, setOperatorScope }) {
   const handleCancelEdit = () => {
     setEditingRouteId(null);
     setRoute(initialRoute);
-    setStops([initialStop, initialStop]);
+    setStops([{ ...initialStop }, { ...initialStop }]);
     setFareSlabs([{ ...initialSlab }]);
+    setStopSuggestions({});
+    setStopFocused({});
   };
 
   const loadRoutes = async () => {
@@ -310,7 +395,15 @@ function RouteEntry({ apiBase, token, operatorScope, setOperatorScope }) {
     loadDepots();
     setRoute((prev) => ({ ...prev, depotId: "" }));
     setEditingRouteId(null);
+    setStopSuggestions({});
+    setStopFocused({});
   }, [apiBase, token, operatorScope]);
+
+  useEffect(() => {
+    return () => {
+      Object.values(stopTimers.current).forEach((timer) => clearTimeout(timer));
+    };
+  }, []);
 
   return (
     <div className="app">
@@ -368,7 +461,7 @@ function RouteEntry({ apiBase, token, operatorScope, setOperatorScope }) {
             {notice && <div className={`notice ${notice.type}`}>{notice.message}</div>}
 
             <section className="grid two">
-              <div className="panel">
+              <div className="panel" style={{ overflow: "visible" }}>
                 <div className="panel-header">
                   <h3>Route basic details</h3>
                   <span className="pill">Route</span>
@@ -448,7 +541,7 @@ function RouteEntry({ apiBase, token, operatorScope, setOperatorScope }) {
                       />
                     </label>
                   <label className="field">
-                    Daily last trip
+                    Last trip departure
                     <input
                       type="time"
                       value={route.lastTripTime}
@@ -468,7 +561,7 @@ function RouteEntry({ apiBase, token, operatorScope, setOperatorScope }) {
                 </label>
               </form>
 
-                <div className="panel" style={{ background: "var(--panel-strong)" }}>
+                <div className="panel" style={{ background: "var(--panel-strong)", overflow: "visible" }}>
                   <div className="panel-header">
                     <h3>Stops entry</h3>
                     <span className="pill">Ordered list</span>
@@ -476,20 +569,135 @@ function RouteEntry({ apiBase, token, operatorScope, setOperatorScope }) {
                   <div className="list">
                     {stops.map((stop, idx) => (
                       <div className="list-item" key={`stop-${idx}`}>
-                        <div>
+                        <div style={{ flex: 1, width: "100%", minWidth: 0 }}>
                           <strong>Stop {idx}</strong>
-                          <input
-                            value={stop.name}
-                            onChange={(event) => {
-                              const next = [...stops];
-                              next[idx] = { ...next[idx], name: event.target.value };
-                              setStops(next);
-                            }}
-                            placeholder="Stop name"
-                            style={{ marginTop: "6px", width: "100%" }}
-                          />
+                          <div style={{ position: "relative", marginTop: "6px" }}>
+                            <input
+                              value={stop.name}
+                              onChange={(event) => {
+                                const nextName = event.target.value;
+                                updateStop(idx, (current) => {
+                                  const next = { ...current, name: nextName };
+                                  const selectedName = String(current.matchedStopName || "").trim().toLowerCase();
+                                  const typedName = nextName.trim().toLowerCase();
+                                  if (
+                                    typedName &&
+                                    selectedName &&
+                                    typedName !== selectedName &&
+                                    (current.latitude !== "" || current.longitude !== "")
+                                  ) {
+                                    next.latitude = "";
+                                    next.longitude = "";
+                                  }
+                                  next.matchedStopName = typedName === selectedName ? current.matchedStopName : "";
+                                  return next;
+                                });
+                                searchStops(idx, nextName);
+                              }}
+                              onFocus={() => setStopFocused((p) => ({ ...p, [idx]: true }))}
+                              onBlur={() => setTimeout(() => setStopFocused((p) => ({ ...p, [idx]: false })), 150)}
+                              placeholder="Stop name"
+                              style={{ width: "100%" }}
+                              autoComplete="off"
+                            />
+                            {stopFocused[idx] && stop.name.trim() && (
+                              <div style={{
+                                position: "absolute", top: "100%", left: 0, right: 0, zIndex: 100,
+                                background: "var(--panel)", border: "1px solid var(--line)",
+                                borderRadius: "8px", boxShadow: "0 4px 16px rgba(0,0,0,0.18)",
+                                maxHeight: "200px", overflowY: "auto",
+                              }}>
+                                {(stopSuggestions[idx] || []).map((s, si) => (
+                                  <div
+                                    key={`${s.name}-${si}`}
+                                    onMouseDown={() => selectStopSuggestion(idx, s)}
+                                    style={{
+                                      padding: "8px 12px", cursor: "pointer",
+                                      borderBottom: "1px solid var(--line)",
+                                    }}
+                                    onMouseEnter={(e) => e.currentTarget.style.background = "var(--panel-strong)"}
+                                    onMouseLeave={(e) => e.currentTarget.style.background = ""}
+                                  >
+                                    <div style={{ fontWeight: 600, fontSize: "13px" }}>{s.name}</div>
+                                    <div style={{ fontSize: "11px", color: "var(--text-muted)", marginTop: "2px" }}>
+                                      {s.latitude != null && s.longitude != null
+                                        ? `${Number(s.latitude).toFixed(5)}, ${Number(s.longitude).toFixed(5)}`
+                                        : "No coordinates saved"}
+                                      {s.routeCode ? ` | ${s.routeCode}` : ""}
+                                      {s.routeName ? ` | ${s.routeName}` : ""}
+                                    </div>
+                                  </div>
+                                ))}
+                                {!hasExactSuggestion(idx) && (
+                                  <div
+                                    onMouseDown={() => keepTypedStop(idx)}
+                                    style={{
+                                      padding: "8px 12px",
+                                      cursor: "pointer",
+                                      background: "var(--panel-strong)",
+                                    }}
+                                  >
+                                    <div style={{ fontWeight: 600, fontSize: "13px" }}>
+                                      Use "{stop.name.trim()}" as a new stop
+                                    </div>
+                                    <div style={{ fontSize: "11px", color: "var(--text-muted)", marginTop: "2px" }}>
+                                      No backend match selected. Manual coordinates are still allowed.
+                                    </div>
+                                  </div>
+                                )}
+                              </div>
+                            )}
+                          </div>
+                          <div style={{ marginTop: "6px" }}>
+                            <input
+                              placeholder="Paste coordinates  e.g. 22.6547, 88.4467"
+                              style={{ width: "100%", color: "var(--accent)" }}
+                              onPaste={(event) => {
+                                const text = event.clipboardData.getData("text");
+                                const parts = text.split(/[,\s]+/).map((p) => p.trim()).filter(Boolean);
+                                if (parts.length >= 2) {
+                                  event.preventDefault();
+                                  updateStop(idx, { latitude: parts[0], longitude: parts[1] });
+                                }
+                              }}
+                              value=""
+                              onChange={() => {}}
+                            />
+                          </div>
+                          <div style={{ display: "flex", gap: "8px", marginTop: "6px", flexWrap: "wrap" }}>
+                            <input
+                              type="number"
+                              value={stop.latitude}
+                              onChange={(event) => {
+                                updateStop(idx, { latitude: event.target.value });
+                              }}
+                              placeholder="Latitude"
+                              step="any"
+                              style={{ flex: 1, minWidth: "100px" }}
+                            />
+                            <input
+                              type="number"
+                              value={stop.longitude}
+                              onChange={(event) => {
+                                updateStop(idx, { longitude: event.target.value });
+                              }}
+                              placeholder="Longitude"
+                              step="any"
+                              style={{ flex: 1, minWidth: "100px" }}
+                            />
+                          </div>
+                          {stop.latitude && stop.longitude && (
+                            <a
+                              href={`https://www.google.com/maps?q=${stop.latitude},${stop.longitude}`}
+                              target="_blank"
+                              rel="noreferrer"
+                              style={{ fontSize: "11px", color: "var(--accent)", marginTop: "4px", display: "inline-block" }}
+                            >
+                              ↗ Verify on map
+                            </a>
+                          )}
                         </div>
-                        <div style={{ display: "flex", gap: "6px" }}>
+                        <div style={{ display: "flex", gap: "6px", flexShrink: 0 }}>
                           <button className="btn ghost" type="button" onClick={() => moveStop(idx, -1)}>
                             Up
                           </button>
@@ -621,9 +829,9 @@ function RouteEntry({ apiBase, token, operatorScope, setOperatorScope }) {
             <section className="panel">
               <div className="panel-header">
                 <h3>Entered routes</h3>
-                <span className="pill">{routes.length} total</span>
+                <span className="pill">{visibleRoutes.length} total</span>
               </div>
-              {routes.length === 0 ? (
+              {visibleRoutes.length === 0 ? (
                 <div className="list-item">
                   <div>
                     <strong>No routes yet</strong>
@@ -644,7 +852,7 @@ function RouteEntry({ apiBase, token, operatorScope, setOperatorScope }) {
                     </tr>
                   </thead>
                   <tbody>
-                    {routes.map((item) => (
+                    {visibleRoutes.map((item) => (
                       <tr key={item._id || item.routeCode}>
                         <td>
                           <button
@@ -721,5 +929,4 @@ function RouteEntry({ apiBase, token, operatorScope, setOperatorScope }) {
 }
 
 export default RouteEntry;
-
 

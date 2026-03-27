@@ -5,6 +5,8 @@ const RouteStopSchema = new mongoose.Schema(
     routeId: { type: mongoose.Schema.Types.ObjectId, ref: "Route", required: true, index: true },
     index: { type: Number, required: true },
     name: { type: String, required: true },
+    latitude: { type: Number, default: null },
+    longitude: { type: Number, default: null },
   },
   { timestamps: true }
 );

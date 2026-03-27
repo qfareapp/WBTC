@@ -495,9 +495,12 @@ exports.updateDriverLocation = asyncHandler(async (req, res) => {
   if (!trip) throw new ApiError(404, "Trip not found");
   if (trip.status === "Completed") throw new ApiError(409, "Trip already completed");
 
-  trip.lastLatitude = latitude;
-  trip.lastLongitude = longitude;
-  trip.lastLocationAt = new Date();
+  // Driver location is stored in driver-only fields.
+  // Passenger-facing location (lastLatitude/lastLongitude/lastLocationAt/lastLocationName)
+  // is written exclusively by the conductor so passengers see the conductor's position.
+  trip.driverLastLatitude = latitude;
+  trip.driverLastLongitude = longitude;
+  trip.driverLastLocationAt = new Date();
   await trip.save();
 
   res.json({ ok: true });

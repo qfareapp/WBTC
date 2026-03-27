@@ -1,7 +1,8 @@
-﻿import { useEffect, useState } from "react";
+﻿import { useEffect, useRef, useState } from "react";
 import { View, Text, StyleSheet, TouchableOpacity, ScrollView, RefreshControl, Modal, Platform, PermissionsAndroid, NativeModules } from "react-native";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { useRouter } from "expo-router";
+import * as Location from "expo-location";
 import { useConductorLanguage } from "../../contexts/conductor-language";
 import useOfferAlert from "../../hooks/use-offer-alert";
 import { getOpsDate } from "../../utils/opsTime";
@@ -93,6 +94,9 @@ export default function ConductorActive() {
   const [endingTrip, setEndingTrip] = useState(false);
   const [snoozedTripId, setSnoozedTripId] = useState("");
   const [printing, setPrinting] = useState(false);
+  const [locationGranted, setLocationGranted] = useState(false);
+  const [locationCoords, setLocationCoords] = useState(null); // { lat, lng } — set instantly
+  const [locationName, setLocationName] = useState("");
   const [todaySummary, setTodaySummary] = useState({
     ticketsBooked: 0,
     amountCollected: "0.00",
@@ -208,6 +212,145 @@ export default function ConductorActive() {
     loadCurrentTrip();
     loadTodaySummary();
   }, []);
+
+  // ── GPS permission ──────────────────────────────────────────────────────────
+  useEffect(() => {
+    Location.requestForegroundPermissionsAsync().then(({ status }) => {
+      setLocationGranted(status === "granted");
+    });
+  }, []);
+
+  // ── Live GPS tracking while conductor has an active trip ────────────────────
+  // Strategy:
+  //   1. getLastKnownPositionAsync  — returns instantly (cached fix, no GPS warmup)
+  //   2. watchPositionAsync         — event-driven; OS delivers updates automatically
+  //
+  // We post to the backend at most once every 30 s regardless of how often the
+  // watch fires. The backend reverse-geocodes lat/lng → place name via Nominatim.
+  useEffect(() => {
+    const tripId = activeTrip?.tripInstanceId;
+    const isRunning =
+      activeTrip?.driverTripStatus === "Active" ||
+      activeTrip?.status === "Active";
+
+    if (!tripId || !isRunning || !locationGranted) return;
+
+    // Clear stale location from a previous trip
+    setLocationName("");
+    setLocationCoords(null);
+
+    let watchSub = null;
+    let lastSentMs = 0;
+    const THROTTLE_MS = 15000; // 15 s — faster updates while app is in foreground
+
+    // Reverse-geocode lat/lng → place name directly on the device via Nominatim.
+    // Running on-device is more reliable than waiting for the backend to proxy it.
+    const reverseGeocodeOnDevice = async (lat, lng) => {
+      try {
+        const url = `https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lng}&zoom=16&addressdetails=1`;
+        const res = await fetch(url, {
+          headers: { "User-Agent": "WBTCConductorApp/1.0 (contact@wbtc.in)" },
+          signal: AbortSignal.timeout(6000),
+        });
+        if (!res.ok) return null;
+        const data = await res.json();
+        const a = data.address || {};
+        const place = a.road || a.suburb || a.neighbourhood || a.quarter || a.village || a.town || a.city || "";
+        const city = a.city || a.town || a.city_district || a.state_district || "";
+        if (!place && !city) return null;
+        return place && city ? `${place}, ${city}` : place || city;
+      } catch {
+        return null;
+      }
+    };
+
+    const postCoords = async (coords) => {
+      const now = Date.now();
+      if (now - lastSentMs < THROTTLE_MS) return;
+      lastSentMs = now;
+      // Show raw coordinates immediately — replaces "Acquiring GPS…" right away
+      setLocationCoords({ lat: coords.latitude, lng: coords.longitude });
+
+      // Reverse-geocode on-device (fast, no backend hop needed for the name)
+      const name = await reverseGeocodeOnDevice(coords.latitude, coords.longitude);
+      if (name) setLocationName(name);
+
+      // Post coords to backend so passengers can see ETA
+      try {
+        const auth = await getAuth();
+        if (!auth) { console.warn("[GPS] getAuth() returned null — skipping location post"); return; }
+        await fetch(`${auth.apiBase}/api/conductor-trips/location`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${auth.token}`,
+          },
+          body: JSON.stringify({
+            tripInstanceId: tripId,
+            latitude: coords.latitude,
+            longitude: coords.longitude,
+          }),
+        });
+      } catch {
+        // Non-fatal — location failure must not affect ticket issuing
+      }
+    };
+
+    const start = async () => {
+      // Step 1: send last known position immediately (no GPS warm-up delay)
+      try {
+        const last = await Location.getLastKnownPositionAsync({
+          maxAge: 10 * 60 * 1000,  // accept a fix up to 10 min old
+          requiredAccuracy: 1000,  // any rough fix is fine for display
+        });
+        if (last) {
+          lastSentMs = 0; // force send on first reading
+          await postCoords(last.coords);
+        }
+      } catch {
+        // device may have no cached fix yet — the watch below will cover it
+      }
+
+      // Step 2: watch for position changes
+      try {
+        watchSub = await Location.watchPositionAsync(
+          {
+            accuracy: Location.Accuracy.Balanced,
+            timeInterval: THROTTLE_MS,
+            distanceInterval: 30, // also update if bus moved 30 m
+          },
+          (location) => {
+            void postCoords(location.coords);
+          }
+        );
+      } catch {
+        // watchPositionAsync can throw on simulators without location support
+      }
+
+      // Step 3: Backup interval — Android can silently stop watchPositionAsync.
+      // Every 30 s we force-read the last known position and post it.
+      backupInterval = setInterval(async () => {
+        try {
+          const pos = await Location.getLastKnownPositionAsync({ maxAge: 60 * 1000 });
+          if (pos) await postCoords(pos.coords);
+        } catch {
+          // non-fatal
+        }
+      }, 30000);
+    };
+
+    let backupInterval = null;
+    void start();
+    return () => {
+      if (watchSub) watchSub.remove();
+      if (backupInterval) clearInterval(backupInterval);
+    };
+  }, [
+    activeTrip?.tripInstanceId,
+    activeTrip?.driverTripStatus,
+    activeTrip?.status,
+    locationGranted,
+  ]);
 
   useEffect(() => {
     if (!isOnDuty) return undefined;
@@ -517,6 +660,15 @@ export default function ConductorActive() {
                   {activeTrip.route?.routeCode || "--"} | {activeTrip.route?.routeName || ""}
                 </Text>
                 <Text style={styles.tripBannerMeta}>Bus {activeTrip.bus?.busNumber || "--"}</Text>
+                {locationName ? (
+                  <Text style={styles.tripBannerLocation}>📍 {locationName}</Text>
+                ) : locationCoords ? (
+                  <Text style={styles.tripBannerLocation}>
+                    📍 {locationCoords.lat.toFixed(4)}°N, {locationCoords.lng.toFixed(4)}°E
+                  </Text>
+                ) : locationGranted && (activeTrip?.driverTripStatus === "Active" || activeTrip?.status === "Active") ? (
+                  <Text style={styles.tripBannerLocationPending}>📡 Acquiring GPS…</Text>
+                ) : null}
               </View>
               <Text style={styles.cardRowStrong}>{t("active", "stops")}</Text>
               <View style={styles.stopListWrap}>
@@ -885,6 +1037,17 @@ const styles = StyleSheet.create({
     color: "#F8FAFC",
     fontWeight: "800",
     fontSize: 14,
+  },
+  tripBannerLocation: {
+    marginTop: 4,
+    fontSize: 12,
+    color: "#34d399",
+    fontWeight: "600",
+  },
+  tripBannerLocationPending: {
+    marginTop: 4,
+    fontSize: 12,
+    color: "rgba(148,163,184,0.72)",
   },
   tripBannerMeta: {
     marginTop: 4,

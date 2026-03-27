@@ -1,0 +1,7 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(explorer \"d:\\\\WBTC update\\\\WBTC development\\\\wbtc-fleet-backend\")"
+    ]
+  }
+}

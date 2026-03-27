@@ -8,6 +8,7 @@ const {
   getCurrentConductorTrip,
   updateConductorDuty,
   updateConductorDutyLocation,
+  updateConductorLocation,
   listConductorDutyLocations,
   getConductorFare,
   issueConductorTicket,
@@ -24,6 +25,7 @@ router.post("/offers/reject", rejectConductorOffer);
 router.get("/current", getCurrentConductorTrip);
 router.post("/duty", updateConductorDuty);
 router.post("/duty-location", updateConductorDutyLocation);
+router.post("/location", updateConductorLocation);
 router.get("/locations", listConductorDutyLocations);
 router.get("/fare", getConductorFare);
 router.post("/tickets", issueConductorTicket);

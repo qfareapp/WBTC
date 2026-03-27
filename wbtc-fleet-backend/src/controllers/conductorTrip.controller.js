@@ -13,7 +13,8 @@ const TicketBooking = require("../models/TicketBooking");
 const ApiError = require("../utils/ApiError");
 const asyncHandler = require("../utils/asyncHandler");
 const { ensureConductorEligibleForBus } = require("../utils/crewPolicy");
-const { getOpsDayWindow } = require("../utils/opsTime");
+const { getOpsDayWindow, getOpsMonthWindow, getOpsPeriodWindow, getOpsDate, toOpsIsoDay } = require("../utils/opsTime");
+const { reverseGeocode } = require("../utils/nominatim");
 
 const OPS_TIMEZONE = "Asia/Kolkata";
 
@@ -691,10 +692,16 @@ exports.completeConductorTrip = asyncHandler(async (req, res) => {
   });
   if (!assignment) throw new ApiError(404, "No open conductor assignment found");
 
-  const trip = await TripInstance.findById(tripInstanceId).select("status routeId direction busId");
+  const trip = await TripInstance.findById(tripInstanceId).select("status routeId direction busId conductorEndedAt");
   if (!trip) throw new ApiError(404, "Trip not found");
   if (trip.status !== "Completed") {
     throw new ApiError(409, "Driver must complete trip before conductor can end it");
+  }
+
+  // Mark conductor-ended timestamp — this is what expires passenger tickets
+  if (!trip.conductorEndedAt) {
+    trip.conductorEndedAt = new Date();
+    await trip.save();
   }
 
   assignment.status = "Completed";
@@ -705,44 +712,80 @@ exports.completeConductorTrip = asyncHandler(async (req, res) => {
 
 exports.listConductorTickets = asyncHandler(async (req, res) => {
   const conductorId = req.user.userId;
-  const date = String(req.query.date || today());
+  const mode = String(req.query.mode || "daily");
 
-  const dayWindow = getOpsDayWindow(date);
-  if (!dayWindow) {
-    throw new ApiError(400, "Invalid date format. Use YYYY-MM-DD");
+  // Resolve time window and assignment date range
+  let start, end, assignmentDateFilter, date;
+  if (mode === "monthly") {
+    const month = String(req.query.month || "");
+    if (!/^\d{4}-\d{2}$/.test(month)) throw new ApiError(400, "month must be YYYY-MM");
+    ({ start, end } = getOpsMonthWindow(month));
+    assignmentDateFilter = { $gte: `${month}-01`, $lte: `${month}-31` };
+  } else if (mode === "custom") {
+    const startDate = String(req.query.startDate || "");
+    const endDate = String(req.query.endDate || "");
+    ({ start, end } = getOpsPeriodWindow("custom", { startDate, endDate }));
+    assignmentDateFilter = { $gte: startDate, $lte: endDate };
+  } else {
+    // daily (today / yesterday)
+    date = String(req.query.date || getOpsDate());
+    ({ start, end } = getOpsDayWindow(date));
+    assignmentDateFilter = date;
   }
-  const { start, end } = dayWindow;
 
-  const issuedByIdFilters = [conductorId];
-  if (mongoose.Types.ObjectId.isValid(conductorId)) {
-    issuedByIdFilters.push(new mongoose.Types.ObjectId(conductorId));
-  }
+  const conductorObjId = mongoose.Types.ObjectId.isValid(conductorId)
+    ? new mongoose.Types.ObjectId(conductorId)
+    : null;
+  const issuedByIdFilters = conductorObjId ? [conductorId, conductorObjId] : [conductorId];
 
-  const tickets = await TicketBooking.find({
-    issuedByRole: "CONDUCTOR",
-    issuedById: { $in: issuedByIdFilters },
-    status: "PAID",
-    $or: [
-      { bookedAt: { $gte: start, $lt: end } },
-      { bookedAt: null, createdAt: { $gte: start, $lt: end } },
-    ],
+  // Find all trips this conductor is assigned to in the period
+  const assignments = await ConductorAssignment.find({
+    conductorId: conductorObjId || conductorId,
+    date: assignmentDateFilter,
   })
-    .sort({ bookedAt: -1 })
-    .select(
-      "bookingId tripInstanceId routeId busNumber source destination fare passengerCount paymentMode bookedAt createdAt"
-    )
+    .select("tripInstanceId")
     .lean();
+  const conductorTripIds = assignments.map((a) => a.tripInstanceId).filter(Boolean);
 
-  if (!tickets.length) {
-    return res.json({ ok: true, date, trips: [] });
+  // Fetch offline (conductor-issued) and online (qfare passenger) tickets in parallel
+  const [offlineTickets, onlineTickets] = await Promise.all([
+    TicketBooking.find({
+      issuedByRole: "CONDUCTOR",
+      issuedById: { $in: issuedByIdFilters },
+      status: "PAID",
+      $or: [
+        { bookedAt: { $gte: start, $lt: end } },
+        { bookedAt: null, createdAt: { $gte: start, $lt: end } },
+      ],
+    })
+      .sort({ bookedAt: -1 })
+      .select(
+        "bookingId tripInstanceId routeId busNumber source destination fare passengerCount paymentMode bookedAt createdAt"
+      )
+      .lean(),
+
+    conductorTripIds.length
+      ? TicketBooking.find({
+          issuedByRole: "PASSENGER_APP",
+          tripInstanceId: { $in: conductorTripIds },
+          status: "PAID",
+        })
+          .sort({ bookedAt: -1 })
+          .select(
+            "bookingId tripInstanceId routeId busNumber source destination fare passengerCount paymentMode bookedAt createdAt"
+          )
+          .lean()
+      : Promise.resolve([]),
+  ]);
+
+  if (!offlineTickets.length && !onlineTickets.length) {
+    return res.json({ ok: true, date: date || null, trips: [] });
   }
 
+  // Collect all tripIds and routeIds for lookup
+  const allTickets = [...offlineTickets, ...onlineTickets];
   const tripIds = Array.from(
-    new Set(
-      tickets
-        .map((ticket) => String(ticket.tripInstanceId || "").trim())
-        .filter(Boolean)
-    )
+    new Set(allTickets.map((t) => String(t.tripInstanceId || "")).filter(Boolean))
   );
   const tripDocs = tripIds.length
     ? await TripInstance.find({ _id: { $in: tripIds } })
@@ -752,33 +795,30 @@ exports.listConductorTickets = asyncHandler(async (req, res) => {
         .lean()
     : [];
   const tripById = new Map(tripDocs.map((trip) => [String(trip._id), trip]));
+
   const routeIds = Array.from(
-    new Set(
-      tickets
-        .map((ticket) => String(ticket.routeId || "").trim())
-        .filter(Boolean)
-    )
+    new Set(allTickets.map((t) => String(t.routeId || "")).filter(Boolean))
   );
   const routeDocs = routeIds.length
     ? await Route.find({ _id: { $in: routeIds } })
         .select("routeCode routeName source destination")
         .lean()
     : [];
-  const routeById = new Map(routeDocs.map((route) => [String(route._id), route]));
+  const routeById = new Map(routeDocs.map((r) => [String(r._id), r]));
 
   const groups = new Map();
-  for (const ticket of tickets) {
+
+  const addToGroup = (ticket, type) => {
     const tripId = String(ticket.tripInstanceId || "UNMAPPED");
     const trip = tripById.get(String(ticket.tripInstanceId || "")) || null;
     const route = trip?.routeId || routeById.get(String(ticket.routeId || "")) || null;
-    const tripKey = tripId;
     const fallbackRouteName =
       route?.routeName ||
       [ticket.source, ticket.destination].filter(Boolean).join(" - ") ||
       "Route";
 
-    if (!groups.has(tripKey)) {
-      groups.set(tripKey, {
+    if (!groups.has(tripId)) {
+      groups.set(tripId, {
         tripInstanceId: tripId === "UNMAPPED" ? null : tripId,
         route: {
           routeCode: route?.routeCode || "Route",
@@ -793,37 +833,196 @@ exports.listConductorTickets = asyncHandler(async (req, res) => {
         direction: trip?.direction || "--",
         busNumber: trip?.busId?.busNumber || ticket.busNumber || "--",
         tripStatus: trip?.status || "--",
-        fareCollected: 0,
-        ticketsCount: 0,
-        passengerCount: 0,
-        tickets: [],
+        offlineFare: 0,
+        onlineFare: 0,
+        offlinePassengerCount: 0,
+        onlinePassengerCount: 0,
+        offlineTickets: [],
+        onlineTickets: [],
       });
     }
 
-    const bucket = groups.get(tripKey);
+    const bucket = groups.get(tripId);
     const pax = Number(ticket.passengerCount);
     const fare = Number(ticket.fare);
-    bucket.ticketsCount += 1;
-    bucket.passengerCount += Number.isFinite(pax) && pax > 0 ? pax : 1;
-    bucket.fareCollected += Number.isFinite(fare) ? fare : 0;
-    bucket.tickets.push({
+    const paxCount = Number.isFinite(pax) && pax > 0 ? pax : 1;
+    const fareAmt = Number.isFinite(fare) ? fare : 0;
+    const ticketRow = {
       bookingId: ticket.bookingId,
       source: ticket.source,
       destination: ticket.destination,
       fare: Number.isFinite(fare) ? Number(fare.toFixed(2)) : 0,
-      passengerCount: Number.isFinite(pax) && pax > 0 ? pax : 1,
-      paymentMode: ticket.paymentMode || "CASH",
+      passengerCount: paxCount,
+      paymentMode: ticket.paymentMode || (type === "OFFLINE" ? "CASH" : "ONLINE"),
       bookedAt: ticket.bookedAt || ticket.createdAt || null,
-    });
-  }
+    };
+
+    if (type === "OFFLINE") {
+      bucket.offlineFare += fareAmt;
+      bucket.offlinePassengerCount += paxCount;
+      bucket.offlineTickets.push(ticketRow);
+    } else {
+      bucket.onlineFare += fareAmt;
+      bucket.onlinePassengerCount += paxCount;
+      bucket.onlineTickets.push(ticketRow);
+    }
+  };
+
+  for (const ticket of offlineTickets) addToGroup(ticket, "OFFLINE");
+  for (const ticket of onlineTickets) addToGroup(ticket, "ONLINE");
 
   const trips = Array.from(groups.values()).map((item) => ({
     ...item,
-    fareCollected: Number(item.fareCollected.toFixed(2)),
+    fareCollected: Number(item.offlineFare.toFixed(2)),
+    onlineFare: Number(item.onlineFare.toFixed(2)),
+    // Combined tickets array for backward compatibility
+    tickets: [...item.offlineTickets, ...item.onlineTickets],
   }));
 
-  res.json({ ok: true, date, trips });
+  res.json({ ok: true, date: date || null, trips });
 });
+
+/**
+ * POST /api/conductor-trips/location
+ * Body: { tripInstanceId, latitude, longitude }
+ *
+ * Updates the live GPS coordinates on the TripInstance.
+ * Reverse-geocodes the position to a human-readable place name using Nominatim
+ * and stores it as lastLocationName (used by the passenger app).
+ */
+exports.updateConductorLocation = asyncHandler(async (req, res) => {
+  const conductorId = req.user.userId;
+  const { tripInstanceId, latitude, longitude } = req.body;
+
+  if (!tripInstanceId) throw new ApiError(400, "tripInstanceId required");
+  if (typeof latitude !== "number" || typeof longitude !== "number") {
+    throw new ApiError(400, "latitude and longitude must be numbers");
+  }
+  if (latitude < -90 || latitude > 90 || longitude < -180 || longitude > 180) {
+    throw new ApiError(400, "latitude/longitude out of range");
+  }
+
+  // Verify the conductor is assigned to this trip
+  const assignment = await ConductorAssignment.findOne({
+    conductorId,
+    tripInstanceId,
+    status: { $in: ["Scheduled", "Active"] },
+  }).select("_id");
+  if (!assignment) throw new ApiError(403, "Conductor is not assigned to this trip");
+
+  // Reverse-geocode the coordinates → readable place name
+  // This is non-blocking: if it fails the location coords still get saved.
+  let locationName = null;
+  try {
+    locationName = await reverseGeocode(latitude, longitude);
+  } catch {
+    // non-fatal
+  }
+
+  await TripInstance.findByIdAndUpdate(tripInstanceId, {
+    lastLatitude: latitude,
+    lastLongitude: longitude,
+    lastLocationAt: new Date(),
+    lastLocationName: locationName,
+  });
+
+  // Geofence checks (non-blocking — failures must not affect location save)
+  void runGeofenceChecks(tripInstanceId, latitude, longitude).catch(() => {});
+
+  res.json({ ok: true, locationName });
+});
+
+const EXPO_PUSH_URL = "https://exp.host/--/api/v2/push/send";
+
+const haversineM = (lat1, lng1, lat2, lng2) => {
+  const R = 6371000;
+  const dLat = ((lat2 - lat1) * Math.PI) / 180;
+  const dLng = ((lng2 - lng1) * Math.PI) / 180;
+  const a =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos((lat1 * Math.PI) / 180) *
+      Math.cos((lat2 * Math.PI) / 180) *
+      Math.sin(dLng / 2) ** 2;
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+};
+
+const runGeofenceChecks = async (tripInstanceId, busLat, busLng) => {
+  const trip = await TripInstance.findById(tripInstanceId)
+    .select("routeId passedStops notifiedStops approachingStop")
+    .lean();
+  if (!trip) return;
+
+  const stops = await RouteStop.find({ routeId: trip.routeId, latitude: { $ne: null } })
+    .sort({ index: 1 })
+    .select("name latitude longitude index")
+    .lean();
+  if (!stops.length) return;
+
+  const passedSet = new Set(trip.passedStops || []);
+  const notifiedSet = new Set(trip.notifiedStops || []);
+
+  const newlyPassed = [];
+  const newlyNotified = [];
+  let approachingStop = trip.approachingStop || null;
+
+  for (const stop of stops) {
+    const dist = haversineM(busLat, busLng, stop.latitude, stop.longitude);
+
+    // 100 m → mark as passed
+    if (dist <= 100 && !passedSet.has(stop.name)) {
+      newlyPassed.push(stop.name);
+      passedSet.add(stop.name);
+    }
+
+    // 300 m → approaching (pick the closest un-passed stop within 300 m)
+    if (dist <= 300 && !passedSet.has(stop.name)) {
+      if (approachingStop !== stop.name) approachingStop = stop.name;
+    }
+
+    // 500 m → notify passengers waiting at this stop (only once per stop per trip)
+    if (dist <= 500 && !notifiedSet.has(stop.name)) {
+      newlyNotified.push(stop.name);
+      notifiedSet.add(stop.name);
+      // Fire-and-forget passenger push
+      void sendPassengerApproachNotifications(tripInstanceId, stop.name).catch(() => {});
+    }
+  }
+
+  // Clear approachingStop if we've passed it
+  if (approachingStop && passedSet.has(approachingStop)) approachingStop = null;
+
+  const update = { approachingStop };
+  if (newlyPassed.length) update.$addToSet = { ...(update.$addToSet || {}), passedStops: { $each: newlyPassed } };
+  if (newlyNotified.length) update.$addToSet = { ...(update.$addToSet || {}), notifiedStops: { $each: newlyNotified } };
+
+  await TripInstance.findByIdAndUpdate(tripInstanceId, update);
+};
+
+const sendPassengerApproachNotifications = async (tripInstanceId, stopName) => {
+  const tickets = await TicketBooking.find({
+    tripInstanceId,
+    source: { $regex: new RegExp(`^${stopName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`, "i") },
+    status: "PAID",
+    passengerPushToken: { $ne: null },
+  }).select("passengerPushToken source").lean();
+
+  if (!tickets.length) return;
+
+  const messages = tickets.map((t) => ({
+    to: t.passengerPushToken,
+    title: "🚌 Bus approaching",
+    body: `Your bus is approaching ${stopName}. Get ready to board!`,
+    sound: "default",
+    data: { stopName, tripInstanceId: String(tripInstanceId) },
+  }));
+
+  await fetch(EXPO_PUSH_URL, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Accept: "application/json" },
+    body: JSON.stringify(messages),
+    signal: AbortSignal.timeout(8000),
+  });
+};
 
 exports.getConductorSummary = asyncHandler(async (req, res) => {
   const conductorId = req.user.userId;

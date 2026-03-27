@@ -17,10 +17,11 @@ import PaymentsOverview from "./pages/PaymentsOverview.jsx";
 import Login from "./pages/Login.jsx";
 import Register from "./pages/Register.jsx";
 
-const defaultApiBase = "https://wbtc-aduk.onrender.com";
+const storedApiBase = localStorage.getItem("wbtc_api_base");
+const defaultApiBase = import.meta.env.DEV ? "http://localhost:5000" : "https://wbtc-aduk.onrender.com";
 
 function App() {
-  const [apiBase, setApiBase] = useState(defaultApiBase);
+  const [apiBase, setApiBase] = useState(() => storedApiBase || defaultApiBase);
   const [token, setToken] = useState(() => localStorage.getItem("wbtc_token") || "");
   const [operatorScope, setOperatorScope] = useState(() => localStorage.getItem("wbtc_operator_scope") || "WBTC");
   const [user, setUser] = useState(() => {
@@ -47,6 +48,14 @@ function App() {
   useEffect(() => {
     localStorage.setItem("wbtc_operator_scope", operatorScope);
   }, [operatorScope]);
+
+  useEffect(() => {
+    if (apiBase) {
+      localStorage.setItem("wbtc_api_base", apiBase);
+    } else {
+      localStorage.removeItem("wbtc_api_base");
+    }
+  }, [apiBase]);
 
   return (
     <BrowserRouter>

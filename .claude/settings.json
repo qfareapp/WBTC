@@ -1,0 +1,24 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(./gradlew.bat app:assembleDebug --stacktrace)",
+      "Read(//c/Users/$USERNAME/AppData/Local/Android/**)",
+      "Bash(./gradlew.bat app:assembleDebug)",
+      "Bash(./gradlew.bat :expo-barcode-scanner:compileDebugKotlin)",
+      "Read(//c/Users/Pranjal Mullick/AppData/Local/Android/Sdk/ndk/**)",
+      "Bash(./gradlew.bat clean:*)",
+      "Read(//c/Users/Pranjal Mullick/AppData/Local/Android/Sdk/cmake/**)",
+      "Bash(npm uninstall:*)",
+      "Bash(./gradlew.bat :react-native-maps:parseDebugLocalResources :expo-modules-core:parseDebugLocalResources)",
+      "Bash(./gradlew.bat --stop)",
+      "Bash(grep -r \"ndkVersion\\\\|ANDROID_STL\\\\|c++_shared\\\\|c++_static\" 'd:/WBTC update/WBTC development/qfare1/node_modules/expo-modules-core/android' --include=*.gradle --include=CMakeLists.txt -l)",
+      "Bash(xargs grep:*)",
+      "Bash(find \"d:/WBTC update/WBTC development/qfare1/node_modules\" -type d -name \".cxx\" -exec rm -rf {} +)",
+      "Bash(./gradlew clean:*)",
+      "Bash(grep -rn \"MapView\\\\|react-native-maps\\\\|MapContainer\\\\|openstreet\\\\|leaflet\\\\|MapLibre\" 'd:/WBTC update/WBTC development/qfare1/screens/' 'd:/WBTC update/WBTC development/qfare1/lib/' --include=*.ts --include=*.tsx)"
+    ],
+    "additionalDirectories": [
+      "C:\\Users\\Pranjal Mullick\\.gradle\\caches\\8.14.3\\transforms"
+    ]
+  }
+}

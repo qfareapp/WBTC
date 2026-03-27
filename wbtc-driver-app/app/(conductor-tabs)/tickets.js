@@ -11,7 +11,18 @@ const API_BASE_KEY = "wbtc_api_base";
 const TOKEN_KEY = "wbtc_driver_token";
 const USER_ROLE_KEY = "wbtc_user_role";
 
-const today = () => getOpsDate();
+const MONTHS = [
+  "Jan", "Feb", "Mar", "Apr", "May", "Jun",
+  "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+];
+
+const getIsoDate = (offsetDays = 0) => {
+  const d = new Date();
+  d.setDate(d.getDate() + offsetDays);
+  return d.toLocaleDateString("en-CA"); // YYYY-MM-DD in local time
+};
+
+const getOpsDateStr = () => getOpsDate();
 
 const formatMoney = (value) => {
   const num = Number(value);
@@ -36,6 +47,12 @@ export default function ConductorTickets() {
   const [tripGroups, setTripGroups] = useState([]);
   const [expandedTripIds, setExpandedTripIds] = useState({});
 
+  // Filter state: "today" | "yesterday" | "week" | "month"
+  const [filterMode, setFilterMode] = useState("today");
+  // For month filter: 0-based month index (0=Jan ... 11=Dec), default to current month
+  const [selectedMonth, setSelectedMonth] = useState(new Date().getMonth());
+  const selectedYear = new Date().getFullYear();
+
   const getAuth = useCallback(async () => {
     const [apiBase, token, role] = await Promise.all([
       AsyncStorage.getItem(API_BASE_KEY),
@@ -49,12 +66,28 @@ export default function ConductorTickets() {
     return { apiBase, token };
   }, [router]);
 
+  const buildQuery = useCallback(() => {
+    if (filterMode === "today") {
+      return `mode=daily&date=${getOpsDateStr()}`;
+    }
+    if (filterMode === "yesterday") {
+      return `mode=daily&date=${getIsoDate(-1)}`;
+    }
+    if (filterMode === "week") {
+      return `mode=custom&startDate=${getIsoDate(-6)}&endDate=${getIsoDate(0)}`;
+    }
+    // month
+    const mm = String(selectedMonth + 1).padStart(2, "0");
+    return `mode=monthly&month=${selectedYear}-${mm}`;
+  }, [filterMode, selectedMonth, selectedYear]);
+
   const loadTickets = useCallback(async () => {
     setLoading(true);
     try {
       const auth = await getAuth();
       if (!auth) return;
-      const response = await fetch(`${auth.apiBase}/api/conductor-trips/tickets?date=${today()}`, {
+      const query = buildQuery();
+      const response = await fetch(`${auth.apiBase}/api/conductor-trips/tickets?${query}`, {
         headers: { Authorization: `Bearer ${auth.token}` },
       });
       const text = await response.text();
@@ -68,7 +101,7 @@ export default function ConductorTickets() {
     } finally {
       setLoading(false);
     }
-  }, [getAuth]);
+  }, [getAuth, buildQuery]);
 
   useEffect(() => {
     loadTickets();
@@ -79,25 +112,37 @@ export default function ConductorTickets() {
     [tripGroups]
   );
 
+  const totalOnlineFare = useMemo(
+    () => tripGroups.reduce((sum, trip) => sum + (Number(trip.onlineFare) || 0), 0),
+    [tripGroups]
+  );
+
   const totalTickets = useMemo(
     () =>
       tripGroups.reduce(
         (sum, trip) =>
-          sum + (trip.tickets || []).reduce((ticketSum, ticket) => ticketSum + (Number(ticket.passengerCount) || 0), 0),
+          sum +
+          (trip.offlinePassengerCount || 0) +
+          (trip.onlinePassengerCount || 0),
         0
       ),
     [tripGroups]
   );
 
-  const todayLabel = useMemo(
-    () =>
-      new Date().toLocaleDateString([], {
-        weekday: "short",
-        day: "2-digit",
-        month: "short",
-      }),
-    []
+  const totalOnlineTickets = useMemo(
+    () => tripGroups.reduce((sum, trip) => sum + (trip.onlinePassengerCount || 0), 0),
+    [tripGroups]
   );
+
+  const periodLabel = useMemo(() => {
+    if (filterMode === "today") return new Date().toLocaleDateString([], { weekday: "short", day: "2-digit", month: "short" });
+    if (filterMode === "yesterday") {
+      const d = new Date(); d.setDate(d.getDate() - 1);
+      return d.toLocaleDateString([], { weekday: "short", day: "2-digit", month: "short" });
+    }
+    if (filterMode === "week") return "Last 7 Days";
+    return `${MONTHS[selectedMonth]} ${selectedYear}`;
+  }, [filterMode, selectedMonth, selectedYear]);
 
   const onRefresh = async () => {
     setRefreshing(true);
@@ -123,10 +168,54 @@ export default function ConductorTickets() {
           </View>
           <View style={styles.headerBadge}>
             <Ionicons name="calendar-outline" size={14} color="#9CCBFF" />
-            <Text style={styles.headerBadgeText}>{todayLabel}</Text>
+            <Text style={styles.headerBadgeText}>{periodLabel}</Text>
           </View>
         </View>
       </View>
+
+      {/* ── FILTER BAR ── */}
+      <View style={styles.filterBar}>
+        {[
+          { key: "today", label: "Today" },
+          { key: "yesterday", label: "Yesterday" },
+          { key: "week", label: "Last 7 Days" },
+          { key: "month", label: "Month" },
+        ].map((f) => (
+          <TouchableOpacity
+            key={f.key}
+            style={[styles.filterPill, filterMode === f.key && styles.filterPillActive]}
+            onPress={() => setFilterMode(f.key)}
+            activeOpacity={0.8}
+          >
+            <Text style={[styles.filterPillText, filterMode === f.key && styles.filterPillTextActive]}>
+              {f.label}
+            </Text>
+          </TouchableOpacity>
+        ))}
+      </View>
+
+      {/* ── MONTH PICKER (shown only when filterMode === "month") ── */}
+      {filterMode === "month" ? (
+        <ScrollView
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          style={styles.monthPickerRow}
+          contentContainerStyle={styles.monthPickerContent}
+        >
+          {MONTHS.map((name, idx) => (
+            <TouchableOpacity
+              key={idx}
+              style={[styles.monthPill, selectedMonth === idx && styles.monthPillActive]}
+              onPress={() => setSelectedMonth(idx)}
+              activeOpacity={0.8}
+            >
+              <Text style={[styles.monthPillText, selectedMonth === idx && styles.monthPillTextActive]}>
+                {name}
+              </Text>
+            </TouchableOpacity>
+          ))}
+        </ScrollView>
+      ) : null}
 
       {notice ? (
         <View style={styles.noticeCard}>
@@ -149,18 +238,24 @@ export default function ConductorTickets() {
           <View style={styles.statsDivider} />
           <View style={styles.statsItem}>
             <View style={styles.statsIconWrap}>
-              <Ionicons name="ticket-outline" size={15} color="#A78BFA" />
+              <Ionicons name="people-outline" size={15} color="#A78BFA" />
             </View>
-            <Text style={styles.statsLabel}>{t("tickets", "tickets")}</Text>
+            <Text style={styles.statsLabel}>Pax</Text>
             <Text style={[styles.statsValue, styles.statsValuePurple]}>{totalTickets}</Text>
+            {totalOnlineTickets > 0 ? (
+              <Text style={styles.statsSubValue}>{totalOnlineTickets} online</Text>
+            ) : null}
           </View>
           <View style={styles.statsDivider} />
           <View style={styles.statsItem}>
             <View style={styles.statsIconWrap}>
               <Ionicons name="cash-outline" size={15} color="#00C87A" />
             </View>
-            <Text style={styles.statsLabel}>{t("tickets", "fare")}</Text>
+            <Text style={styles.statsLabel}>Cash</Text>
             <Text style={[styles.statsValue, styles.statsValueGreen]}>Rs {formatMoney(totalFare)}</Text>
+            {totalOnlineFare > 0 ? (
+              <Text style={styles.statsSubValue}>+{formatMoney(totalOnlineFare)} online</Text>
+            ) : null}
           </View>
         </View>
       </View>
@@ -197,8 +292,9 @@ export default function ConductorTickets() {
           const [routeFrom, routeTo] = String(routeName)
             .split("-")
             .map((part) => part.trim());
-          const ticketRows = Array.isArray(trip.tickets) ? trip.tickets : [];
-          const tripPassengerCount = ticketRows.reduce((sum, ticket) => sum + (Number(ticket.passengerCount) || 0), 0);
+          const offlineTickets = Array.isArray(trip.offlineTickets) ? trip.offlineTickets : [];
+          const onlineTicketRows = Array.isArray(trip.onlineTickets) ? trip.onlineTickets : [];
+          const tripPassengerCount = (trip.offlinePassengerCount || 0) + (trip.onlinePassengerCount || 0);
 
           return (
             <View key={`trip-${tripKey}`} style={styles.card}>
@@ -222,8 +318,14 @@ export default function ConductorTickets() {
                   </View>
 
                   <View style={styles.fareWrap}>
-                    <Text style={styles.fareHeader}>{t("tickets", "collectedFare")}</Text>
+                    <Text style={styles.fareHeader}>Cash Collected</Text>
                     <Text style={styles.fareValue}>Rs {formatMoney(trip.fareCollected)}</Text>
+                    {Number(trip.onlineFare) > 0 ? (
+                      <View style={styles.onlineFarePill}>
+                        <Ionicons name="phone-portrait-outline" size={10} color="#60A5FA" />
+                        <Text style={styles.onlineFareText}>+Rs {formatMoney(trip.onlineFare)}</Text>
+                      </View>
+                    ) : null}
                   </View>
                 </View>
 
@@ -243,10 +345,15 @@ export default function ConductorTickets() {
                     </View>
                   </View>
                   <View style={styles.metaChip}>
-                    <Ionicons name="ticket-outline" size={14} color="#9CCBFF" />
+                    <Ionicons name="people-outline" size={14} color="#9CCBFF" />
                     <View>
-                      <Text style={styles.metaLabel}>{t("tickets", "tickets")}</Text>
-                      <Text style={styles.metaValue}>{tripPassengerCount}</Text>
+                      <Text style={styles.metaLabel}>Passengers</Text>
+                      <Text style={styles.metaValue}>
+                        {tripPassengerCount}
+                        {(trip.onlinePassengerCount || 0) > 0
+                          ? ` (${trip.onlinePassengerCount} online)`
+                          : ""}
+                      </Text>
                     </View>
                   </View>
                 </View>
@@ -269,47 +376,113 @@ export default function ConductorTickets() {
 
                 {expanded ? (
                   <View style={styles.breakdownWrap}>
-                    <Text style={styles.breakdownTitle}>{t("tickets", "ticketBreakdown")}</Text>
-                    <ScrollView
-                      horizontal
-                      showsHorizontalScrollIndicator={false}
-                      contentContainerStyle={styles.tableScrollContent}
-                    >
-                      <View style={styles.tableWrap}>
-                        <View style={styles.tableHeader}>
-                          <Text style={[styles.tableHeadText, styles.tableHeadWide]}>{t("tickets", "ticketId")}</Text>
-                          <Text style={[styles.tableHeadText, styles.tableHeadTime]}>{t("tickets", "bookingTime")}</Text>
-                          <Text style={[styles.tableHeadText, styles.tableHeadWide]}>{t("tickets", "from")}</Text>
-                          <Text style={[styles.tableHeadText, styles.tableHeadWide]}>{t("tickets", "to")}</Text>
-                          <Text style={styles.tableHeadText}>{t("tickets", "pax")}</Text>
-                          <Text style={styles.tableHeadText}>{t("tickets", "amount")}</Text>
-                        </View>
+                    {/* ── OFFLINE / CASH TICKETS ── */}
+                    <View style={styles.breakdownSectionHeader}>
+                      <View style={styles.breakdownSectionDot} />
+                      <Text style={styles.breakdownSectionTitle}>Cash Tickets (Offline)</Text>
+                      <View style={styles.breakdownSectionPill}>
+                        <Text style={styles.breakdownSectionPillText}>{trip.offlinePassengerCount || 0} pax</Text>
+                      </View>
+                    </View>
 
-                        <View style={styles.tableBody}>
-                          {ticketRows.map((ticket, ticketIndex) => (
-                            <View
-                              key={`ticket-${tripKey}-${ticket.bookingId || ticketIndex}`}
-                              style={[styles.tableRow, ticketIndex % 2 === 0 ? styles.tableRowAlt : null]}
-                            >
-                              <Text style={[styles.tableCell, styles.tableCellWide]}>{ticket.bookingId || "--"}</Text>
-                              <Text style={[styles.tableCell, styles.tableCellTime]}>{formatTicketTime(ticket.bookedAt)}</Text>
-                              <Text style={[styles.tableCell, styles.tableCellWide]}>{ticket.source || "--"}</Text>
-                              <Text style={[styles.tableCell, styles.tableCellWide]}>{ticket.destination || "--"}</Text>
-                              <Text style={[styles.tableCell, styles.tableCellPax]}>{ticket.passengerCount || 1}</Text>
-                              <Text style={[styles.tableCell, styles.tableCellAmount]}>Rs {formatMoney(ticket.fare)}</Text>
+                    {offlineTickets.length === 0 ? (
+                      <Text style={styles.breakdownEmpty}>No cash tickets issued</Text>
+                    ) : (
+                      <ScrollView
+                        horizontal
+                        showsHorizontalScrollIndicator={false}
+                        contentContainerStyle={styles.tableScrollContent}
+                      >
+                        <View style={styles.tableWrap}>
+                          <View style={styles.tableHeader}>
+                            <Text style={[styles.tableHeadText, styles.tableHeadWide]}>{t("tickets", "ticketId")}</Text>
+                            <Text style={[styles.tableHeadText, styles.tableHeadTime]}>{t("tickets", "bookingTime")}</Text>
+                            <Text style={[styles.tableHeadText, styles.tableHeadWide]}>{t("tickets", "from")}</Text>
+                            <Text style={[styles.tableHeadText, styles.tableHeadWide]}>{t("tickets", "to")}</Text>
+                            <Text style={styles.tableHeadText}>{t("tickets", "pax")}</Text>
+                            <Text style={styles.tableHeadText}>{t("tickets", "amount")}</Text>
+                          </View>
+                          <View style={styles.tableBody}>
+                            {offlineTickets.map((ticket, ticketIndex) => (
+                              <View
+                                key={`offline-${tripKey}-${ticket.bookingId || ticketIndex}`}
+                                style={[styles.tableRow, ticketIndex % 2 === 0 ? styles.tableRowAlt : null]}
+                              >
+                                <Text style={[styles.tableCell, styles.tableCellWide]}>{ticket.bookingId || "--"}</Text>
+                                <Text style={[styles.tableCell, styles.tableCellTime]}>{formatTicketTime(ticket.bookedAt)}</Text>
+                                <Text style={[styles.tableCell, styles.tableCellWide]}>{ticket.source || "--"}</Text>
+                                <Text style={[styles.tableCell, styles.tableCellWide]}>{ticket.destination || "--"}</Text>
+                                <Text style={[styles.tableCell, styles.tableCellPax]}>{ticket.passengerCount || 1}</Text>
+                                <Text style={[styles.tableCell, styles.tableCellAmount]}>Rs {formatMoney(ticket.fare)}</Text>
+                              </View>
+                            ))}
+                            <View style={styles.tableTotalRow}>
+                              <Text style={[styles.tableTotalLabel, { flex: 3.8 }]}>{t("tickets", "total")}</Text>
+                              <Text style={[styles.tableTotalPax, styles.tableCellPax]}>{trip.offlinePassengerCount || 0}</Text>
+                              <Text style={[styles.tableTotalAmount, styles.tableCellAmount]}>
+                                Rs {formatMoney(trip.fareCollected)}
+                              </Text>
                             </View>
-                          ))}
-
-                          <View style={styles.tableTotalRow}>
-                            <Text style={[styles.tableTotalLabel, { flex: 3.8 }]}>{t("tickets", "total")}</Text>
-                            <Text style={[styles.tableTotalPax, styles.tableCellPax]}>{tripPassengerCount}</Text>
-                            <Text style={[styles.tableTotalAmount, styles.tableCellAmount]}>
-                              Rs {formatMoney(trip.fareCollected)}
-                            </Text>
                           </View>
                         </View>
+                      </ScrollView>
+                    )}
+
+                    {/* ── ONLINE / QFARE TICKETS ── */}
+                    <View style={[styles.breakdownSectionHeader, { marginTop: 16 }]}>
+                      <View style={[styles.breakdownSectionDot, styles.breakdownSectionDotOnline]} />
+                      <Text style={[styles.breakdownSectionTitle, styles.breakdownSectionTitleOnline]}>
+                        Online Tickets (qfare)
+                      </Text>
+                      <View style={[styles.breakdownSectionPill, styles.breakdownSectionPillOnline]}>
+                        <Text style={[styles.breakdownSectionPillText, styles.breakdownSectionPillTextOnline]}>
+                          {trip.onlinePassengerCount || 0} pax
+                        </Text>
                       </View>
-                    </ScrollView>
+                    </View>
+
+                    {onlineTicketRows.length === 0 ? (
+                      <Text style={styles.breakdownEmpty}>No online tickets for this trip</Text>
+                    ) : (
+                      <ScrollView
+                        horizontal
+                        showsHorizontalScrollIndicator={false}
+                        contentContainerStyle={styles.tableScrollContent}
+                      >
+                        <View style={styles.tableWrap}>
+                          <View style={[styles.tableHeader, styles.tableHeaderOnline]}>
+                            <Text style={[styles.tableHeadText, styles.tableHeadWide]}>{t("tickets", "ticketId")}</Text>
+                            <Text style={[styles.tableHeadText, styles.tableHeadTime]}>{t("tickets", "bookingTime")}</Text>
+                            <Text style={[styles.tableHeadText, styles.tableHeadWide]}>{t("tickets", "from")}</Text>
+                            <Text style={[styles.tableHeadText, styles.tableHeadWide]}>{t("tickets", "to")}</Text>
+                            <Text style={styles.tableHeadText}>{t("tickets", "pax")}</Text>
+                            <Text style={styles.tableHeadText}>{t("tickets", "amount")}</Text>
+                          </View>
+                          <View style={[styles.tableBody, styles.tableBodyOnline]}>
+                            {onlineTicketRows.map((ticket, ticketIndex) => (
+                              <View
+                                key={`online-${tripKey}-${ticket.bookingId || ticketIndex}`}
+                                style={[styles.tableRow, ticketIndex % 2 === 0 ? styles.tableRowAlt : null]}
+                              >
+                                <Text style={[styles.tableCell, styles.tableCellWide]}>{ticket.bookingId || "--"}</Text>
+                                <Text style={[styles.tableCell, styles.tableCellTime]}>{formatTicketTime(ticket.bookedAt)}</Text>
+                                <Text style={[styles.tableCell, styles.tableCellWide]}>{ticket.source || "--"}</Text>
+                                <Text style={[styles.tableCell, styles.tableCellWide]}>{ticket.destination || "--"}</Text>
+                                <Text style={[styles.tableCell, styles.tableCellPax]}>{ticket.passengerCount || 1}</Text>
+                                <Text style={[styles.tableCell, styles.tableCellAmount]}>Rs {formatMoney(ticket.fare)}</Text>
+                              </View>
+                            ))}
+                            <View style={[styles.tableTotalRow, styles.tableTotalRowOnline]}>
+                              <Text style={[styles.tableTotalLabel, { flex: 3.8 }]}>{t("tickets", "total")}</Text>
+                              <Text style={[styles.tableTotalPax, styles.tableCellPax]}>{trip.onlinePassengerCount || 0}</Text>
+                              <Text style={[styles.tableTotalAmount, styles.tableCellAmount]}>
+                                Rs {formatMoney(trip.onlineFare)}
+                              </Text>
+                            </View>
+                          </View>
+                        </View>
+                      </ScrollView>
+                    )}
                   </View>
                 ) : null}
               </View>
@@ -798,5 +971,147 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontWeight: "800",
     textAlign: "right",
+  },
+  statsSubValue: {
+    marginTop: 2,
+    color: "rgba(255,255,255,0.3)",
+    fontSize: 9.5,
+    fontWeight: "600",
+    textAlign: "center",
+  },
+  onlineFarePill: {
+    marginTop: 5,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+    backgroundColor: "rgba(96,165,250,0.1)",
+    borderWidth: 1,
+    borderColor: "rgba(96,165,250,0.2)",
+    borderRadius: 999,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    alignSelf: "flex-end",
+  },
+  onlineFareText: {
+    color: "#60A5FA",
+    fontSize: 10,
+    fontWeight: "700",
+  },
+  breakdownSectionHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 7,
+    marginBottom: 8,
+  },
+  breakdownSectionDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: "#00C87A",
+  },
+  breakdownSectionDotOnline: {
+    backgroundColor: "#60A5FA",
+  },
+  breakdownSectionTitle: {
+    flex: 1,
+    color: "rgba(255,255,255,0.55)",
+    fontSize: 10.5,
+    fontWeight: "700",
+    letterSpacing: 0.7,
+    textTransform: "uppercase",
+  },
+  breakdownSectionTitleOnline: {
+    color: "rgba(96,165,250,0.8)",
+  },
+  breakdownSectionPill: {
+    backgroundColor: "rgba(0,200,122,0.1)",
+    borderWidth: 1,
+    borderColor: "rgba(0,200,122,0.2)",
+    borderRadius: 999,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+  },
+  breakdownSectionPillOnline: {
+    backgroundColor: "rgba(96,165,250,0.1)",
+    borderColor: "rgba(96,165,250,0.2)",
+  },
+  breakdownSectionPillText: {
+    color: "#00C87A",
+    fontSize: 10,
+    fontWeight: "700",
+  },
+  breakdownSectionPillTextOnline: {
+    color: "#60A5FA",
+  },
+  breakdownEmpty: {
+    color: "rgba(255,255,255,0.25)",
+    fontSize: 12,
+    fontStyle: "italic",
+    paddingVertical: 8,
+    paddingHorizontal: 4,
+  },
+  tableHeaderOnline: {
+    backgroundColor: "rgba(96,165,250,0.06)",
+  },
+  tableBodyOnline: {
+    borderColor: "rgba(96,165,250,0.1)",
+  },
+  tableTotalRowOnline: {
+    backgroundColor: "rgba(96,165,250,0.06)",
+    borderTopColor: "rgba(96,165,250,0.15)",
+  },
+  filterBar: {
+    flexDirection: "row",
+    gap: 8,
+    marginTop: 16,
+    flexWrap: "wrap",
+  },
+  filterPill: {
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    borderRadius: 999,
+    backgroundColor: "rgba(255,255,255,0.05)",
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.1)",
+  },
+  filterPillActive: {
+    backgroundColor: "rgba(0,144,224,0.15)",
+    borderColor: "rgba(0,144,224,0.4)",
+  },
+  filterPillText: {
+    color: "rgba(255,255,255,0.45)",
+    fontSize: 13,
+    fontWeight: "600",
+  },
+  filterPillTextActive: {
+    color: "#0090E0",
+  },
+  monthPickerRow: {
+    marginTop: 10,
+  },
+  monthPickerContent: {
+    flexDirection: "row",
+    gap: 8,
+    paddingVertical: 2,
+  },
+  monthPill: {
+    paddingHorizontal: 14,
+    paddingVertical: 7,
+    borderRadius: 999,
+    backgroundColor: "rgba(255,255,255,0.04)",
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.08)",
+  },
+  monthPillActive: {
+    backgroundColor: "rgba(167,139,250,0.15)",
+    borderColor: "rgba(167,139,250,0.4)",
+  },
+  monthPillText: {
+    color: "rgba(255,255,255,0.4)",
+    fontSize: 13,
+    fontWeight: "600",
+  },
+  monthPillTextActive: {
+    color: "#A78BFA",
   },
 });

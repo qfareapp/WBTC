@@ -5,14 +5,20 @@ const {
   getBusRouteByQr,
   listPublicRoutes,
   getRouteLiveStatus,
+  getTripEta,
+  getTripLoad,
   createDemoBooking,
+  getBookingStatus,
   getBookingAnalytics
 } = require("../controllers/public.controller");
 
 router.get("/scan", getBusRouteByQr);
 router.get("/routes", listPublicRoutes);
 router.get("/routes/:routeId/live", getRouteLiveStatus);
+router.get("/trips/:tripId/eta", getTripEta);
+router.get("/trips/:tripId/load", getTripLoad);
 router.post("/bookings/demo", createDemoBooking);
+router.get("/bookings/:bookingId/status", getBookingStatus);
 router.get("/bookings/analytics", auth, requireRole("ADMIN", "DEPOT_MANAGER", "SCHEDULER", "VIEWER"), getBookingAnalytics);
 
 module.exports = router;

@@ -1,5 +1,7 @@
+const mongoose = require("mongoose");
 const Route = require("../models/Route");
 const RouteStop = require("../models/RouteStop");
+const StopGeocode = require("../models/StopGeocode");
 const FareSlab = require("../models/FareSlab");
 const TripInstance = require("../models/TripInstance");
 const Bus = require("../models/Bus");
@@ -73,6 +75,36 @@ const toPct = (num, den) => (den ? Number(((num / den) * 100).toFixed(1)) : 0);
 
 const normalizeLocation = (value) => String(value || "").trim().toLowerCase();
 
+const upsertStopGeocodes = async (stops = []) => {
+  const writes = stops
+    .filter(
+      (stop) =>
+        String(stop.name || "").trim() &&
+        stop.latitude != null &&
+        stop.longitude != null &&
+        !Number.isNaN(Number(stop.latitude)) &&
+        !Number.isNaN(Number(stop.longitude))
+    )
+    .map((stop) => ({
+      updateOne: {
+        filter: { stopName: String(stop.name).trim() },
+        update: {
+          $set: {
+            latitude: Number(stop.latitude),
+            longitude: Number(stop.longitude),
+          },
+          $setOnInsert: {
+            displayName: null,
+          },
+        },
+        upsert: true,
+      },
+    }));
+
+  if (!writes.length) return;
+  await StopGeocode.bulkWrite(writes, { ordered: false });
+};
+
 const buildTimeline = (route, direction) => {
   if (!route) return [];
   const startTime = direction === "UP" ? route.firstTripTimeUp : route.firstTripTimeDown;
@@ -85,7 +117,7 @@ const buildTimeline = (route, direction) => {
 
   const trips = [];
   let time = start;
-  while (time + duration <= end) {
+  while (time <= end) {
     trips.push({
       startTime: fromMinutes(time),
       endTime: fromMinutes(time + duration),
@@ -133,7 +165,12 @@ exports.createRouteWithFare = asyncHandler(async (req, res) => {
   if (existingRoute) throw new ApiError(409, "Route number already exists in this operator panel");
 
   const sortedStops = stops
-    .map((stop, idx) => ({ index: Number(stop.index ?? idx), name: stop.name }))
+    .map((stop, idx) => ({
+      index: Number(stop.index ?? idx),
+      name: stop.name,
+      latitude: stop.latitude != null && stop.latitude !== "" ? Number(stop.latitude) : null,
+      longitude: stop.longitude != null && stop.longitude !== "" ? Number(stop.longitude) : null,
+    }))
     .sort((a, b) => a.index - b.index);
 
   if (sortedStops.some((stop) => !stop.name)) throw new ApiError(400, "Stop name required");
@@ -166,6 +203,8 @@ exports.createRouteWithFare = asyncHandler(async (req, res) => {
       routeId: route._id,
       index: stop.index,
       name: stop.name,
+      latitude: stop.latitude ?? null,
+      longitude: stop.longitude ?? null,
     }))
   );
 
@@ -177,6 +216,8 @@ exports.createRouteWithFare = asyncHandler(async (req, res) => {
       fare: slab.fare,
     }))
   );
+
+  await upsertStopGeocodes(sortedStops);
 
   res.status(201).json({ ok: true, route, stops: stopDocs, fareSlabs: slabDocs });
 });
@@ -197,7 +238,8 @@ exports.listRoutes = asyncHandler(async (req, res) => {
   const query = {};
   if (req.query.depotId) query.depotId = req.query.depotId;
   if (req.query.assignmentMode) query.assignmentMode = req.query.assignmentMode;
-  const operatorFilter = buildOperatorFilter(req.query.operatorType);
+  const operatorFilter =
+    req.user?.role === "ADMIN" ? null : buildOperatorFilter(req.query.operatorType);
   if (operatorFilter) Object.assign(query, operatorFilter);
   const routes = await Route.find(query).populate("depotId", "depotName depotCode").sort({ routeCode: 1 });
   res.json({ ok: true, routes });
@@ -247,7 +289,12 @@ exports.updateRouteWithFare = asyncHandler(async (req, res) => {
   if (conflict) throw new ApiError(409, "Route number already exists in this operator panel");
 
   const sortedStops = stops
-    .map((stop, idx) => ({ index: Number(stop.index ?? idx), name: stop.name }))
+    .map((stop, idx) => ({
+      index: Number(stop.index ?? idx),
+      name: stop.name,
+      latitude: stop.latitude != null && stop.latitude !== "" ? Number(stop.latitude) : null,
+      longitude: stop.longitude != null && stop.longitude !== "" ? Number(stop.longitude) : null,
+    }))
     .sort((a, b) => a.index - b.index);
 
   if (sortedStops.some((stop) => !stop.name)) throw new ApiError(400, "Stop name required");
@@ -284,6 +331,8 @@ exports.updateRouteWithFare = asyncHandler(async (req, res) => {
       routeId: route._id,
       index: stop.index,
       name: stop.name,
+      latitude: stop.latitude ?? null,
+      longitude: stop.longitude ?? null,
     }))
   );
 
@@ -295,6 +344,8 @@ exports.updateRouteWithFare = asyncHandler(async (req, res) => {
       fare: slab.fare,
     }))
   );
+
+  await upsertStopGeocodes(sortedStops);
 
   res.json({ ok: true, route, stops: stopDocs, fareSlabs: slabDocs });
 });
@@ -866,5 +917,121 @@ exports.getRoutePerformance = asyncHandler(async (req, res) => {
       avgRevenuePerTrip: Number(avgRevenuePerTrip.toFixed(2)),
     },
     routes: routeRows,
+  });
+});
+
+/**
+ * GET /api/routes/stops/search?q=Ultadanga
+ * Returns unique stops matching the query (name prefix, case-insensitive).
+ * Deduplicates by name — picks the entry with coordinates when available.
+ */
+exports.searchStops = asyncHandler(async (req, res) => {
+  const q = String(req.query.q || "").trim();
+  if (!q) return res.json({ ok: true, stops: [] });
+
+  const excludeRouteId =
+    req.query.excludeRouteId && mongoose.Types.ObjectId.isValid(req.query.excludeRouteId)
+      ? new mongoose.Types.ObjectId(req.query.excludeRouteId)
+      : null;
+
+  const routeQuery = {};
+  if (excludeRouteId) routeQuery._id = { $ne: excludeRouteId };
+
+  const [matchingRoutes, cachedStops] = await Promise.all([
+    Route.find(routeQuery).select("_id routeCode routeName").lean(),
+    StopGeocode.find({
+      stopName: { $regex: q, $options: "i" },
+    })
+      .select("stopName latitude longitude")
+      .sort({ stopName: 1 })
+      .limit(75)
+      .lean()
+      .then((rows) =>
+        rows.map((row) => ({
+          name: row.stopName,
+          latitude: row.latitude ?? null,
+          longitude: row.longitude ?? null,
+          routeId: null,
+          routeCode: null,
+          routeName: null,
+          source: "STOP_GEOCODE",
+        }))
+      ),
+  ]);
+
+  const cachedStopByName = new Map(
+    cachedStops.map((stop) => [String(stop.name || "").trim().toLowerCase(), stop])
+  );
+
+  const routeIds = matchingRoutes.map((route) => route._id);
+  const routeMetaById = new Map(matchingRoutes.map((route) => [String(route._id), route]));
+
+  const routeStopQuery = {
+    name: { $regex: q, $options: "i" },
+  };
+  if (Object.keys(routeQuery).length) {
+    routeStopQuery.routeId = { $in: routeIds };
+  }
+
+  const routeStops = await RouteStop.find(routeStopQuery)
+    .select("routeId name latitude longitude")
+    .sort({ name: 1, latitude: -1, longitude: -1 })
+    .limit(75)
+    .lean()
+    .then((rows) =>
+      rows.map((row) => {
+        const route = routeMetaById.get(String(row.routeId));
+        const cached = cachedStopByName.get(String(row.name || "").trim().toLowerCase());
+        return {
+          name: row.name,
+          latitude: row.latitude ?? cached?.latitude ?? null,
+          longitude: row.longitude ?? cached?.longitude ?? null,
+          routeId: row.routeId ?? null,
+          routeCode: route?.routeCode ?? null,
+          routeName: route?.routeName ?? null,
+          source: "ROUTE_STOP",
+        };
+      })
+    );
+
+  const stops = [...routeStops, ...cachedStops];
+
+  // Deduplicate by name — prefer entries that have coordinates
+  const map = new Map();
+  for (const stop of stops) {
+    const key = String(stop.name || "").trim().toLowerCase();
+    if (!key) continue;
+
+    const existing = map.get(key);
+    const stopHasCoords = stop.latitude != null && stop.longitude != null;
+    const existingHasCoords = existing && existing.latitude != null && existing.longitude != null;
+
+    if (!existing || (stopHasCoords && !existingHasCoords)) {
+      map.set(key, stop);
+      continue;
+    }
+
+    if (
+      existing &&
+      existing.source === "STOP_GEOCODE" &&
+      stop.source === "ROUTE_STOP" &&
+      stopHasCoords === existingHasCoords
+    ) {
+      map.set(key, stop);
+    }
+  }
+
+  res.json({
+    ok: true,
+    stops: Array.from(map.values())
+      .sort((a, b) => a.name.localeCompare(b.name))
+      .map((s) => ({
+        name: s.name,
+        latitude: s.latitude ?? null,
+        longitude: s.longitude ?? null,
+        routeId: s.routeId ?? null,
+        routeCode: s.routeCode ?? null,
+        routeName: s.routeName ?? null,
+      })),
   });
 });

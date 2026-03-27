@@ -22,6 +22,7 @@ app.get("/", (req, res) => {
  */
 
 app.use("/api/auth", require("./routes/auth.routes"));
+app.use("/api/passenger-auth", require("./routes/passengerAuth.routes"));
 app.use("/api/driver-auth", require("./routes/driverAuth.routes"));
 app.use("/api/conductor-auth", require("./routes/conductorAuth.routes"));
 app.use("/api/depots", require("./routes/depot.routes"));
