@@ -1,8 +1,10 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
+  Alert,
   Dimensions,
   FlatList,
   ImageBackground,
+  Linking,
   Pressable,
   RefreshControl,
   ScrollView,
@@ -18,7 +20,8 @@ import { BottomTabNavigationProp } from '@react-navigation/bottom-tabs';
 import { Ionicons } from '@expo/vector-icons';
 import { WebView } from 'react-native-webview';
 import { BottomTabParamList, RootStackParamList } from '../navigation/AppNavigator';
-import { apiGet } from '../lib/api';
+import { apiGet, apiPost } from '../lib/api';
+import { useAuth } from '../lib/auth';
 import { palette } from '../lib/theme';
 
 const today = new Date().toISOString().slice(0, 10);
@@ -113,6 +116,12 @@ type TripLoad = {
   gpsAge: number | null;
 };
 
+type WaitingStatus = {
+  stopName: string;
+  stopIndex: number;
+  notifiedAt: string;
+} | null;
+
 type LiveRoute = {
   id: string;
   routeCode: string;
@@ -165,6 +174,7 @@ const resolveCurrentStop = (
 };
 
 const HomeScreen: React.FC<Props> = ({ navigation }) => {
+  const { token } = useAuth();
   const maxFavoriteStops = 6;
   const [from, setFrom] = useState('');
   const [to, setTo] = useState('');
@@ -186,6 +196,8 @@ const HomeScreen: React.FC<Props> = ({ navigation }) => {
   const [tripLocationNames, setTripLocationNames] = useState<Record<string, string>>({});
   const [expandedTrips, setExpandedTrips] = useState<Record<string, boolean>>({});
   const [tripLoads, setTripLoads] = useState<Record<string, TripLoad | null>>({});
+  const [waitingStatusByTrip, setWaitingStatusByTrip] = useState<Record<string, WaitingStatus | undefined>>({});
+  const [waitingBusyByTrip, setWaitingBusyByTrip] = useState<Record<string, boolean>>({});
   const [activeSlide, setActiveSlide] = useState(0);
   const sliderRef = useRef<FlatList>(null);
 
@@ -379,8 +391,43 @@ const HomeScreen: React.FC<Props> = ({ navigation }) => {
     }
   };
 
+  const fetchWaitingStatusForTrip = async (tripId: string) => {
+    if (!token) return;
+    try {
+      const data = await apiGet<{ ok: boolean; waiting: WaitingStatus }>(
+        `/api/public/trips/${tripId}/waiting`,
+        token
+      );
+      setWaitingStatusByTrip(prev => ({ ...prev, [tripId]: data.waiting ?? null }));
+    } catch {
+      // non-fatal
+    }
+  };
+
+  const notifyWaitingForTrip = async (tripId: string, stopName: string) => {
+    if (!token) {
+      Alert.alert('Login required', 'Please sign in to notify the crew.');
+      return;
+    }
+    setWaitingBusyByTrip(prev => ({ ...prev, [tripId]: true }));
+    try {
+      const data = await apiPost<{ ok: boolean; waiting: WaitingStatus }>(
+        `/api/public/trips/${tripId}/waiting`,
+        { stopName },
+        token
+      );
+      setWaitingStatusByTrip(prev => ({ ...prev, [tripId]: data.waiting ?? null }));
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to notify crew';
+      Alert.alert('Could not notify crew', message);
+    } finally {
+      setWaitingBusyByTrip(prev => ({ ...prev, [tripId]: false }));
+    }
+  };
+
   useEffect(() => {
     if (!activeRouteId) return;
+    setWaitingStatusByTrip({});
     void loadLiveStatus(activeRouteId);
     const interval = setInterval(() => {
       void loadLiveStatus(activeRouteId, false);
@@ -422,6 +469,13 @@ const HomeScreen: React.FC<Props> = ({ navigation }) => {
     }
     setTo(stop);
     if (from === stop) setFrom('');
+  };
+
+  const navigateToStop = (stopName: string) => {
+    const stop = liveRoute?.stops?.find(s => s.name.toLowerCase() === stopName.toLowerCase());
+    if (!stop?.latitude || !stop?.longitude) return;
+    const url = `https://www.google.com/maps/dir/?api=1&destination=${stop.latitude},${stop.longitude}&travelmode=walking`;
+    Linking.openURL(url);
   };
 
   const handleAddFavorite = (stop: string) => {
@@ -630,30 +684,44 @@ const HomeScreen: React.FC<Props> = ({ navigation }) => {
               const match = stop.slice(matchIdx, matchIdx + query.length);
               const after = stop.slice(matchIdx + query.length);
               const isFrom = activeStopField === 'from';
+              const hasCoords = liveRoute?.stops?.some(s => s.name.toLowerCase() === stop.toLowerCase() && s.latitude && s.longitude);
               return (
-                <TouchableOpacity
+                <View
                   key={stop}
                   style={[
                     styles.suggestionItem,
                     idx < suggestions.length - 1 && styles.suggestionItemBorder,
                   ]}
-                  onPress={() => handleStopSelect(stop)}
-                  activeOpacity={0.65}
                 >
-                  <Ionicons
-                    name="location-outline"
-                    size={13}
-                    color={isFrom ? palette.accent : palette.blue}
-                    style={{ marginTop: 1 }}
-                  />
-                  <Text style={styles.suggestionText} numberOfLines={1}>
-                    {before}
-                    <Text style={[styles.suggestionMatch, { color: isFrom ? palette.accent : palette.blue }]}>
-                      {match}
+                  <TouchableOpacity
+                    style={{ flex: 1, flexDirection: 'row', alignItems: 'center', gap: 8 }}
+                    onPress={() => handleStopSelect(stop)}
+                    activeOpacity={0.65}
+                  >
+                    <Ionicons
+                      name="location-outline"
+                      size={13}
+                      color={isFrom ? palette.accent : palette.blue}
+                      style={{ marginTop: 1 }}
+                    />
+                    <Text style={styles.suggestionText} numberOfLines={1}>
+                      {before}
+                      <Text style={[styles.suggestionMatch, { color: isFrom ? palette.accent : palette.blue }]}>
+                        {match}
+                      </Text>
+                      {after}
                     </Text>
-                    {after}
-                  </Text>
-                </TouchableOpacity>
+                  </TouchableOpacity>
+                  {hasCoords && (
+                    <TouchableOpacity
+                      onPress={() => navigateToStop(stop)}
+                      hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                      style={styles.navigateBtn}
+                    >
+                      <Ionicons name="navigate-outline" size={14} color={palette.accent} />
+                    </TouchableOpacity>
+                  )}
+                </View>
               );
             })}
           </View>
@@ -726,6 +794,15 @@ const HomeScreen: React.FC<Props> = ({ navigation }) => {
                 >
                   {stop}
                 </Text>
+                {liveRoute?.stops?.some(s => s.name.toLowerCase() === stop.toLowerCase() && s.latitude && s.longitude) && (
+                  <TouchableOpacity
+                    onPress={event => { event.stopPropagation(); navigateToStop(stop); }}
+                    hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
+                    style={{ marginLeft: 4 }}
+                  >
+                    <Ionicons name="navigate-outline" size={11} color={isFrom ? palette.accent : isTo ? palette.blue : palette.textMuted} />
+                  </TouchableOpacity>
+                )}
               </TouchableOpacity>
             );
           })}
@@ -852,8 +929,18 @@ const HomeScreen: React.FC<Props> = ({ navigation }) => {
               ? `${liveRoute?.source ?? ''}  →  ${liveRoute?.destination ?? ''}`
               : `${liveRoute?.destination ?? ''}  →  ${liveRoute?.source ?? ''}`;
             const isExpanded = expandedTrips[tripId] ?? false;
-            const toggleExpanded = () =>
+            const waitingStatus = waitingStatusByTrip[tripId];
+            const waitingBusy = waitingBusyByTrip[tripId] ?? false;
+            const selectedStop = from.trim();
+            const alreadyNotifiedSelectedStop =
+              Boolean(waitingStatus?.stopName) &&
+              String(waitingStatus?.stopName).trim().toLowerCase() === selectedStop.toLowerCase();
+            const toggleExpanded = () => {
+              if (!isExpanded && token && waitingStatusByTrip[tripId] === undefined) {
+                void fetchWaitingStatusForTrip(tripId);
+              }
               setExpandedTrips(prev => ({ ...prev, [tripId]: !prev[tripId] }));
+            };
 
             // Collapsed summary: ETA pill when user has a from-stop, else direction
             const collapsedEtaLabel = from.trim()
@@ -1035,6 +1122,60 @@ lb.style.left=W/2+'px';lb.style.top=H/2+'px';map.appendChild(lb);
                               {eta.source === 'haversine' ? ' (est.)' : ''}
                             </Text>
                           )}
+                        </View>
+                        {(() => {
+                          const fromStop = liveRoute?.stops?.find(s => s.name.toLowerCase() === from.trim().toLowerCase() && s.latitude && s.longitude);
+                          if (!fromStop) return null;
+                          return (
+                            <TouchableOpacity
+                              onPress={() => navigateToStop(from.trim())}
+                              style={styles.etaNavigateBtn}
+                              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                            >
+                              <Ionicons name="navigate" size={16} color={palette.accent} />
+                            </TouchableOpacity>
+                          );
+                        })()}
+                      </View>
+                    )}
+
+                    {from.trim() && hasLocation && (
+                      <View style={styles.waitingBanner}>
+                        <View style={styles.waitingBannerTop}>
+                          <View style={styles.waitingCopy}>
+                            <Text style={styles.waitingTitle}>Waiting at {selectedStop}</Text>
+                            <Text style={styles.waitingText}>
+                              {alreadyNotifiedSelectedStop
+                                ? 'Driver and conductor have your stop.'
+                                : waitingStatus?.stopName
+                                  ? `Current alert: ${waitingStatus.stopName}`
+                                  : 'Notify the crew that you are waiting at this stop.'}
+                            </Text>
+                          </View>
+                          <TouchableOpacity
+                            style={[
+                              styles.waitingButton,
+                              alreadyNotifiedSelectedStop && styles.waitingButtonActive,
+                              waitingBusy && styles.waitingButtonDisabled,
+                            ]}
+                            onPress={() => { void notifyWaitingForTrip(tripId, selectedStop); }}
+                            disabled={waitingBusy}
+                          >
+                            <Text
+                              style={[
+                                styles.waitingButtonText,
+                                alreadyNotifiedSelectedStop && styles.waitingButtonTextActive,
+                              ]}
+                            >
+                              {waitingBusy
+                                ? 'Sending...'
+                                : alreadyNotifiedSelectedStop
+                                  ? 'Notified'
+                                  : waitingStatus?.stopName
+                                    ? 'Update stop'
+                                    : 'Notify crew'}
+                            </Text>
+                          </TouchableOpacity>
                         </View>
                       </View>
                     )}
@@ -1269,6 +1410,9 @@ const styles = StyleSheet.create({
   },
   suggestionText: { flex: 1, color: palette.textMuted, fontSize: 13.5, fontWeight: '600' },
   suggestionMatch: { fontWeight: '800' },
+  navigateBtn: {
+    padding: 6, borderRadius: 8, backgroundColor: palette.card, marginLeft: 4,
+  },
 
   // Favourites
   favoritesHeader: {
@@ -1421,9 +1565,44 @@ const styles = StyleSheet.create({
     borderWidth: 1, borderColor: palette.border
   },
   etaContent: { flex: 1 },
+  etaNavigateBtn: {
+    padding: 7, borderRadius: 20, backgroundColor: 'rgba(0,200,150,0.12)',
+    alignItems: 'center', justifyContent: 'center',
+  },
   etaText: { color: palette.accent, fontSize: 13.5, fontWeight: '800' },
   etaTextPending: { color: palette.textFaint, fontSize: 12.5 },
   etaSubText: { color: palette.textMuted, fontSize: 11.5, marginTop: 2 },
+  waitingBanner: {
+    marginBottom: 10,
+    borderRadius: 12,
+    padding: 10,
+    borderWidth: 1,
+    borderColor: 'rgba(68, 153, 255, 0.28)',
+    backgroundColor: 'rgba(68, 153, 255, 0.08)',
+  },
+  waitingBannerTop: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+  },
+  waitingCopy: { flex: 1 },
+  waitingTitle: { color: palette.blue, fontSize: 13, fontWeight: '800' },
+  waitingText: { color: palette.textMuted, fontSize: 11.5, marginTop: 3 },
+  waitingButton: {
+    borderRadius: 999,
+    paddingHorizontal: 12,
+    paddingVertical: 9,
+    borderWidth: 1,
+    borderColor: 'rgba(68, 153, 255, 0.32)',
+    backgroundColor: 'rgba(10, 18, 34, 0.5)',
+  },
+  waitingButtonActive: {
+    backgroundColor: palette.blue,
+    borderColor: palette.blue,
+  },
+  waitingButtonDisabled: { opacity: 0.7 },
+  waitingButtonText: { color: palette.blue, fontSize: 12, fontWeight: '800' },
+  waitingButtonTextActive: { color: '#fff' },
 
   // How it works
   collapseHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },

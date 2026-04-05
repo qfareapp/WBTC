@@ -15,6 +15,7 @@ const asyncHandler = require("../utils/asyncHandler");
 const { ensureConductorEligibleForBus } = require("../utils/crewPolicy");
 const { getOpsDayWindow, getOpsMonthWindow, getOpsPeriodWindow, getOpsDate, toOpsIsoDay } = require("../utils/opsTime");
 const { reverseGeocode } = require("../utils/nominatim");
+const { getTripWaitingSnapshot } = require("../utils/passengerWaiting");
 
 const OPS_TIMEZONE = "Asia/Kolkata";
 
@@ -82,10 +83,18 @@ const buildActiveOnDateFilter = (dateStr) => {
 
 const mapTripForConductor = async (assignment) => {
   const trip = await TripInstance.findById(assignment.tripInstanceId)
+    .select("routeId busId status direction startTime endTime conductorEndedAt passedStops")
     .populate("routeId", "routeCode routeName source destination")
     .populate("busId", "busNumber busType");
   if (!trip) return null;
   const route = trip.routeId;
+  const waitingSummary = await getTripWaitingSnapshot({
+    _id: trip._id,
+    routeId: route?._id,
+    status: trip.status,
+    conductorEndedAt: trip.conductorEndedAt || null,
+    passedStops: trip.passedStops || [],
+  });
 
   return {
     assignmentId: assignment._id,
@@ -113,6 +122,7 @@ const mapTripForConductor = async (assignment) => {
       startTime: trip.startTime || null,
       endTime: trip.endTime || null,
     },
+    waitingSummary,
     pickupLocation: getStartLocation(route, trip.direction),
     dropLocation: getEndLocation(route, trip.direction),
   };

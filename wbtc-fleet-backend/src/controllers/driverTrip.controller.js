@@ -12,6 +12,7 @@ const ApiError = require("../utils/ApiError");
 const asyncHandler = require("../utils/asyncHandler");
 const { ensureDriverEligibleForBus } = require("../utils/crewPolicy");
 const { getOpsDayWindow } = require("../utils/opsTime");
+const { getTripWaitingSnapshot } = require("../utils/passengerWaiting");
 
 const OPS_TIMEZONE = "Asia/Kolkata";
 
@@ -201,7 +202,7 @@ const getBusMinOpeningKm = async (busId) => {
   return 0;
 };
 
-const mapAssignment = (assignment, busById = new Map()) => {
+const mapAssignment = async (assignment, busById = new Map()) => {
   const trip = assignment.tripInstanceId;
   const route = assignment.routeId;
   const tripBus = trip?.busId || null;
@@ -218,6 +219,15 @@ const mapAssignment = (assignment, busById = new Map()) => {
   const direction = trip?.direction || null;
   const pickupLocation = getStartLocation(route, direction);
   const dropLocation = getEndLocation(route, direction);
+  const waitingSummary = trip?._id
+    ? await getTripWaitingSnapshot({
+        _id: trip._id,
+        routeId: route?._id || assignment.routeId,
+        status: trip.status,
+        conductorEndedAt: trip.conductorEndedAt || null,
+        passedStops: trip.passedStops || [],
+      })
+    : { totalWaiting: 0, stops: [] };
 
   return {
     assignmentId: assignment._id,
@@ -254,6 +264,7 @@ const mapAssignment = (assignment, busById = new Map()) => {
       longitude: trip?.lastLongitude ?? null,
       at: trip?.lastLocationAt || null,
     },
+    waitingSummary,
     pickupLocation,
     dropLocation,
   };
@@ -308,7 +319,7 @@ exports.listDriverTrips = asyncHandler(async (req, res) => {
     .populate({
       path: "tripInstanceId",
       select:
-        "direction status startTime endTime actualStartTime actualEndTime actualDurationMin openingKm closingKm lastLatitude lastLongitude lastLocationAt busId",
+        "direction status startTime endTime actualStartTime actualEndTime actualDurationMin openingKm closingKm lastLatitude lastLongitude lastLocationAt busId conductorEndedAt passedStops",
       populate: { path: "busId", select: "busNumber busType" },
     })
     .sort({ startTime: 1 });
@@ -329,7 +340,8 @@ exports.listDriverTrips = asyncHandler(async (req, res) => {
     : [];
   const busById = new Map(fallbackBuses.map((bus) => [String(bus._id), bus]));
 
-  res.json({ ok: true, date, trips: assignments.map((assignment) => mapAssignment(assignment, busById)) });
+  const trips = await Promise.all(assignments.map((assignment) => mapAssignment(assignment, busById)));
+  res.json({ ok: true, date, trips });
 });
 
 exports.getDriverTrip = asyncHandler(async (req, res) => {
@@ -342,7 +354,7 @@ exports.getDriverTrip = asyncHandler(async (req, res) => {
     .populate({
       path: "tripInstanceId",
       select:
-        "direction status startTime endTime actualStartTime actualEndTime actualDurationMin openingKm closingKm lastLatitude lastLongitude lastLocationAt busId",
+        "direction status startTime endTime actualStartTime actualEndTime actualDurationMin openingKm closingKm lastLatitude lastLongitude lastLocationAt busId conductorEndedAt passedStops",
       populate: { path: "busId", select: "busNumber busType" },
     });
 
@@ -363,7 +375,7 @@ exports.getDriverTrip = asyncHandler(async (req, res) => {
     : [];
   const busById = new Map(fallbackBuses.map((bus) => [String(bus._id), bus]));
 
-  res.json({ ok: true, trip: mapAssignment(assignment, busById) });
+  res.json({ ok: true, trip: await mapAssignment(assignment, busById) });
 });
 
 exports.startDriverTrip = asyncHandler(async (req, res) => {

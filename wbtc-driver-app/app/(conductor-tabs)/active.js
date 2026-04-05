@@ -670,6 +670,21 @@ export default function ConductorActive() {
                   <Text style={styles.tripBannerLocationPending}>📡 Acquiring GPS…</Text>
                 ) : null}
               </View>
+              <Text style={styles.cardRowStrong}>Passengers waiting</Text>
+              {(activeTrip.waitingSummary?.stops || []).length ? (
+                <View style={styles.waitingListWrap}>
+                  {activeTrip.waitingSummary.stops.map((item) => (
+                    <View key={`${item.stopName}-${item.stopIndex}`} style={styles.waitingChip}>
+                      <Text style={styles.waitingChipStop}>{item.stopName}</Text>
+                      <Text style={styles.waitingChipCount}>
+                        {item.passengersWaiting} waiting
+                      </Text>
+                    </View>
+                  ))}
+                </View>
+              ) : (
+                <Text style={styles.helper}>No passengers have marked themselves waiting yet.</Text>
+              )}
               <Text style={styles.cardRowStrong}>{t("active", "stops")}</Text>
               <View style={styles.stopListWrap}>
                 {stops.map((stop, stopIndex) => (
@@ -1108,6 +1123,33 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     flexWrap: "wrap",
     gap: 8,
+  },
+  waitingListWrap: {
+    marginTop: 6,
+    gap: 8,
+  },
+  waitingChip: {
+    backgroundColor: "rgba(14,116,144,0.16)",
+    borderWidth: 1,
+    borderColor: "rgba(56,189,248,0.32)",
+    borderRadius: 14,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 10,
+  },
+  waitingChipStop: {
+    color: "#E0F2FE",
+    fontWeight: "700",
+    fontSize: 13,
+    flex: 1,
+  },
+  waitingChipCount: {
+    color: "#7DD3FC",
+    fontWeight: "800",
+    fontSize: 12,
   },
   stopChip: {
     backgroundColor: "rgba(255,255,255,0.06)",

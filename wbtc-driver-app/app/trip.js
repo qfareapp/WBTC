@@ -355,6 +355,12 @@ export default function Trip() {
   }, [tripId]);
 
   useEffect(() => {
+    if (!tripId) return undefined;
+    const interval = setInterval(loadTrip, 20000);
+    return () => clearInterval(interval);
+  }, [tripId]);
+
+  useEffect(() => {
     if (!isTracking || !tripId) return undefined;
     sendLocationUpdate();
     const interval = setInterval(sendLocationUpdate, 30000);
@@ -433,6 +439,28 @@ export default function Trip() {
                 <Text style={styles.stopValue}>{trip.dropLocation || "--"}</Text>
               </View>
             </View>
+          </View>
+
+          <View style={[styles.section, styles.sectionCard]}>
+            <View style={styles.sectionHeadRow}>
+              <View style={[styles.sectionHeadAccent, styles.sectionHeadAccentInfo]} />
+              <Text style={styles.sectionTitle}>Passengers waiting</Text>
+            </View>
+            {(trip.waitingSummary?.stops || []).length ? (
+              trip.waitingSummary.stops.map((item) => (
+                <View key={`${item.stopName}-${item.stopIndex}`} style={styles.waitingRow}>
+                  <View>
+                    <Text style={styles.waitingStop}>{item.stopName}</Text>
+                    <Text style={styles.waitingMeta}>Stop #{item.stopIndex}</Text>
+                  </View>
+                  <View style={styles.waitingBadge}>
+                    <Text style={styles.waitingBadgeText}>{item.passengersWaiting}</Text>
+                  </View>
+                </View>
+              ))
+            ) : (
+              <Text style={styles.row}>No waiting passengers reported yet.</Text>
+            )}
           </View>
 
           <View style={[styles.section, styles.sectionCard]}>
@@ -736,6 +764,9 @@ const styles = StyleSheet.create({
   sectionHeadAccentMuted: {
     backgroundColor: "rgba(255,255,255,0.25)",
   },
+  sectionHeadAccentInfo: {
+    backgroundColor: "#38BDF8",
+  },
   timingTopGrid: {
     flexDirection: "row",
     gap: 10,
@@ -860,6 +891,44 @@ const styles = StyleSheet.create({
     color: "#FFFFFF",
     fontWeight: "800",
     fontSize: 20,
+  },
+  waitingRow: {
+    marginTop: 10,
+    backgroundColor: "rgba(255,255,255,0.04)",
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.08)",
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 12,
+  },
+  waitingStop: {
+    color: "#FFFFFF",
+    fontWeight: "800",
+    fontSize: 16,
+  },
+  waitingMeta: {
+    marginTop: 4,
+    color: "rgba(255,255,255,0.45)",
+    fontSize: 12,
+  },
+  waitingBadge: {
+    minWidth: 44,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    borderRadius: 999,
+    backgroundColor: "rgba(56,189,248,0.16)",
+    borderWidth: 1,
+    borderColor: "rgba(56,189,248,0.35)",
+    alignItems: "center",
+  },
+  waitingBadgeText: {
+    color: "#7DD3FC",
+    fontWeight: "800",
+    fontSize: 16,
   },
   mapCard: {
     marginTop: 10,

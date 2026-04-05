@@ -5,11 +5,18 @@ const RouteStop = require("../models/RouteStop");
 const FareSlab = require("../models/FareSlab");
 const TicketBooking = require("../models/TicketBooking");
 const StopGeocode = require("../models/StopGeocode");
+const PassengerWaitRequest = require("../models/PassengerWaitRequest");
 const ApiError = require("../utils/ApiError");
 const asyncHandler = require("../utils/asyncHandler");
 const { OPS_TIMEZONE, getOpsDate, toOpsIsoDay, toOpsMonthKey, getOpsDayWindow } = require("../utils/opsTime");
 const { forwardGeocode } = require("../utils/nominatim");
 const { getDrivingEta } = require("../utils/openrouteservice");
+const {
+  getCanonicalStopForTrip,
+  getPassengerWaitingStatus,
+  getTripWaitingSnapshot,
+  normalizeStopName,
+} = require("../utils/passengerWaiting");
 
 const normalizeBusNumber = (value) => String(value || "").trim();
 
@@ -311,6 +318,67 @@ exports.getTripEta = asyncHandler(async (req, res) => {
       updatedAt: trip.lastLocationAt,
     },
   });
+});
+
+exports.notifyTripWaiting = asyncHandler(async (req, res) => {
+  const { tripId } = req.params;
+  const passengerId = req.passenger?.passengerId;
+  const stopName = String(req.body?.stopName || "").trim();
+
+  if (!passengerId) throw new ApiError(401, "Missing passenger session");
+  if (!stopName) throw new ApiError(400, "stopName required");
+
+  const trip = await TripInstance.findById(tripId).select(
+    "routeId status conductorEndedAt passedStops"
+  );
+  if (!trip) throw new ApiError(404, "Trip not found");
+  if (!["Scheduled", "Active"].includes(String(trip.status || "")) || trip.conductorEndedAt) {
+    throw new ApiError(409, "Trip is no longer live");
+  }
+
+  const stop = await getCanonicalStopForTrip({ routeId: trip.routeId, stopName });
+  if (!stop) throw new ApiError(400, "Stop not found on this route");
+
+  if ((trip.passedStops || []).some((item) => normalizeStopName(item) === normalizeStopName(stop.name))) {
+    throw new ApiError(409, "Bus has already passed this stop");
+  }
+
+  await PassengerWaitRequest.findOneAndUpdate(
+    { passengerId, tripInstanceId: trip._id },
+    {
+      $set: {
+        passengerId,
+        tripInstanceId: trip._id,
+        routeId: trip.routeId,
+        stopName: stop.name,
+        stopIndex: stop.index,
+        status: "Waiting",
+        notifiedAt: new Date(),
+      },
+    },
+    { upsert: true, new: true, setDefaultsOnInsert: true }
+  );
+
+  const waiting = await getPassengerWaitingStatus({ trip, passengerId });
+  const summary = await getTripWaitingSnapshot(trip);
+
+  res.json({ ok: true, waiting, summary });
+});
+
+exports.getTripWaitingStatus = asyncHandler(async (req, res) => {
+  const { tripId } = req.params;
+  const passengerId = req.passenger?.passengerId;
+  if (!passengerId) throw new ApiError(401, "Missing passenger session");
+
+  const trip = await TripInstance.findById(tripId).select(
+    "routeId status conductorEndedAt passedStops"
+  );
+  if (!trip) throw new ApiError(404, "Trip not found");
+
+  const waiting = await getPassengerWaitingStatus({ trip, passengerId });
+  const summary = await getTripWaitingSnapshot(trip);
+
+  res.json({ ok: true, waiting, summary });
 });
 
 exports.createDemoBooking = asyncHandler(async (req, res) => {
