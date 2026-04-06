@@ -180,7 +180,7 @@ export default function Login() {
                 style={styles.input}
                 value={devApiBase}
                 onChangeText={setDevApiBase}
-                placeholder="http://192.168.1.37:5000"
+                placeholder="http://192.168.1.34:5000"
                 placeholderTextColor="rgba(255,255,255,0.24)"
                 autoCapitalize="none"
                 autoCorrect={false}

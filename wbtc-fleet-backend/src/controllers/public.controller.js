@@ -21,16 +21,23 @@ const {
 const normalizeBusNumber = (value) => String(value || "").trim();
 
 /**
- * Returns the conductor's GPS location for a trip.
- * The conductor rides the bus, so their GPS is the bus location.
- * Driver GPS is intentionally excluded — the driver may be off-bus.
+ * Returns the best available bus location for a trip.
+ * Prefer conductor GPS and fall back to driver GPS when needed.
  */
 const resolveBestLocation = (trip) => {
-  if (trip.lastLatitude) {
+  if (typeof trip.lastLatitude === "number" && typeof trip.lastLongitude === "number") {
     return {
       lat: trip.lastLatitude,
       lng: trip.lastLongitude,
       at: trip.lastLocationAt,
+      name: trip.lastLocationName || null,
+    };
+  }
+  if (typeof trip.driverLastLatitude === "number" && typeof trip.driverLastLongitude === "number") {
+    return {
+      lat: trip.driverLastLatitude,
+      lng: trip.driverLastLongitude,
+      at: trip.driverLastLocationAt,
       name: trip.lastLocationName || null,
     };
   }
@@ -157,10 +164,10 @@ exports.getRouteLiveStatus = asyncHandler(async (req, res) => {
 
   const [trips, stops] = await Promise.all([
     TripInstance.find({
-      routeId, date,
-      status: { $in: ["Scheduled", "Active"] },
-      lastLatitude: { $ne: null },
-      conductorEndedAt: null,  // exclude trips the conductor has already ended
+      routeId,
+      date,
+      status: "Active",
+      conductorEndedAt: null,
     })
       .populate("busId", "busNumber")
       .select("direction startTime endTime actualStartTime busId lastLatitude lastLongitude lastLocationAt lastLocationName approachingStop passedStops driverLastLatitude driverLastLongitude driverLastLocationAt")
@@ -265,7 +272,7 @@ exports.getTripEta = asyncHandler(async (req, res) => {
     return res.json({
       ok: true,
       eta: null,
-      busLocationName: trip.lastLocationName || null,
+      busLocationName: null,
       reason: "bus_location_unavailable",
     });
   }
@@ -290,7 +297,7 @@ exports.getTripEta = asyncHandler(async (req, res) => {
     return res.json({
       ok: true,
       eta: null,
-      busLocationName: trip.lastLocationName || null,
+      busLocationName: loc.name || null,
       reason: "stop_not_geocoded",
     });
   }
@@ -314,8 +321,8 @@ exports.getTripEta = asyncHandler(async (req, res) => {
       distanceKm: etaResult.distanceKm,
       text: etaText,
       source: etaResult.source,
-      busLocationName: trip.lastLocationName || null,
-      updatedAt: trip.lastLocationAt,
+      busLocationName: loc.name || null,
+      updatedAt: loc.at || null,
     },
   });
 });

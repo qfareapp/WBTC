@@ -2,6 +2,7 @@ import { Stack } from "expo-router";
 import { StatusBar } from "expo-status-bar";
 import { AppLanguageProvider } from "../contexts/shared-language";
 import PushNotificationBridge from "../components/PushNotificationBridge";
+import "../lib/driverBackgroundLocation";
 
 export const unstable_settings = {
   initialRouteName: "login",

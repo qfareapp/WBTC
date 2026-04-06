@@ -20,6 +20,8 @@ Notifications.setNotificationHandler({
 
 let channelReadyPromise = null;
 
+const isExpoGo = Constants.executionEnvironment === "storeClient";
+
 const getProjectId = () =>
   Constants.easConfig?.projectId ||
   Constants.expoConfig?.extra?.eas?.projectId ||
@@ -41,7 +43,7 @@ const ensureAndroidOfferChannel = async () => {
   await channelReadyPromise;
 };
 
-const getExpoPushTokenValue = async () => {
+const getPushRegistration = async () => {
   if (Platform.OS === "web") return null;
 
   await ensureAndroidOfferChannel();
@@ -54,9 +56,31 @@ const getExpoPushTokenValue = async () => {
   }
   if (finalStatus !== "granted") return null;
 
+  if (Platform.OS === "android" && !isExpoGo) {
+    const deviceToken = await Notifications.getDevicePushTokenAsync();
+    const nativeToken =
+      typeof deviceToken?.data === "string"
+        ? deviceToken.data
+        : typeof deviceToken?.data?.token === "string"
+        ? deviceToken.data.token
+        : null;
+
+    if (nativeToken) {
+      return {
+        token: nativeToken,
+        provider: "fcm",
+      };
+    }
+  }
+
   const projectId = getProjectId();
   const result = await Notifications.getExpoPushTokenAsync(projectId ? { projectId } : undefined);
-  return result?.data || null;
+  if (!result?.data) return null;
+
+  return {
+    token: result.data,
+    provider: "expo",
+  };
 };
 
 const getStoredDriverAuth = async (overrides = {}) => {
@@ -74,10 +98,10 @@ export const syncDriverPushTokenRegistration = async (overrides = {}) => {
     const { apiBase, authToken, role } = await getStoredDriverAuth(overrides);
     if (!apiBase || !authToken || role !== "DRIVER") return null;
 
-    const pushToken = await getExpoPushTokenValue();
-    if (!pushToken) return null;
+    const registration = await getPushRegistration();
+    if (!registration?.token) return null;
 
-    await AsyncStorage.setItem(PUSH_TOKEN_KEY, pushToken);
+    await AsyncStorage.setItem(PUSH_TOKEN_KEY, registration.token);
 
     await fetch(`${apiBase}/api/driver-trips/push-token`, {
       method: "POST",
@@ -86,12 +110,13 @@ export const syncDriverPushTokenRegistration = async (overrides = {}) => {
         Authorization: `Bearer ${authToken}`,
       },
       body: JSON.stringify({
-        token: pushToken,
+        token: registration.token,
         platform: Platform.OS,
+        provider: registration.provider,
       }),
     });
 
-    return pushToken;
+    return registration.token;
   } catch {
     return null;
   }

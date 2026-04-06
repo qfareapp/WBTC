@@ -338,6 +338,9 @@ function OwnerDashboard({ apiBase, token, user, setToken, setUser }) {
                               Current: <strong>{bus.currentLocation || "--"}</strong>
                             </span>
                             <span>
+                              Live stop: <strong>{bus.liveCurrentStop?.name || "--"}</strong>
+                            </span>
+                            <span>
                               Last trip end: <strong>{bus.lastTripEndLocation?.name || "--"}</strong>
                             </span>
                             {bus.attachedRoute ? (

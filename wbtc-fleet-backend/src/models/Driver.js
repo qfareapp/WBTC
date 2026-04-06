@@ -18,6 +18,7 @@ const DriverSchema = new mongoose.Schema(
       {
         token: { type: String, required: true },
         platform: { type: String, default: null },
+        provider: { type: String, enum: ["expo", "fcm"], default: "expo" },
         updatedAt: { type: Date, default: Date.now },
       },
     ],

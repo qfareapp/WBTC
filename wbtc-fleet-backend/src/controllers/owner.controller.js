@@ -1,5 +1,6 @@
 const Bus = require("../models/Bus");
 const Route = require("../models/Route");
+const RouteStop = require("../models/RouteStop");
 const TripInstance = require("../models/TripInstance");
 const TicketBooking = require("../models/TicketBooking");
 const Driver = require("../models/Driver");
@@ -13,6 +14,55 @@ const { computeOwnerPaymentRows } = require("../utils/ownerPayments");
 const { getOpsDate, getOpsMonth, toOpsIsoDay, getOpsDayWindow, getOpsPeriodWindow } = require("../utils/opsTime");
 
 const dayWindowFromIso = (isoDate) => getOpsDayWindow(isoDate);
+
+const haversineKm = (lat1, lon1, lat2, lon2) => {
+  const R = 6371;
+  const dLat = ((lat2 - lat1) * Math.PI) / 180;
+  const dLon = ((lon2 - lon1) * Math.PI) / 180;
+  const a =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos((lat1 * Math.PI) / 180) *
+      Math.cos((lat2 * Math.PI) / 180) *
+      Math.sin(dLon / 2) ** 2;
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+};
+
+const resolveNearestRouteStop = (location, stops = []) => {
+  if (
+    !location ||
+    typeof location.latitude !== "number" ||
+    typeof location.longitude !== "number"
+  ) {
+    return null;
+  }
+
+  const geocodedStops = stops.filter(
+    (stop) => typeof stop.latitude === "number" && typeof stop.longitude === "number"
+  );
+  if (!geocodedStops.length) return null;
+
+  let nearest = geocodedStops[0];
+  let minDistance = haversineKm(
+    location.latitude,
+    location.longitude,
+    geocodedStops[0].latitude,
+    geocodedStops[0].longitude
+  );
+
+  for (const stop of geocodedStops.slice(1)) {
+    const distance = haversineKm(location.latitude, location.longitude, stop.latitude, stop.longitude);
+    if (distance < minDistance) {
+      minDistance = distance;
+      nearest = stop;
+    }
+  }
+
+  return {
+    name: nearest.name,
+    index: nearest.index,
+    distanceKm: Number(minDistance.toFixed(1)),
+  };
+};
 
 const getPeriodWindow = (mode, query) => {
   if (mode === "daily") {
@@ -115,7 +165,9 @@ exports.getOwnerFleetDashboard = asyncHandler(async (req, res) => {
       status: "Active",
       date: getOpsDate(),
     })
-      .select("busId routeId lastLatitude lastLongitude lastLocationAt")
+      .select(
+        "busId routeId lastLatitude lastLongitude lastLocationAt driverLastLatitude driverLastLongitude driverLastLocationAt"
+      )
       .populate("routeId", "routeCode routeName")
       .lean(),
     DriverAssignment.find({ date: getOpsDate(), busId: { $in: busIds } })
@@ -144,9 +196,24 @@ exports.getOwnerFleetDashboard = asyncHandler(async (req, res) => {
   }
 
   const routeIds = Array.from(new Set(tripRows.map((row) => String(row.routeId)).filter(Boolean)));
+  const liveRouteIds = Array.from(new Set(liveTrips.map((row) => String(row.routeId?._id || row.routeId || "")).filter(Boolean)));
+  const ownerRouteStopIds = Array.from(new Set([...routeIds, ...liveRouteIds]));
   const routes = await Route.find({ _id: { $in: routeIds } }).select("routeCode routeName").lean();
+  const routeStops = ownerRouteStopIds.length
+    ? await RouteStop.find({ routeId: { $in: ownerRouteStopIds } })
+        .sort({ index: 1 })
+        .select("routeId index name latitude longitude")
+        .lean()
+    : [];
   const routeMap = routes.reduce((acc, route) => {
     acc[String(route._id)] = route;
+    return acc;
+  }, {});
+  const routeStopsByRoute = routeStops.reduce((acc, stop) => {
+    const key = String(stop.routeId || "");
+    if (!key) return acc;
+    if (!acc[key]) acc[key] = [];
+    acc[key].push(stop);
     return acc;
   }, {});
 
@@ -214,6 +281,27 @@ exports.getOwnerFleetDashboard = asyncHandler(async (req, res) => {
     const driver = driverByBus[busIdKey] || null;
     const conductor = conductorByBus[busIdKey] || null;
     const attachedRoute = bus.attachedRouteId || null;
+    const liveLocation = live
+      ? typeof live.lastLatitude === "number" && typeof live.lastLongitude === "number"
+        ? {
+            latitude: live.lastLatitude,
+            longitude: live.lastLongitude,
+            at: live.lastLocationAt || null,
+          }
+        : typeof live.driverLastLatitude === "number" && typeof live.driverLastLongitude === "number"
+        ? {
+            latitude: live.driverLastLatitude,
+            longitude: live.driverLastLongitude,
+            at: live.driverLastLocationAt || null,
+          }
+        : null
+      : null;
+    const liveCurrentStop = live?.routeId
+      ? resolveNearestRouteStop(
+          liveLocation,
+          routeStopsByRoute[String(live.routeId._id || live.routeId || "")] || []
+        )
+      : null;
 
     let lastTripEndLocation = null;
     if (lastCompleted?.routeId?.source && lastCompleted?.routeId?.destination) {
@@ -259,10 +347,11 @@ exports.getOwnerFleetDashboard = asyncHandler(async (req, res) => {
           }
         : null,
       liveLocation: {
-        latitude: live?.lastLatitude ?? null,
-        longitude: live?.lastLongitude ?? null,
-        at: live?.lastLocationAt || null,
+        latitude: liveLocation?.latitude ?? null,
+        longitude: liveLocation?.longitude ?? null,
+        at: liveLocation?.at || null,
       },
+      liveCurrentStop,
       assignedDriver: driver
         ? { id: driver._id, name: driver.name, empId: driver.empId }
         : null,

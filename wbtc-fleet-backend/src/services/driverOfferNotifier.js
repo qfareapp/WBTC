@@ -2,22 +2,37 @@ const Driver = require("../models/Driver");
 const TripOffer = require("../models/TripOffer");
 const { getOpsDate } = require("../utils/opsTime");
 const { collectEligibleTripOffersForDriver } = require("../controllers/driverTrip.controller");
+const { getFirebaseMessaging } = require("./firebaseAdmin");
 
 const EXPO_PUSH_URL = "https://exp.host/--/api/v2/push/send";
 const EXPO_RECEIPTS_URL = "https://exp.host/--/api/v2/push/getReceipts";
 const DEFAULT_INTERVAL_MS = 30000;
 const RECEIPT_LOOKUP_DELAY_MS = 20000;
+const OFFER_CHANNEL_ID = "trip-offers";
+const OFFER_SOUND_FILE = "qfare_bus_jingle.wav";
 
 let intervalHandle = null;
 let syncInProgress = false;
 
-const uniqueTokens = (items = []) =>
+const normalizePushTargets = (items = []) =>
   Array.from(
-    new Set(
+    new Map(
       items
-        .map((item) => String(item?.token || "").trim())
+        .map((item) => {
+          const token = String(item?.token || "").trim();
+          if (!token) return null;
+
+          return [
+            token,
+            {
+              token,
+              provider: item?.provider === "fcm" ? "fcm" : "expo",
+              platform: item?.platform ? String(item.platform).trim() : null,
+            },
+          ];
+        })
         .filter(Boolean)
-    )
+    ).values()
   );
 
 const buildNotificationText = (offers) => {
@@ -26,17 +41,18 @@ const buildNotificationText = (offers) => {
   const routeCode = firstOffer?.route?.routeCode || "Trip";
   const routeLabel = [firstOffer?.route?.source, firstOffer?.route?.destination].filter(Boolean).join(" - ");
   const startTime = firstOffer?.startTime || "";
+  const content = [routeCode, routeLabel, startTime].filter(Boolean).join(" - ");
 
   if (count === 1) {
     return {
       title: "New trip offer",
-      body: [routeCode, routeLabel, startTime].filter(Boolean).join(" • "),
+      body: content,
     };
   }
 
   return {
     title: `${count} trip offers available`,
-    body: [routeCode, routeLabel, startTime].filter(Boolean).join(" • "),
+    body: content,
   };
 };
 
@@ -57,6 +73,51 @@ const sendExpoPushNotifications = async (messages) => {
     throw new Error(message);
   }
   return data;
+};
+
+const sendFirebasePushNotifications = async ({ targets, title, body, tripInstanceId }) => {
+  const messaging = getFirebaseMessaging();
+  if (!messaging) {
+    throw new Error(
+      "Firebase messaging not configured. Set FIREBASE_SERVICE_ACCOUNT_JSON or FIREBASE_SERVICE_ACCOUNT_PATH."
+    );
+  }
+
+  const results = await Promise.all(
+    targets.map(async (target) => {
+      try {
+        const messageId = await messaging.send({
+          token: target.token,
+          notification: { title, body },
+          data: {
+            screen: "driver-offers",
+            tripInstanceId: String(tripInstanceId || ""),
+          },
+          android: {
+            priority: "high",
+            notification: {
+              channelId: OFFER_CHANNEL_ID,
+              sound: OFFER_SOUND_FILE.replace(/\.wav$/i, ""),
+              defaultSound: false,
+              visibility: "PUBLIC",
+            },
+          },
+        });
+
+        return { status: "ok", id: messageId };
+      } catch (error) {
+        return {
+          status: "error",
+          message: error.message,
+          details: {
+            error: error.code || "unknown",
+          },
+        };
+      }
+    })
+  );
+
+  return { data: results };
 };
 
 const fetchExpoPushReceipts = async (receiptIds) => {
@@ -129,15 +190,16 @@ const scheduleReceiptLookup = ({ driverId, tripIds, tickets }) => {
 
 const pruneInvalidTokens = async (driver, invalidTokens) => {
   if (!invalidTokens.length) return;
+  const invalidSet = new Set(invalidTokens);
   driver.pushTokens = (driver.pushTokens || []).filter(
-    (item) => !invalidTokens.includes(String(item?.token || "").trim())
+    (item) => !invalidSet.has(String(item?.token || "").trim())
   );
   await driver.save();
 };
 
 const notifyDriverForOffers = async (driver, date) => {
-  const tokenList = uniqueTokens(driver.pushTokens);
-  if (!tokenList.length) return;
+  const targets = normalizePushTargets(driver.pushTokens);
+  if (!targets.length) return;
 
   const result = await collectEligibleTripOffersForDriver({ driverId: driver._id, date, debug: false });
   const offers = Array.isArray(result?.offers) ? result.offers : [];
@@ -159,45 +221,84 @@ const notifyDriverForOffers = async (driver, date) => {
   });
   if (!newOffers.length) return;
 
+  const tripIdStrings = newOffers.map((offer) => String(offer.tripInstanceId));
   const { title, body } = buildNotificationText(newOffers);
-  const messages = tokenList.map((token) => ({
-    to: token,
-    title,
-    body,
-    data: {
-      screen: "driver-offers",
-      tripInstanceId: String(newOffers[0].tripInstanceId || ""),
-    },
-    priority: "high",
-    channelId: "trip-offers",
-    sound: "qfare_bus_jingle.wav",
-  }));
-
-  const pushResult = await sendExpoPushNotifications(messages);
-  const tickets = Array.isArray(pushResult?.data) ? pushResult.data : [];
-  logTicketResults({
-    driverId: String(driver._id),
-    tripIds: newOffers.map((offer) => String(offer.tripInstanceId)),
-    tokenList,
-    tickets,
-  });
-  scheduleReceiptLookup({
-    driverId: String(driver._id),
-    tripIds: newOffers.map((offer) => String(offer.tripInstanceId)),
-    tickets,
-  });
+  const expoTargets = targets.filter((target) => target.provider === "expo");
+  const fcmTargets = targets.filter((target) => target.provider === "fcm");
   const invalidTokens = [];
   let delivered = false;
 
-  tickets.forEach((ticket, index) => {
-    if (ticket?.status === "ok") {
-      delivered = true;
-      return;
-    }
-    if (ticket?.details?.error === "DeviceNotRegistered") {
-      invalidTokens.push(tokenList[index]);
-    }
-  });
+  if (expoTargets.length) {
+    const messages = expoTargets.map((target) => ({
+      to: target.token,
+      title,
+      body,
+      data: {
+        screen: "driver-offers",
+        tripInstanceId: String(newOffers[0].tripInstanceId || ""),
+      },
+      priority: "high",
+      channelId: OFFER_CHANNEL_ID,
+      sound: OFFER_SOUND_FILE,
+    }));
+
+    const pushResult = await sendExpoPushNotifications(messages);
+    const tickets = Array.isArray(pushResult?.data) ? pushResult.data : [];
+    const tokenList = expoTargets.map((target) => target.token);
+
+    logTicketResults({
+      driverId: String(driver._id),
+      tripIds: tripIdStrings,
+      tokenList,
+      tickets,
+    });
+    scheduleReceiptLookup({
+      driverId: String(driver._id),
+      tripIds: tripIdStrings,
+      tickets,
+    });
+
+    tickets.forEach((ticket, index) => {
+      if (ticket?.status === "ok") {
+        delivered = true;
+        return;
+      }
+      if (ticket?.details?.error === "DeviceNotRegistered") {
+        invalidTokens.push(tokenList[index]);
+      }
+    });
+  }
+
+  if (fcmTargets.length) {
+    const pushResult = await sendFirebasePushNotifications({
+      targets: fcmTargets,
+      title,
+      body,
+      tripInstanceId: newOffers[0].tripInstanceId,
+    });
+    const tickets = Array.isArray(pushResult?.data) ? pushResult.data : [];
+    const tokenList = fcmTargets.map((target) => target.token);
+
+    logTicketResults({
+      driverId: String(driver._id),
+      tripIds: tripIdStrings,
+      tokenList,
+      tickets,
+    });
+
+    tickets.forEach((ticket, index) => {
+      if (ticket?.status === "ok") {
+        delivered = true;
+        return;
+      }
+      if (
+        ticket?.details?.error === "messaging/registration-token-not-registered" ||
+        ticket?.details?.error === "registration-token-not-registered"
+      ) {
+        invalidTokens.push(tokenList[index]);
+      }
+    });
+  }
 
   await pruneInvalidTokens(driver, invalidTokens);
   if (!delivered) return;

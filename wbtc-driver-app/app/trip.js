@@ -8,24 +8,20 @@ import {
   Text,
   TextInput,
   TouchableOpacity,
-  UIManager,
   View,
 } from "react-native";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import * as Location from "expo-location";
-import { AppMap, AppMapMarker } from "../components/AppMap";
+import {
+  requestDriverBackgroundPermissions,
+  startDriverBackgroundTracking,
+  stopDriverBackgroundTracking,
+} from "../lib/driverBackgroundLocation";
 
 const API_BASE_KEY = "wbtc_api_base";
 const TOKEN_KEY = "wbtc_driver_token";
 const SWIPE_HANDLE_WIDTH = 56;
-
-const formatDateTime = (value) => {
-  if (!value) return "--";
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return "--";
-  return date.toLocaleString();
-};
 
 const parseApiText = (text) => {
   if (!text) return {};
@@ -48,6 +44,7 @@ const parseKm = (value) => {
 };
 
 const sanitizeKmInput = (value) => String(value ?? "").replace(/[^0-9.,]/g, "");
+const normalizeStopName = (value) => String(value || "").trim().toLowerCase();
 
 function SwipeConfirm({ label, onConfirm, disabled = false }) {
   const translateX = useRef(new Animated.Value(0)).current;
@@ -91,36 +88,38 @@ function SwipeConfirm({ label, onConfirm, disabled = false }) {
   };
 
   const panResponder = useRef(
-      PanResponder.create({
-        onStartShouldSetPanResponder: () => !disabledRef.current,
-        onStartShouldSetPanResponderCapture: () => !disabledRef.current,
-        onMoveShouldSetPanResponder: () => !disabledRef.current,
-        onMoveShouldSetPanResponderCapture: () => !disabledRef.current,
-        onPanResponderTerminationRequest: () => false,
-        onPanResponderGrant: () => {
-          if (disabledRef.current) return;
-          startXRef.current = currentXRef.current || 0;
-        },
-        onPanResponderMove: (_, gestureState) => {
-          if (disabledRef.current) return;
-          const max = maxRef.current;
-          const next = startXRef.current + gestureState.dx;
-          const clamped = Math.max(0, Math.min(max, next));
-          translateX.setValue(clamped);
-        },
-        onPanResponderRelease: (_, gestureState) => {
-          if (disabledRef.current) return;
-          const max = maxRef.current;
-          const threshold = max * 0.82;
-          if (currentXRef.current >= threshold && max > 0) {
-            animateTo(max);
-            Promise.resolve(onConfirmRef.current())
-              .catch(() => {})
-              .finally(() => {
-                if (mountedRef.current) animateTo(0);
-              });
+    PanResponder.create({
+      onStartShouldSetPanResponder: () => !disabledRef.current,
+      onStartShouldSetPanResponderCapture: () => !disabledRef.current,
+      onMoveShouldSetPanResponder: () => !disabledRef.current,
+      onMoveShouldSetPanResponderCapture: () => !disabledRef.current,
+      onPanResponderTerminationRequest: () => false,
+      onPanResponderGrant: () => {
+        if (disabledRef.current) return;
+        startXRef.current = currentXRef.current || 0;
+      },
+      onPanResponderMove: (_, gestureState) => {
+        if (disabledRef.current) return;
+        const max = maxRef.current;
+        const next = startXRef.current + gestureState.dx;
+        const clamped = Math.max(0, Math.min(max, next));
+        translateX.setValue(clamped);
+      },
+      onPanResponderRelease: () => {
+        if (disabledRef.current) return;
+        const max = maxRef.current;
+        const threshold = max * 0.82;
+
+        if (currentXRef.current >= threshold && max > 0) {
+          animateTo(max);
+          Promise.resolve(onConfirmRef.current())
+            .catch(() => {})
+            .finally(() => {
+              if (mountedRef.current) animateTo(0);
+            });
           return;
         }
+
         animateTo(0);
       },
       onPanResponderTerminate: () => {
@@ -154,7 +153,6 @@ export default function Trip() {
   const [trip, setTrip] = useState(null);
   const [notice, setNotice] = useState("");
   const [busy, setBusy] = useState(false);
-  const [currentLocation, setCurrentLocation] = useState(null);
   const [locationNotice, setLocationNotice] = useState("");
   const [startModalVisible, setStartModalVisible] = useState(false);
   const [endModalVisible, setEndModalVisible] = useState(false);
@@ -164,27 +162,49 @@ export default function Trip() {
   const isTripCompleted = trip?.status === "Completed";
   const hasStarted = Boolean(trip?.timing?.actualStartTime);
   const isTracking = hasStarted && !isTripCompleted;
-  const liveLocation =
-    currentLocation ||
-    (trip?.location?.latitude && trip?.location?.longitude
-      ? { latitude: trip.location.latitude, longitude: trip.location.longitude }
-      : null);
-  const mapRegion = useMemo(() => {
-    if (!liveLocation) return null;
-    return {
-      latitude: liveLocation.latitude,
-      longitude: liveLocation.longitude,
-      latitudeDelta: 0.01,
-      longitudeDelta: 0.01,
-    };
-  }, [liveLocation]);
-  const isMapNativeAvailable = useMemo(() => {
-    try {
-      return Boolean(UIManager.getViewManagerConfig?.("AIRMap"));
-    } catch {
-      return false;
+  const routeStops = useMemo(() => trip?.routeStops || [], [trip?.routeStops]);
+  const progressStops = useMemo(() => {
+    if (!routeStops.length) {
+      return { lastStop: null, currentStop: null, upcomingStops: [] };
     }
-  }, []);
+
+    const passedSet = new Set((trip?.progress?.passedStops || []).map(normalizeStopName));
+    const approachingStop = String(trip?.progress?.approachingStop || "").trim();
+    const approachingIndex = routeStops.findIndex(
+      (stop) => normalizeStopName(stop.name) === normalizeStopName(approachingStop)
+    );
+    const lastPassedIndex = routeStops.reduce(
+      (latestIndex, stop, index) => (passedSet.has(normalizeStopName(stop.name)) ? index : latestIndex),
+      -1
+    );
+    const currentStopIndex =
+      approachingIndex >= 0
+        ? approachingIndex
+        : hasStarted
+        ? Math.min(lastPassedIndex + 1, routeStops.length - 1)
+        : -1;
+    const nextStop = currentStopIndex >= 0 ? routeStops[currentStopIndex + 1] || null : null;
+    const secondUpcomingStop = currentStopIndex >= 0 ? routeStops[currentStopIndex + 2] || null : null;
+
+    return {
+      lastStop: lastPassedIndex >= 0 ? routeStops[lastPassedIndex] : null,
+      currentStop: currentStopIndex >= 0 ? routeStops[currentStopIndex] : null,
+      upcomingStops: [nextStop, secondUpcomingStop].filter(Boolean),
+    };
+  }, [hasStarted, routeStops, trip?.progress?.approachingStop, trip?.progress?.passedStops]);
+  const upcomingStopsWithWaiting = useMemo(() => {
+    return progressStops.upcomingStops.map((stop) => {
+      const match = (trip?.waitingSummary?.stops || []).find(
+        (item) => normalizeStopName(item.stopName) === normalizeStopName(stop.name)
+      );
+      return {
+        ...stop,
+        passengersWaiting: match?.passengersWaiting || 0,
+      };
+    });
+  }, [progressStops.upcomingStops, trip?.waitingSummary?.stops]);
+  const nextUpcomingStop = upcomingStopsWithWaiting[0] || null;
+  const secondUpcomingStop = upcomingStopsWithWaiting[1] || null;
 
   const openingKmValue = parseKm(openingKmInput);
   const closingKmValue = parseKm(closingKmInput);
@@ -214,19 +234,34 @@ export default function Trip() {
       const text = await response.text();
       const data = parseApiText(text);
       if (!response.ok) throw new Error(data.message || "Failed to load trip");
-      setTrip(data.trip);
-      if (data.trip?.location?.latitude && data.trip?.location?.longitude) {
-        setCurrentLocation({
-          latitude: data.trip.location.latitude,
-          longitude: data.trip.location.longitude,
-        });
+      let nextTrip = data.trip;
+
+      if ((!nextTrip?.routeStops || !nextTrip.routeStops.length) && nextTrip?.route?.id) {
+        try {
+          const stopsResponse = await fetch(`${apiBase}/api/public/routes/${nextTrip.route.id}/live`);
+          const stopsText = await stopsResponse.text();
+          const stopsData = parseApiText(stopsText);
+          if (stopsResponse.ok && Array.isArray(stopsData.stops) && stopsData.stops.length) {
+            nextTrip = {
+              ...nextTrip,
+              routeStops: stopsData.stops.map((stop) => ({
+                index: stop.index,
+                name: stop.name,
+              })),
+            };
+          }
+        } catch {
+          // Non-fatal: fallback stops are best-effort only.
+        }
       }
+
+      setTrip(nextTrip);
     } catch (err) {
       setNotice(err.message);
     }
   };
 
-  const sendLocationUpdate = async () => {
+  const sendLocationUpdate = async (coordsOverride = null) => {
     try {
       const [apiBase, token] = await Promise.all([
         AsyncStorage.getItem(API_BASE_KEY),
@@ -234,22 +269,23 @@ export default function Trip() {
       ]);
       if (!apiBase || !token) return;
 
-      const permission = await Location.requestForegroundPermissionsAsync();
-      if (permission.status !== "granted") {
-        setLocationNotice("Location permission denied.");
-        return;
+      let coords = coordsOverride;
+      if (!coords) {
+        const permission = await Location.requestForegroundPermissionsAsync();
+        if (permission.status !== "granted") {
+          setLocationNotice("Location permission denied.");
+          return;
+        }
+
+        const position = await Location.getCurrentPositionAsync({
+          accuracy: Location.Accuracy.Balanced,
+        });
+
+        coords = {
+          latitude: position.coords.latitude,
+          longitude: position.coords.longitude,
+        };
       }
-
-      const position = await Location.getCurrentPositionAsync({
-        accuracy: Location.Accuracy.Balanced,
-      });
-
-      const coords = {
-        latitude: position.coords.latitude,
-        longitude: position.coords.longitude,
-      };
-
-      setCurrentLocation(coords);
 
       await fetch(`${apiBase}/api/driver-trips/location`, {
         method: "POST",
@@ -316,6 +352,7 @@ export default function Trip() {
       const text = await response.text();
       const data = parseApiText(text);
       if (!response.ok) throw new Error(data.message || "Failed to complete trip");
+      await stopDriverBackgroundTracking();
       router.replace({ pathname: "/trip-summary", params: { tripInstanceId: tripId } });
       return true;
     } catch (err) {
@@ -361,11 +398,63 @@ export default function Trip() {
   }, [tripId]);
 
   useEffect(() => {
-    if (!isTracking || !tripId) return undefined;
-    sendLocationUpdate();
-    const interval = setInterval(sendLocationUpdate, 30000);
-    return () => clearInterval(interval);
+    if (!tripId) return undefined;
+
+    let cancelled = false;
+
+    const syncBackgroundTracking = async () => {
+      if (!isTracking) {
+        await stopDriverBackgroundTracking();
+        return;
+      }
+
+      try {
+        const [apiBase, token] = await Promise.all([
+          AsyncStorage.getItem(API_BASE_KEY),
+          AsyncStorage.getItem(TOKEN_KEY),
+        ]);
+        if (!apiBase || !token) return;
+
+        const permission = await requestDriverBackgroundPermissions();
+        if (!permission.ok) {
+          if (!cancelled) {
+            setLocationNotice(
+              permission.reason === "background_denied"
+                ? "Background location permission denied."
+                : "Location permission denied."
+            );
+          }
+          return;
+        }
+
+        if (!cancelled) setLocationNotice("");
+
+        await startDriverBackgroundTracking({
+          tripInstanceId: tripId,
+          apiBase,
+          token,
+        });
+
+        await sendLocationUpdate();
+      } catch (err) {
+        if (!cancelled) {
+          setLocationNotice(err.message || "Unable to start background trip tracking.");
+        }
+      }
+    };
+
+    void syncBackgroundTracking();
+
+    return () => {
+      cancelled = true;
+    };
   }, [isTracking, tripId]);
+
+  useEffect(() => {
+    return () => {
+      void stopDriverBackgroundTracking();
+    };
+  }, []);
 
   return (
     <ScrollView contentContainerStyle={styles.container}>
@@ -443,28 +532,6 @@ export default function Trip() {
 
           <View style={[styles.section, styles.sectionCard]}>
             <View style={styles.sectionHeadRow}>
-              <View style={[styles.sectionHeadAccent, styles.sectionHeadAccentInfo]} />
-              <Text style={styles.sectionTitle}>Passengers waiting</Text>
-            </View>
-            {(trip.waitingSummary?.stops || []).length ? (
-              trip.waitingSummary.stops.map((item) => (
-                <View key={`${item.stopName}-${item.stopIndex}`} style={styles.waitingRow}>
-                  <View>
-                    <Text style={styles.waitingStop}>{item.stopName}</Text>
-                    <Text style={styles.waitingMeta}>Stop #{item.stopIndex}</Text>
-                  </View>
-                  <View style={styles.waitingBadge}>
-                    <Text style={styles.waitingBadgeText}>{item.passengersWaiting}</Text>
-                  </View>
-                </View>
-              ))
-            ) : (
-              <Text style={styles.row}>No waiting passengers reported yet.</Text>
-            )}
-          </View>
-
-          <View style={[styles.section, styles.sectionCard]}>
-            <View style={styles.sectionHeadRow}>
               <View style={styles.sectionHeadAccent} />
               <Text style={styles.sectionTitle}>Timing</Text>
             </View>
@@ -503,26 +570,39 @@ export default function Trip() {
           <View style={[styles.section, styles.sectionCard, styles.liveCard]}>
             <View style={styles.sectionHeadRow}>
               <View style={[styles.sectionHeadAccent, styles.sectionHeadAccentMuted]} />
-              <Text style={styles.sectionTitle}>Live location</Text>
+              <Text style={styles.sectionTitle}>Live route progress</Text>
             </View>
             {!hasStarted ? (
               <View style={styles.liveRow}>
                 <View style={styles.liveIconBox}>
                   <Text style={styles.liveIcon}>📡</Text>
                 </View>
-                <Text style={styles.liveText}>Location will appear once the trip starts.</Text>
+                <Text style={styles.liveText}>GPS and route progress will appear once the trip starts.</Text>
               </View>
-            ) : mapRegion && isMapNativeAvailable ? (
-              <>
-                <View style={styles.mapCard}>
-                  <AppMap style={styles.map} region={mapRegion}>
-                    <AppMapMarker coordinate={liveLocation} />
-                  </AppMap>
-                </View>
-                <Text style={styles.row}>Last update: {formatDateTime(trip?.location?.at)}</Text>
-              </>
             ) : (
-              <Text style={styles.row}>Live location unavailable.</Text>
+              <View style={styles.progressWrap}>
+                <View style={styles.progressGrid}>
+                  <View style={styles.progressTile}>
+                    <Text style={styles.progressLabel}>Last stop</Text>
+                    <Text style={styles.progressValue}>{progressStops.lastStop?.name || "--"}</Text>
+                  </View>
+                  <View style={styles.progressTile}>
+                    <Text style={styles.progressLabel}>Current stop</Text>
+                    <Text style={styles.progressValue}>{progressStops.currentStop?.name || "--"}</Text>
+                  </View>
+                  <View style={styles.progressTile}>
+                    <Text style={styles.progressLabel}>Upcoming stop</Text>
+                    <Text style={styles.progressValue}>{nextUpcomingStop?.name || "--"}</Text>
+                    <Text style={styles.progressMeta}>
+                      {nextUpcomingStop ? `${nextUpcomingStop.passengersWaiting} passengers waiting` : "No upcoming stop available"}
+                    </Text>
+                  </View>
+                  <View style={styles.progressTile}>
+                    <Text style={styles.progressLabel}>After next</Text>
+                    <Text style={styles.progressValue}>{secondUpcomingStop?.name || "--"}</Text>
+                  </View>
+                </View>
+              </View>
             )}
           </View>
         </View>
@@ -764,9 +844,6 @@ const styles = StyleSheet.create({
   sectionHeadAccentMuted: {
     backgroundColor: "rgba(255,255,255,0.25)",
   },
-  sectionHeadAccentInfo: {
-    backgroundColor: "#38BDF8",
-  },
   timingTopGrid: {
     flexDirection: "row",
     gap: 10,
@@ -853,6 +930,38 @@ const styles = StyleSheet.create({
     fontSize: 22,
     fontWeight: "600",
   },
+  progressWrap: {
+    gap: 12,
+  },
+  progressGrid: {
+    gap: 10,
+  },
+  progressTile: {
+    backgroundColor: "rgba(255,255,255,0.04)",
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.08)",
+    padding: 14,
+  },
+  progressLabel: {
+    color: "rgba(255,255,255,0.35)",
+    fontSize: 12,
+    fontWeight: "700",
+    letterSpacing: 1,
+    textTransform: "uppercase",
+  },
+  progressValue: {
+    marginTop: 8,
+    color: "#FFFFFF",
+    fontSize: 22,
+    fontWeight: "800",
+  },
+  progressMeta: {
+    marginTop: 6,
+    color: "#7DD3FC",
+    fontSize: 13,
+    fontWeight: "700",
+  },
   row: {
     marginTop: 6,
     color: "rgba(255,255,255,0.62)",
@@ -891,55 +1000,6 @@ const styles = StyleSheet.create({
     color: "#FFFFFF",
     fontWeight: "800",
     fontSize: 20,
-  },
-  waitingRow: {
-    marginTop: 10,
-    backgroundColor: "rgba(255,255,255,0.04)",
-    borderRadius: 14,
-    borderWidth: 1,
-    borderColor: "rgba(255,255,255,0.08)",
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-    gap: 12,
-  },
-  waitingStop: {
-    color: "#FFFFFF",
-    fontWeight: "800",
-    fontSize: 16,
-  },
-  waitingMeta: {
-    marginTop: 4,
-    color: "rgba(255,255,255,0.45)",
-    fontSize: 12,
-  },
-  waitingBadge: {
-    minWidth: 44,
-    paddingHorizontal: 10,
-    paddingVertical: 8,
-    borderRadius: 999,
-    backgroundColor: "rgba(56,189,248,0.16)",
-    borderWidth: 1,
-    borderColor: "rgba(56,189,248,0.35)",
-    alignItems: "center",
-  },
-  waitingBadgeText: {
-    color: "#7DD3FC",
-    fontWeight: "800",
-    fontSize: 16,
-  },
-  mapCard: {
-    marginTop: 10,
-    borderRadius: 14,
-    overflow: "hidden",
-    borderWidth: 1,
-    borderColor: "rgba(255,255,255,0.15)",
-  },
-  map: {
-    height: 190,
-    width: "100%",
   },
   actions: {
     flexDirection: "row",

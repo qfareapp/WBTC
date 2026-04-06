@@ -7,12 +7,14 @@ const Conductor = require("../models/Conductor");
 const TripOffer = require("../models/TripOffer");
 const BusCrewMapping = require("../models/BusCrewMapping");
 const RouteModel = require("../models/Route");
+const RouteStop = require("../models/RouteStop");
 const RouteDayActivation = require("../models/RouteDayActivation");
 const ApiError = require("../utils/ApiError");
 const asyncHandler = require("../utils/asyncHandler");
 const { ensureDriverEligibleForBus } = require("../utils/crewPolicy");
 const { getOpsDayWindow } = require("../utils/opsTime");
 const { getTripWaitingSnapshot } = require("../utils/passengerWaiting");
+const { reverseGeocode } = require("../utils/nominatim");
 
 const OPS_TIMEZONE = "Asia/Kolkata";
 
@@ -202,9 +204,68 @@ const getBusMinOpeningKm = async (busId) => {
   return 0;
 };
 
-const mapAssignment = async (assignment, busById = new Map()) => {
+const haversineM = (lat1, lng1, lat2, lng2) => {
+  const R = 6371000;
+  const dLat = ((lat2 - lat1) * Math.PI) / 180;
+  const dLng = ((lng2 - lng1) * Math.PI) / 180;
+  const a =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos((lat1 * Math.PI) / 180) *
+      Math.cos((lat2 * Math.PI) / 180) *
+      Math.sin(dLng / 2) ** 2;
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+};
+
+const runDriverGeofenceChecks = async (tripInstanceId, busLat, busLng) => {
+  const trip = await TripInstance.findById(tripInstanceId)
+    .select("routeId passedStops notifiedStops approachingStop")
+    .lean();
+  if (!trip) return;
+
+  const stops = await RouteStop.find({ routeId: trip.routeId, latitude: { $ne: null } })
+    .sort({ index: 1 })
+    .select("name latitude longitude index")
+    .lean();
+  if (!stops.length) return;
+
+  const passedSet = new Set(trip.passedStops || []);
+  const notifiedSet = new Set(trip.notifiedStops || []);
+
+  const newlyPassed = [];
+  const newlyNotified = [];
+  let approachingStop = trip.approachingStop || null;
+
+  for (const stop of stops) {
+    const dist = haversineM(busLat, busLng, stop.latitude, stop.longitude);
+
+    if (dist <= 100 && !passedSet.has(stop.name)) {
+      newlyPassed.push(stop.name);
+      passedSet.add(stop.name);
+    }
+
+    if (dist <= 300 && !passedSet.has(stop.name)) {
+      if (approachingStop !== stop.name) approachingStop = stop.name;
+    }
+
+    if (dist <= 500 && !notifiedSet.has(stop.name)) {
+      newlyNotified.push(stop.name);
+      notifiedSet.add(stop.name);
+    }
+  }
+
+  if (approachingStop && passedSet.has(approachingStop)) approachingStop = null;
+
+  const update = { approachingStop };
+  if (newlyPassed.length) update.$addToSet = { ...(update.$addToSet || {}), passedStops: { $each: newlyPassed } };
+  if (newlyNotified.length) update.$addToSet = { ...(update.$addToSet || {}), notifiedStops: { $each: newlyNotified } };
+
+  await TripInstance.findByIdAndUpdate(tripInstanceId, update);
+};
+
+const mapAssignment = async (assignment, busById = new Map(), options = {}) => {
   const trip = assignment.tripInstanceId;
   const route = assignment.routeId;
+  const includeRouteStops = options.includeRouteStops === true;
   const tripBus = trip?.busId || null;
   const assignmentBus = assignment.busId || null;
   const fallbackBusId = String(assignmentBus?._id || assignmentBus || tripBus?._id || tripBus || "");
@@ -228,6 +289,10 @@ const mapAssignment = async (assignment, busById = new Map()) => {
         passedStops: trip.passedStops || [],
       })
     : { totalWaiting: 0, stops: [] };
+  const routeStops =
+    includeRouteStops && route?._id
+      ? await RouteStop.find({ routeId: route._id }).sort({ index: 1 }).select("index name").lean()
+      : [];
 
   return {
     assignmentId: assignment._id,
@@ -264,9 +329,22 @@ const mapAssignment = async (assignment, busById = new Map()) => {
       longitude: trip?.lastLongitude ?? null,
       at: trip?.lastLocationAt || null,
     },
+    driverLocation: {
+      latitude: trip?.driverLastLatitude ?? null,
+      longitude: trip?.driverLastLongitude ?? null,
+      at: trip?.driverLastLocationAt || null,
+    },
+    progress: {
+      approachingStop: trip?.approachingStop || null,
+      passedStops: trip?.passedStops || [],
+    },
     waitingSummary,
     pickupLocation,
     dropLocation,
+    routeStops: routeStops.map((stop) => ({
+      index: stop.index,
+      name: stop.name,
+    })),
   };
 };
 
@@ -354,7 +432,7 @@ exports.getDriverTrip = asyncHandler(async (req, res) => {
     .populate({
       path: "tripInstanceId",
       select:
-        "direction status startTime endTime actualStartTime actualEndTime actualDurationMin openingKm closingKm lastLatitude lastLongitude lastLocationAt busId conductorEndedAt passedStops",
+        "direction status startTime endTime actualStartTime actualEndTime actualDurationMin openingKm closingKm lastLatitude lastLongitude lastLocationAt driverLastLatitude driverLastLongitude driverLastLocationAt busId conductorEndedAt approachingStop passedStops",
       populate: { path: "busId", select: "busNumber busType" },
     });
 
@@ -375,7 +453,7 @@ exports.getDriverTrip = asyncHandler(async (req, res) => {
     : [];
   const busById = new Map(fallbackBuses.map((bus) => [String(bus._id), bus]));
 
-  res.json({ ok: true, trip: await mapAssignment(assignment, busById) });
+  res.json({ ok: true, trip: await mapAssignment(assignment, busById, { includeRouteStops: true }) });
 });
 
 exports.startDriverTrip = asyncHandler(async (req, res) => {
@@ -507,15 +585,21 @@ exports.updateDriverLocation = asyncHandler(async (req, res) => {
   if (!trip) throw new ApiError(404, "Trip not found");
   if (trip.status === "Completed") throw new ApiError(409, "Trip already completed");
 
-  // Driver location is stored in driver-only fields.
-  // Passenger-facing location (lastLatitude/lastLongitude/lastLocationAt/lastLocationName)
-  // is written exclusively by the conductor so passengers see the conductor's position.
+  let locationName = null;
+  try {
+    locationName = await reverseGeocode(latitude, longitude);
+  } catch {
+    // non-fatal
+  }
+
   trip.driverLastLatitude = latitude;
   trip.driverLastLongitude = longitude;
   trip.driverLastLocationAt = new Date();
   await trip.save();
 
-  res.json({ ok: true });
+  void runDriverGeofenceChecks(tripInstanceId, latitude, longitude).catch(() => {});
+
+  res.json({ ok: true, locationName });
 });
 
 exports.updateDriverDuty = asyncHandler(async (req, res) => {
@@ -800,6 +884,8 @@ exports.registerPushToken = asyncHandler(async (req, res) => {
   const driverId = req.user.userId;
   const normalizedToken = String(req.body?.token || "").trim();
   const normalizedPlatform = String(req.body?.platform || "").trim() || null;
+  const requestedProvider = String(req.body?.provider || "").trim().toLowerCase();
+  const normalizedProvider = requestedProvider === "fcm" ? "fcm" : "expo";
 
   if (!normalizedToken) throw new ApiError(400, "token required");
 
@@ -808,7 +894,12 @@ exports.registerPushToken = asyncHandler(async (req, res) => {
 
   const existingTokens = Array.isArray(driver.pushTokens) ? driver.pushTokens : [];
   driver.pushTokens = [
-    { token: normalizedToken, platform: normalizedPlatform, updatedAt: new Date() },
+    {
+      token: normalizedToken,
+      platform: normalizedPlatform,
+      provider: normalizedProvider,
+      updatedAt: new Date(),
+    },
     ...existingTokens.filter((item) => String(item?.token || "") !== normalizedToken),
   ].slice(0, 5);
   await driver.save();

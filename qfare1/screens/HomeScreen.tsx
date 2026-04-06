@@ -24,7 +24,13 @@ import { apiGet, apiPost } from '../lib/api';
 import { useAuth } from '../lib/auth';
 import { palette } from '../lib/theme';
 
-const today = new Date().toISOString().slice(0, 10);
+const today = (() => {
+  const now = new Date();
+  const year = now.getFullYear();
+  const month = String(now.getMonth() + 1).padStart(2, '0');
+  const day = String(now.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+})();
 const SLIDER_WIDTH = Dimensions.get('window').width - 40;
 
 const BANNER_SLIDES = [
