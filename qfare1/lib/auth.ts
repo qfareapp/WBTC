@@ -54,7 +54,22 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         const [token, userJson] = await AsyncStorage.multiGet([TOKEN_KEY, USER_KEY]);
         const t = token[1];
         const u = userJson[1] ? (JSON.parse(userJson[1]) as PassengerUser) : null;
-        setState({ token: t, user: u, loading: false });
+        if (!t) {
+          setState({ token: null, user: null, loading: false });
+          return;
+        }
+
+        try {
+          const data = await apiGet<{ ok: boolean; user: PassengerUser }>(
+            '/api/passenger-auth/me',
+            t
+          );
+          await AsyncStorage.setItem(USER_KEY, JSON.stringify(data.user));
+          setState({ token: t, user: data.user, loading: false });
+        } catch {
+          await AsyncStorage.multiRemove([TOKEN_KEY, USER_KEY]);
+          setState({ token: null, user: null, loading: false });
+        }
       } catch {
         setState({ token: null, user: null, loading: false });
       }
@@ -68,13 +83,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   // ---------------------------------------------------------------------------
 
-  const login = async (email: string): Promise<PassengerUser> => {
-    const data = await apiPost<{ ok: boolean; token: string; user: PassengerUser }>(
-      '/api/passenger-auth/login',
-      { email }
-    );
-    await persist(data.token, data.user);
-    return data.user;
+  const login = async (_email: string): Promise<PassengerUser> => {
+    throw new Error('Direct login is disabled. Use OTP verification.');
   };
 
   // OTP methods — kept for future use
@@ -110,7 +120,10 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       );
       await AsyncStorage.setItem(USER_KEY, JSON.stringify(data.user));
       setState(prev => ({ ...prev, user: data.user }));
-    } catch { /* non-fatal */ }
+    } catch {
+      await AsyncStorage.multiRemove([TOKEN_KEY, USER_KEY]);
+      setState({ token: null, user: null, loading: false });
+    }
   };
 
   const logout = async () => {

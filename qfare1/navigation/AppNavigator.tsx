@@ -8,6 +8,7 @@ import QRScannerScreen from '../screens/QRScannerScreen';
 import TicketScreen from '../screens/TicketScreen';
 import ProfileScreen from '../screens/ProfileScreen';
 import LoginScreen from '../screens/LoginScreen';
+import OtpScreen from '../screens/OtpScreen';
 import CompleteProfileScreen from '../screens/CompleteProfileScreen';
 import { useAuth } from '../lib/auth';
 import { palette } from '../lib/theme';
@@ -27,6 +28,9 @@ export type RootStackParamList = {
     tripInstanceId: string | null;
   };
   Login: undefined;
+  Otp: {
+    email: string;
+  };
   CompleteProfile: undefined;
 };
 
@@ -136,6 +140,7 @@ const AppNavigator = () => {
     return (
       <Stack.Navigator screenOptions={{ headerShown: false }}>
         <Stack.Screen name="Login" component={LoginScreen} />
+        <Stack.Screen name="Otp" component={OtpScreen} />
       </Stack.Navigator>
     );
   }
