@@ -35,6 +35,18 @@ const normalizePushTargets = (items = []) =>
     ).values()
   );
 
+const selectPreferredPushTargets = (targets = []) => {
+  const androidFcmTargets = targets.filter(
+    (target) => target.platform === "android" && target.provider === "fcm"
+  );
+
+  if (!androidFcmTargets.length) return targets;
+
+  return targets.filter(
+    (target) => !(target.platform === "android" && target.provider === "expo")
+  );
+};
+
 const buildNotificationText = (offers) => {
   const count = offers.length;
   const firstOffer = offers[0];
@@ -45,13 +57,13 @@ const buildNotificationText = (offers) => {
 
   if (count === 1) {
     return {
-      title: "New trip offer",
+      title: "WBTC Driver - New trip offer",
       body: content,
     };
   }
 
   return {
-    title: `${count} trip offers available`,
+    title: `WBTC Driver - ${count} trip offers available`,
     body: content,
   };
 };
@@ -198,7 +210,7 @@ const pruneInvalidTokens = async (driver, invalidTokens) => {
 };
 
 const notifyDriverForOffers = async (driver, date) => {
-  const targets = normalizePushTargets(driver.pushTokens);
+  const targets = selectPreferredPushTargets(normalizePushTargets(driver.pushTokens));
   if (!targets.length) return;
 
   const result = await collectEligibleTripOffersForDriver({ driverId: driver._id, date, debug: false });

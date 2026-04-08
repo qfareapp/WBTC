@@ -900,7 +900,13 @@ exports.registerPushToken = asyncHandler(async (req, res) => {
       provider: normalizedProvider,
       updatedAt: new Date(),
     },
-    ...existingTokens.filter((item) => String(item?.token || "") !== normalizedToken),
+    ...existingTokens.filter((item) => {
+      const itemToken = String(item?.token || "").trim();
+      const itemPlatform = String(item?.platform || "").trim() || null;
+      if (itemToken === normalizedToken) return false;
+      if (normalizedPlatform && itemPlatform === normalizedPlatform) return false;
+      return true;
+    }),
   ].slice(0, 5);
   await driver.save();
 
