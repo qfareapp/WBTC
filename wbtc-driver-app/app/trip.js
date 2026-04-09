@@ -18,6 +18,7 @@ import {
   requestDriverBackgroundPermissions,
   startDriverBackgroundTracking,
   stopDriverBackgroundTracking,
+  updateDriverBackgroundNotification,
   writeDriverTrackingDebug,
 } from "../lib/driverBackgroundLocation";
 
@@ -264,6 +265,26 @@ export default function Trip() {
       }
 
       setTrip(nextTrip);
+
+      if (
+        nextTrip?.timing?.actualStartTime &&
+        nextTrip?.status !== "Completed" &&
+        nextTrip?.status !== "Cancelled"
+      ) {
+        const [apiBase, token] = await Promise.all([
+          AsyncStorage.getItem(API_BASE_KEY),
+          AsyncStorage.getItem(TOKEN_KEY),
+        ]);
+        if (apiBase && token) {
+          await updateDriverBackgroundNotification({
+            tripInstanceId: tripId,
+            apiBase,
+            token,
+            stopName: nextTrip?.upcomingStopWaiting?.stopName || null,
+            passengersWaiting: nextTrip?.upcomingStopWaiting?.passengersWaiting || 0,
+          });
+        }
+      }
     } catch (err) {
       setNotice(err.message);
     }

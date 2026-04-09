@@ -5,6 +5,8 @@ import * as TaskManager from "expo-task-manager";
 const DRIVER_LOCATION_TASK = "wbtc-driver-background-location";
 const DRIVER_LOCATION_META_KEY = "wbtc_driver_background_location_meta";
 const DRIVER_LOCATION_DEBUG_KEY = "wbtc_driver_background_location_debug";
+const DEFAULT_NOTIFICATION_TITLE = "Trip in progress";
+const DEFAULT_NOTIFICATION_BODY = "Live trip tracking is active in the background.";
 
 const readTrackingMeta = async () => {
   try {
@@ -69,15 +71,45 @@ export const requestDriverBackgroundPermissions = async () => {
 };
 
 export const startDriverBackgroundTracking = async ({ tripInstanceId, apiBase, token }) => {
+  return startDriverBackgroundTrackingWithNotification({
+    tripInstanceId,
+    apiBase,
+    token,
+    notificationTitle: DEFAULT_NOTIFICATION_TITLE,
+    notificationBody: DEFAULT_NOTIFICATION_BODY,
+  });
+};
+
+export const startDriverBackgroundTrackingWithNotification = async ({
+  tripInstanceId,
+  apiBase,
+  token,
+  notificationTitle = DEFAULT_NOTIFICATION_TITLE,
+  notificationBody = DEFAULT_NOTIFICATION_BODY,
+}) => {
   if (!tripInstanceId || !apiBase || !token) return false;
 
+  const nextMeta = {
+    tripInstanceId,
+    apiBase,
+    token,
+    notificationTitle,
+    notificationBody,
+  };
+  const existingMeta = await readTrackingMeta();
   await AsyncStorage.setItem(
     DRIVER_LOCATION_META_KEY,
-    JSON.stringify({ tripInstanceId, apiBase, token })
+    JSON.stringify(nextMeta)
   );
 
   const alreadyStarted = await Location.hasStartedLocationUpdatesAsync(DRIVER_LOCATION_TASK);
-  if (alreadyStarted) {
+  const notificationChanged =
+    existingMeta?.notificationTitle !== notificationTitle ||
+    existingMeta?.notificationBody !== notificationBody;
+
+  if (alreadyStarted && notificationChanged) {
+    await Location.stopLocationUpdatesAsync(DRIVER_LOCATION_TASK);
+  } else if (alreadyStarted) {
     return true;
   }
 
@@ -89,14 +121,36 @@ export const startDriverBackgroundTracking = async ({ tripInstanceId, apiBase, t
     deferredUpdatesInterval: 15000,
     deferredUpdatesDistance: 30,
     foregroundService: {
-      notificationTitle: "Trip in progress",
-      notificationBody: "Live trip tracking is active in the background.",
+      notificationTitle,
+      notificationBody,
       notificationColor: "#0A1628",
       killServiceOnDestroy: false,
     },
   });
 
   return true;
+};
+
+export const updateDriverBackgroundNotification = async ({
+  tripInstanceId,
+  apiBase,
+  token,
+  stopName,
+  passengersWaiting,
+}) => {
+  const waitingCount = Number(passengersWaiting || 0);
+  const hasStop = Boolean(String(stopName || "").trim());
+  const notificationBody = hasStop
+    ? `Next stop: ${String(stopName).trim()} • ${waitingCount} tapped waiting`
+    : DEFAULT_NOTIFICATION_BODY;
+
+  return startDriverBackgroundTrackingWithNotification({
+    tripInstanceId,
+    apiBase,
+    token,
+    notificationTitle: DEFAULT_NOTIFICATION_TITLE,
+    notificationBody,
+  });
 };
 
 export const stopDriverBackgroundTracking = async () => {
