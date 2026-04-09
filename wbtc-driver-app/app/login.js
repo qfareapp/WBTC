@@ -4,7 +4,11 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import { useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import QfareLogo from "../components/QfareLogo";
-import { syncDriverPushTokenRegistration, unregisterStoredDriverPushToken } from "../utils/pushNotifications";
+import {
+  getStoredPushRegistrationError,
+  syncDriverPushTokenRegistration,
+  unregisterStoredDriverPushToken,
+} from "../utils/pushNotifications";
 
 const API_BASE_KEY = "wbtc_api_base";
 const TOKEN_KEY = "wbtc_driver_token";
@@ -12,6 +16,7 @@ const DRIVER_KEY = "wbtc_driver_profile";
 const CONDUCTOR_KEY = "wbtc_conductor_profile";
 const OWNER_KEY = "wbtc_owner_profile";
 const USER_ROLE_KEY = "wbtc_user_role";
+const MUST_CHANGE_PASSWORD_KEY = "wbtc_must_change_password";
 const PRODUCTION_API_BASE = "https://wbtc-aduk.onrender.com";
 const roleMeta = {
   DRIVER: { label: "Driver", icon: "car-sport-outline", accent: "#0090E0" },
@@ -36,6 +41,7 @@ export default function Login() {
       const storedBase = await AsyncStorage.getItem(API_BASE_KEY);
       const token = await AsyncStorage.getItem(TOKEN_KEY);
       const savedRole = await AsyncStorage.getItem(USER_ROLE_KEY);
+      const mustChangePassword = await AsyncStorage.getItem(MUST_CHANGE_PASSWORD_KEY);
       const isDevBase =
         Boolean(storedBase) &&
         storedBase !== PRODUCTION_API_BASE &&
@@ -51,6 +57,10 @@ export default function Login() {
       if (savedRole === "CONDUCTOR") setRole("CONDUCTOR");
       if (savedRole === "OWNER") setRole("OWNER");
       if (token) {
+        if (mustChangePassword === "true" && (savedRole === "DRIVER" || savedRole === "CONDUCTOR")) {
+          router.replace("/change-password");
+          return;
+        }
         if (savedRole === "CONDUCTOR") {
           router.replace("/(conductor-tabs)/active");
         } else if (savedRole === "OWNER") {
@@ -70,9 +80,15 @@ export default function Login() {
         setError("Username and password are required.");
         return;
       }
-    } else if (!empId.trim()) {
-      setError("Employee ID is required.");
-      return;
+    } else {
+      if (!empId.trim()) {
+        setError("Employee ID is required.");
+        return;
+      }
+      if (!password.trim()) {
+        setError("Password is required.");
+        return;
+      }
     }
     setError("");
     setBusy(true);
@@ -93,11 +109,18 @@ export default function Login() {
         body: JSON.stringify(
           role === "OWNER"
             ? { username: username.trim(), password: password.trim() }
-            : { empId: empId.trim() }
+            : { empId: empId.trim(), password: password.trim() }
         ),
       });
       const text = await response.text();
-      const data = text ? JSON.parse(text) : {};
+      let data = {};
+      if (text) {
+        try {
+          data = JSON.parse(text);
+        } catch {
+          data = { message: text };
+        }
+      }
       if (!response.ok) throw new Error(data.message || "Login failed");
 
       if (previousRole === "DRIVER" && previousApiBase && previousAuthToken) {
@@ -111,11 +134,16 @@ export default function Login() {
       await AsyncStorage.setItem(API_BASE_KEY, activeApiBase);
       await AsyncStorage.setItem(TOKEN_KEY, data.token);
       await AsyncStorage.setItem(USER_ROLE_KEY, role);
+      if (role === "OWNER") {
+        await AsyncStorage.removeItem(MUST_CHANGE_PASSWORD_KEY);
+      } else {
+        await AsyncStorage.setItem(MUST_CHANGE_PASSWORD_KEY, data.mustChangePassword ? "true" : "false");
+      }
       if (role === "CONDUCTOR") {
         await AsyncStorage.removeItem(DRIVER_KEY);
         await AsyncStorage.removeItem(OWNER_KEY);
         await AsyncStorage.setItem(CONDUCTOR_KEY, JSON.stringify(data.conductor || {}));
-        router.replace("/(conductor-tabs)/active");
+        router.replace(data.mustChangePassword ? "/change-password" : "/(conductor-tabs)/active");
       } else if (role === "OWNER") {
         if (data.user?.role !== "OWNER") {
           throw new Error("This account is not an OWNER account.");
@@ -128,12 +156,20 @@ export default function Login() {
         await AsyncStorage.removeItem(CONDUCTOR_KEY);
         await AsyncStorage.removeItem(OWNER_KEY);
         await AsyncStorage.setItem(DRIVER_KEY, JSON.stringify(data.driver || {}));
-        await syncDriverPushTokenRegistration({
-          apiBase: activeApiBase,
-          authToken: data.token,
-          role: "DRIVER",
-        });
-        router.replace("/(tabs)/active");
+        if (!data.mustChangePassword) {
+          const pushToken = await syncDriverPushTokenRegistration({
+            apiBase: activeApiBase,
+            authToken: data.token,
+            role: "DRIVER",
+          });
+          if (!pushToken) {
+            const pushError = await getStoredPushRegistrationError();
+            if (pushError) {
+              throw new Error(pushError);
+            }
+          }
+        }
+        router.replace(data.mustChangePassword ? "/change-password" : "/(tabs)/active");
       }
     } catch (err) {
       setError(err.message);
@@ -180,7 +216,7 @@ export default function Login() {
                 style={styles.input}
                 value={devApiBase}
                 onChangeText={setDevApiBase}
-                placeholder="http://192.168.1.34:5000"
+                placeholder="http://192.168.15.163:5000"
                 placeholderTextColor="rgba(255,255,255,0.24)"
                 autoCapitalize="none"
                 autoCorrect={false}
@@ -220,6 +256,16 @@ export default function Login() {
                 placeholder="EMP123"
                 placeholderTextColor="rgba(255,255,255,0.24)"
                 autoCapitalize="characters"
+              />
+              <Text style={styles.label}>Password</Text>
+              <TextInput
+                style={styles.input}
+                value={password}
+                onChangeText={setPassword}
+                placeholder="Password"
+                placeholderTextColor="rgba(255,255,255,0.24)"
+                secureTextEntry
+                autoCapitalize="none"
               />
             </>
           )}
@@ -266,7 +312,7 @@ export default function Login() {
               !(
                 role === "OWNER"
                   ? username.trim() && password.trim()
-                  : empId.trim()
+                  : empId.trim() && password.trim()
               )
                 ? styles.buttonDisabled
                 : null,

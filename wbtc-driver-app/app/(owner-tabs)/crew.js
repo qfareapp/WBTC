@@ -1,16 +1,20 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
 import {
+  Modal,
   RefreshControl,
+  Share,
   ScrollView,
   StyleSheet,
   Text,
+  TextInput,
   TouchableOpacity,
   View,
 } from "react-native";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { useRouter } from "expo-router";
 import { useFocusEffect } from "@react-navigation/native";
+import * as Clipboard from "expo-clipboard";
 import { useAppLanguage } from "../../contexts/shared-language";
 import { getOpsDate } from "../../utils/opsTime";
 
@@ -70,6 +74,8 @@ export default function OwnerCrewScreen() {
   const [assignments, setAssignments] = useState([]);
   const [fleetBuses, setFleetBuses] = useState([]);
   const [activeSection, setActiveSection] = useState("drivers");
+  const [resettingCrewId, setResettingCrewId] = useState("");
+  const [credentialSheet, setCredentialSheet] = useState(null);
 
   const getAuth = useCallback(async () => {
     const [apiBase, token, role] = await Promise.all([
@@ -94,7 +100,7 @@ export default function OwnerCrewScreen() {
       const date = today();
       const nonce = Date.now();
       const [personnelRes, contextRes, dashboardRes] = await Promise.all([
-        fetch(`${auth.apiBase}/api/owner/personnel?t=${nonce}`, {
+        fetch(`${auth.apiBase}/api/owner/personnel?all=true&t=${nonce}`, {
           headers: { Authorization: `Bearer ${auth.token}` },
         }),
         fetch(`${auth.apiBase}/api/owner/assign-crew?date=${date}&t=${nonce}`, {
@@ -206,6 +212,66 @@ export default function OwnerCrewScreen() {
     setRefreshing(false);
   };
 
+  const handleResetPassword = async (type, person) => {
+    try {
+      setResettingCrewId(person.id);
+      setNotice("");
+      const auth = await getAuth();
+      if (!auth) return;
+
+      const endpoint =
+        type === "drivers"
+          ? `/api/drivers/${person.id}/reset-password`
+          : `/api/conductors/${person.id}/reset-password`;
+
+      const response = await fetch(`${auth.apiBase}${endpoint}`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${auth.token}`,
+        },
+        body: JSON.stringify({}),
+      });
+
+      const text = await response.text();
+      const data = text ? JSON.parse(text) : {};
+      if (!response.ok) throw new Error(data.message || t("ownerCrew", "failedResetPassword"));
+
+      setNotice(
+        t("ownerCrew", "passwordResetSuccess", {
+          empId: data.credentials?.empId || person.empId,
+          password: data.credentials?.temporaryPassword || "",
+        })
+      );
+      setCredentialSheet({
+        name: person.name,
+        empId: data.credentials?.empId || person.empId,
+        password: data.credentials?.temporaryPassword || "",
+      });
+    } catch (err) {
+      setNotice(err.message);
+    } finally {
+      setResettingCrewId("");
+    }
+  };
+
+  const handleCopyCredentials = async () => {
+    if (!credentialSheet) return;
+    const message = `${credentialSheet.empId}\n${credentialSheet.password}`;
+    await Clipboard.setStringAsync(message);
+    setNotice(t("ownerCrew", "credentialsCopied"));
+  };
+
+  const handleShareCredentials = async () => {
+    if (!credentialSheet) return;
+    await Share.share({
+      message: t("ownerCrew", "shareCredentialsMessage", {
+        empId: credentialSheet.empId,
+        password: credentialSheet.password,
+      }),
+    });
+  };
+
   const driverRows = useMemo(
     () =>
       drivers.map((driver) => {
@@ -220,6 +286,7 @@ export default function OwnerCrewScreen() {
           attendance: isAssigned ? t("ownerCrew", "presentAssigned") : t("ownerCrew", "notAssigned"),
           tripStatus: isOnTrip ? t("ownerCrew", "onTripStatus") : t("ownerCrew", "notOnTrip"),
           status,
+          raw: driver,
         };
       }),
     [drivers, assignedDriverIds, onTripDriverIds, t]
@@ -239,6 +306,7 @@ export default function OwnerCrewScreen() {
           attendance: isAssigned ? t("ownerCrew", "presentAssigned") : t("ownerCrew", "notAssigned"),
           tripStatus: isOnTrip ? t("ownerCrew", "onTripStatus") : t("ownerCrew", "notOnTrip"),
           status,
+          raw: conductor,
         };
       }),
     [conductors, assignedConductorIds, onTripConductorIds, t]
@@ -429,12 +497,68 @@ export default function OwnerCrewScreen() {
                     <Text style={styles.metaLabel}>{t("ownerCrew", "trip")}</Text>
                     <Text style={styles.metaValue}>{person.tripStatus}</Text>
                   </View>
+                  <TouchableOpacity
+                    style={[
+                      styles.resetButton,
+                      resettingCrewId === person.id ? styles.resetButtonDisabled : null,
+                    ]}
+                    onPress={() => handleResetPassword(activeSection, person)}
+                    disabled={resettingCrewId === person.id}
+                    activeOpacity={0.9}
+                  >
+                    <Ionicons name="refresh-outline" size={14} color="#FFFFFF" />
+                    <Text style={styles.resetButtonText}>
+                      {resettingCrewId === person.id ? t("common", "saving") : t("ownerCrew", "resetPassword")}
+                    </Text>
+                  </TouchableOpacity>
                 </View>
               </View>
             </View>
           );
         })}
       </ScrollView>
+
+      <Modal visible={Boolean(credentialSheet)} transparent animationType="fade" onRequestClose={() => setCredentialSheet(null)}>
+        <View style={styles.modalBackdrop}>
+          <View style={styles.modalCard}>
+            <Text style={styles.modalTitle}>{t("ownerCrew", "temporaryCredentials")}</Text>
+            <Text style={styles.modalSubtitle}>
+              {credentialSheet?.name || "--"}
+            </Text>
+
+            <Text style={styles.modalLabel}>{t("ownerCrew", "id")}</Text>
+            <TextInput
+              style={styles.credentialInput}
+              value={credentialSheet?.empId || ""}
+              editable={false}
+              selectTextOnFocus
+            />
+
+            <Text style={styles.modalLabel}>{t("ownerCrew", "temporaryPassword")}</Text>
+            <TextInput
+              style={styles.credentialInput}
+              value={credentialSheet?.password || ""}
+              editable={false}
+              selectTextOnFocus
+            />
+
+            <View style={styles.modalActions}>
+              <TouchableOpacity style={styles.secondaryButton} onPress={handleCopyCredentials} activeOpacity={0.9}>
+                <Ionicons name="copy-outline" size={14} color="#FFFFFF" />
+                <Text style={styles.secondaryButtonText}>{t("ownerCrew", "copyCredentials")}</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={styles.primaryButton} onPress={handleShareCredentials} activeOpacity={0.9}>
+                <Ionicons name="share-social-outline" size={14} color="#FFFFFF" />
+                <Text style={styles.primaryButtonText}>{t("ownerCrew", "shareCredentials")}</Text>
+              </TouchableOpacity>
+            </View>
+
+            <TouchableOpacity style={styles.closeButton} onPress={() => setCredentialSheet(null)} activeOpacity={0.9}>
+              <Text style={styles.closeButtonText}>{t("common", "done")}</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
     </View>
   );
 }
@@ -614,5 +738,109 @@ const styles = StyleSheet.create({
     letterSpacing: 0.5,
   },
   metaValue: { color: "rgba(255,255,255,0.65)", fontSize: 12 },
+  resetButton: {
+    marginTop: 10,
+    alignSelf: "flex-start",
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    backgroundColor: "#3650A8",
+    borderRadius: 10,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+  },
+  resetButtonDisabled: {
+    opacity: 0.7,
+  },
+  resetButtonText: {
+    color: "#FFFFFF",
+    fontSize: 12,
+    fontWeight: "700",
+  },
+  modalBackdrop: {
+    flex: 1,
+    backgroundColor: "rgba(0,0,0,0.55)",
+    justifyContent: "center",
+    padding: 20,
+  },
+  modalCard: {
+    backgroundColor: "#10203A",
+    borderRadius: 20,
+    padding: 18,
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.08)",
+  },
+  modalTitle: {
+    color: "#FFFFFF",
+    fontSize: 18,
+    fontWeight: "800",
+  },
+  modalSubtitle: {
+    marginTop: 6,
+    color: "rgba(255,255,255,0.65)",
+    fontSize: 13,
+  },
+  modalLabel: {
+    marginTop: 14,
+    color: "rgba(255,255,255,0.4)",
+    fontSize: 11,
+    textTransform: "uppercase",
+    letterSpacing: 0.7,
+  },
+  credentialInput: {
+    marginTop: 8,
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.12)",
+    backgroundColor: "rgba(255,255,255,0.05)",
+    borderRadius: 12,
+    color: "#FFFFFF",
+    paddingHorizontal: 12,
+    paddingVertical: 12,
+  },
+  modalActions: {
+    marginTop: 18,
+    flexDirection: "row",
+    gap: 10,
+  },
+  secondaryButton: {
+    flex: 1,
+    borderRadius: 12,
+    paddingVertical: 12,
+    backgroundColor: "#3650A8",
+    alignItems: "center",
+    justifyContent: "center",
+    flexDirection: "row",
+    gap: 6,
+  },
+  secondaryButtonText: {
+    color: "#FFFFFF",
+    fontWeight: "700",
+    fontSize: 12,
+  },
+  primaryButton: {
+    flex: 1,
+    borderRadius: 12,
+    paddingVertical: 12,
+    backgroundColor: "#00C87A",
+    alignItems: "center",
+    justifyContent: "center",
+    flexDirection: "row",
+    gap: 6,
+  },
+  primaryButtonText: {
+    color: "#FFFFFF",
+    fontWeight: "800",
+    fontSize: 12,
+  },
+  closeButton: {
+    marginTop: 12,
+    alignSelf: "flex-end",
+    paddingVertical: 10,
+    paddingHorizontal: 4,
+  },
+  closeButtonText: {
+    color: "rgba(255,255,255,0.8)",
+    fontWeight: "700",
+  },
   emptyText: { marginTop: 8, color: "rgba(255,255,255,0.55)" },
 });

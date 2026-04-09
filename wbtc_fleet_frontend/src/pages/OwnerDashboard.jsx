@@ -17,9 +17,12 @@ function OwnerDashboard({ apiBase, token, user, setToken, setUser }) {
   });
   const [data, setData] = useState(null);
   const [personnel, setPersonnel] = useState({ drivers: [], conductors: [] });
+  const [allPersonnel, setAllPersonnel] = useState({ drivers: [], conductors: [] });
   const [crewDraft, setCrewDraft] = useState({});
   const [locationDraft, setLocationDraft] = useState({});
   const [locationSavingBusId, setLocationSavingBusId] = useState("");
+  const [resettingKey, setResettingKey] = useState("");
+  const [credentials, setCredentials] = useState(null);
   const [lastSyncAt, setLastSyncAt] = useState(null);
 
   const showNotice = (type, message) => {
@@ -75,6 +78,15 @@ function OwnerDashboard({ apiBase, token, user, setToken, setUser }) {
     }
   };
 
+  const loadAllPersonnel = async () => {
+    try {
+      const payload = await apiFetch("/api/owner/personnel?all=true");
+      setAllPersonnel({ drivers: payload.drivers || [], conductors: payload.conductors || [] });
+    } catch (error) {
+      showNotice("error", error.message);
+    }
+  };
+
   useEffect(() => {
     loadDashboard({ silent: true });
   }, [query.mode, query.date, query.month, query.startDate, query.endDate]);
@@ -88,7 +100,49 @@ function OwnerDashboard({ apiBase, token, user, setToken, setUser }) {
 
   useEffect(() => {
     loadPersonnel();
+    loadAllPersonnel();
   }, []);
+
+  const onResetPersonnelPassword = async (type, person) => {
+    const key = `${type}:${person._id}`;
+    setResettingKey(key);
+    try {
+      const path = type === "driver" ? `/api/drivers/${person._id}/reset-password` : `/api/conductors/${person._id}/reset-password`;
+      const payload = await apiFetch(path, {
+        method: "POST",
+        body: JSON.stringify({}),
+      });
+      const temporaryPassword = payload.credentials?.temporaryPassword || "";
+      setCredentials({
+        name: person.name,
+        empId: payload.credentials?.empId || person.empId,
+        password: temporaryPassword,
+      });
+      showNotice("success", `${person.name} reset. Credentials ready to copy/share.`);
+    } catch (error) {
+      showNotice("error", error.message);
+    } finally {
+      setResettingKey("");
+    }
+  };
+
+  const copyCredentials = async () => {
+    if (!credentials) return;
+    const text = `Employee ID: ${credentials.empId}\nTemporary password: ${credentials.password}`;
+    await navigator.clipboard.writeText(text);
+    showNotice("success", "Credentials copied.");
+  };
+
+  const shareCredentials = async () => {
+    if (!credentials) return;
+    const text = `Employee ID: ${credentials.empId}\nTemporary password: ${credentials.password}`;
+    if (navigator.share) {
+      await navigator.share({ text });
+    } else {
+      await navigator.clipboard.writeText(text);
+      showNotice("success", "Share not available. Credentials copied instead.");
+    }
+  };
 
   const onToggleBus = async (bus) => {
     const nextStatus = bus.status === "Active" ? "UnderMaintenance" : "Active";
@@ -210,6 +264,35 @@ function OwnerDashboard({ apiBase, token, user, setToken, setUser }) {
 
           <main className="main">
             {notice && <div className={`notice ${notice.type}`}>{notice.message}</div>}
+            {credentials && (
+              <section className="panel">
+                <div className="panel-header">
+                  <h3>Temporary credentials</h3>
+                  <span className="pill">{credentials.name}</span>
+                </div>
+                <div className="form">
+                  <label className="field">
+                    Employee ID
+                    <input value={credentials.empId} readOnly />
+                  </label>
+                  <label className="field">
+                    Temporary password
+                    <input value={credentials.password} readOnly />
+                  </label>
+                  <div className="inline">
+                    <button className="btn outline" type="button" onClick={copyCredentials}>
+                      Copy
+                    </button>
+                    <button className="btn primary" type="button" onClick={shareCredentials}>
+                      Share
+                    </button>
+                    <button className="btn ghost" type="button" onClick={() => setCredentials(null)}>
+                      Close
+                    </button>
+                  </div>
+                </div>
+              </section>
+            )}
 
             <section className="panel">
               <div className="panel-header">
@@ -430,6 +513,98 @@ function OwnerDashboard({ apiBase, token, user, setToken, setUser }) {
                   </tbody>
                 </table>
               )}
+            </section>
+
+            <section className="grid two">
+              <div className="panel">
+                <div className="panel-header">
+                  <h3>Drivers</h3>
+                  <span className="pill">{allPersonnel.drivers.length} total</span>
+                </div>
+                {allPersonnel.drivers.length === 0 ? (
+                  <div className="list-item">
+                    <div>
+                      <strong>No tagged drivers</strong>
+                      <span>Drivers linked to this owner will appear here.</span>
+                    </div>
+                  </div>
+                ) : (
+                  <table className="table">
+                    <thead>
+                      <tr>
+                        <th>Name</th>
+                        <th>Emp ID</th>
+                        <th>Status</th>
+                        <th>Action</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {allPersonnel.drivers.map((driver) => (
+                        <tr key={driver._id}>
+                          <td>{driver.name}</td>
+                          <td>{driver.empId}</td>
+                          <td><span className="chip">{driver.status}</span></td>
+                          <td>
+                            <button
+                              className="btn ghost"
+                              type="button"
+                              onClick={() => onResetPersonnelPassword("driver", driver)}
+                              disabled={resettingKey === `driver:${driver._id}`}
+                            >
+                              {resettingKey === `driver:${driver._id}` ? "Resetting..." : "Reset password"}
+                            </button>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                )}
+              </div>
+
+              <div className="panel">
+                <div className="panel-header">
+                  <h3>Conductors</h3>
+                  <span className="pill">{allPersonnel.conductors.length} total</span>
+                </div>
+                {allPersonnel.conductors.length === 0 ? (
+                  <div className="list-item">
+                    <div>
+                      <strong>No tagged conductors</strong>
+                      <span>Conductors linked to this owner will appear here.</span>
+                    </div>
+                  </div>
+                ) : (
+                  <table className="table">
+                    <thead>
+                      <tr>
+                        <th>Name</th>
+                        <th>Emp ID</th>
+                        <th>Status</th>
+                        <th>Action</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {allPersonnel.conductors.map((conductor) => (
+                        <tr key={conductor._id}>
+                          <td>{conductor.name}</td>
+                          <td>{conductor.empId}</td>
+                          <td><span className="chip">{conductor.status}</span></td>
+                          <td>
+                            <button
+                              className="btn ghost"
+                              type="button"
+                              onClick={() => onResetPersonnelPassword("conductor", conductor)}
+                              disabled={resettingKey === `conductor:${conductor._id}`}
+                            >
+                              {resettingKey === `conductor:${conductor._id}` ? "Resetting..." : "Reset password"}
+                            </button>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                )}
+              </div>
             </section>
           </main>
         </div>

@@ -1,7 +1,7 @@
 const mongoose = require("mongoose");
 const Driver = require("../models/Driver");
 const Conductor = require("../models/Conductor");
-const { DEFAULT_CREW_PASSWORD, hashPassword } = require("../utils/crewPassword");
+const { generateTemporaryPassword, hashPassword } = require("../utils/crewPassword");
 
 async function main() {
   if (!process.env.MONGO_URI) {
@@ -10,34 +10,33 @@ async function main() {
 
   await mongoose.connect(process.env.MONGO_URI);
 
-  const defaultHash = await hashPassword(DEFAULT_CREW_PASSWORD);
-  const now = new Date();
-
-  const [driverResult, conductorResult] = await Promise.all([
-    Driver.updateMany(
-      { passwordHash: { $exists: false } },
-      {
-        $set: {
-          passwordHash: defaultHash,
-          mustChangePassword: true,
-          passwordResetAt: now,
-        },
-      }
-    ),
-    Conductor.updateMany(
-      { passwordHash: { $exists: false } },
-      {
-        $set: {
-          passwordHash: defaultHash,
-          mustChangePassword: true,
-          passwordResetAt: now,
-        },
-      }
-    ),
+  const [drivers, conductors] = await Promise.all([
+    Driver.find({ passwordHash: { $exists: false } }).select("_id empId name"),
+    Conductor.find({ passwordHash: { $exists: false } }).select("_id empId name"),
   ]);
 
-  console.log(`Drivers updated: ${driverResult.modifiedCount || 0}`);
-  console.log(`Conductors updated: ${conductorResult.modifiedCount || 0}`);
+  console.log("Generated temporary passwords:");
+
+  for (const driver of drivers) {
+    const temporaryPassword = generateTemporaryPassword();
+    driver.passwordHash = await hashPassword(temporaryPassword);
+    driver.mustChangePassword = true;
+    driver.passwordResetAt = new Date();
+    await driver.save();
+    console.log(`DRIVER ${driver.empId} ${driver.name} -> ${temporaryPassword}`);
+  }
+
+  for (const conductor of conductors) {
+    const temporaryPassword = generateTemporaryPassword();
+    conductor.passwordHash = await hashPassword(temporaryPassword);
+    conductor.mustChangePassword = true;
+    conductor.passwordResetAt = new Date();
+    await conductor.save();
+    console.log(`CONDUCTOR ${conductor.empId} ${conductor.name} -> ${temporaryPassword}`);
+  }
+
+  console.log(`Drivers updated: ${drivers.length}`);
+  console.log(`Conductors updated: ${conductors.length}`);
 
   await mongoose.disconnect();
 }

@@ -3,7 +3,7 @@ const Depot = require("../models/Depot");
 const User = require("../models/User");
 const ApiError = require("../utils/ApiError");
 const asyncHandler = require("../utils/asyncHandler");
-const { DEFAULT_CREW_PASSWORD, hashPassword } = require("../utils/crewPassword");
+const { generateTemporaryPassword, hashPassword } = require("../utils/crewPassword");
 
 const normalizeDepotScope = (req) => {
   if (req.user.role === "ADMIN") return null;
@@ -73,7 +73,8 @@ exports.createDriver = asyncHandler(async (req, res) => {
     throw new ApiError(400, "Driver operatorType must match selected depot operatorType");
   }
 
-  const passwordHash = await hashPassword(DEFAULT_CREW_PASSWORD);
+  const temporaryPassword = generateTemporaryPassword();
+  const passwordHash = await hashPassword(temporaryPassword);
 
   const driver = await Driver.create({
     empId,
@@ -97,7 +98,7 @@ exports.createDriver = asyncHandler(async (req, res) => {
     driver: serializeDriver(driver),
     credentials: {
       empId: driver.empId,
-      temporaryPassword: DEFAULT_CREW_PASSWORD,
+      temporaryPassword,
       mustChangePassword: true,
     },
   });
@@ -208,7 +209,7 @@ exports.resetDriverPassword = asyncHandler(async (req, res) => {
   if (!driver) throw new ApiError(404, "Driver not found");
   ensureDriverAccess(req, driver);
 
-  const nextPassword = String(temporaryPassword || DEFAULT_CREW_PASSWORD).trim();
+  const nextPassword = String(temporaryPassword || generateTemporaryPassword()).trim();
   if (!nextPassword) throw new ApiError(400, "temporaryPassword required");
 
   driver.passwordHash = await hashPassword(nextPassword);

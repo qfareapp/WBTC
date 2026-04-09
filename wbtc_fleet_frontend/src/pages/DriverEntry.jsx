@@ -26,6 +26,7 @@ function DriverEntry({ apiBase, token, operatorScope, setOperatorScope }) {
   const [owners, setOwners] = useState([]);
   const [drivers, setDrivers] = useState([]);
   const [notice, setNotice] = useState(null);
+  const [credentials, setCredentials] = useState(null);
 
   const showNotice = (type, message) => {
     setNotice({ type, message });
@@ -170,9 +171,39 @@ function DriverEntry({ apiBase, token, operatorScope, setOperatorScope }) {
       }
       setForm(initialForm);
       setEditingDriverId(null);
-      showNotice("success", `Driver ${isEdit ? "updated" : "created"}.`);
+      showNotice(
+        "success",
+        isEdit
+          ? "Driver updated."
+          : `Driver created. Temporary credentials are ready to copy/share.`
+      );
+      if (!isEdit && data.credentials) {
+        setCredentials({
+          name: payload.name,
+          empId: data.credentials.empId,
+          password: data.credentials.temporaryPassword,
+        });
+      }
     } catch (error) {
       showNotice("error", error.message);
+    }
+  };
+
+  const copyCredentials = async () => {
+    if (!credentials) return;
+    const text = `Employee ID: ${credentials.empId}\nTemporary password: ${credentials.password}`;
+    await navigator.clipboard.writeText(text);
+    showNotice("success", "Credentials copied.");
+  };
+
+  const shareCredentials = async () => {
+    if (!credentials) return;
+    const text = `Employee ID: ${credentials.empId}\nTemporary password: ${credentials.password}`;
+    if (navigator.share) {
+      await navigator.share({ text });
+    } else {
+      await navigator.clipboard.writeText(text);
+      showNotice("success", "Share not available. Credentials copied instead.");
     }
   };
 
@@ -233,6 +264,35 @@ function DriverEntry({ apiBase, token, operatorScope, setOperatorScope }) {
 
           <main className="main">
             {notice && <div className={`notice ${notice.type}`}>{notice.message}</div>}
+            {credentials && (
+              <section className="panel">
+                <div className="panel-header">
+                  <h3>Temporary credentials</h3>
+                  <span className="pill">{credentials.name}</span>
+                </div>
+                <div className="form">
+                  <label className="field">
+                    Employee ID
+                    <input value={credentials.empId} readOnly />
+                  </label>
+                  <label className="field">
+                    Temporary password
+                    <input value={credentials.password} readOnly />
+                  </label>
+                  <div className="inline">
+                    <button className="btn outline" type="button" onClick={copyCredentials}>
+                      Copy
+                    </button>
+                    <button className="btn primary" type="button" onClick={shareCredentials}>
+                      Share
+                    </button>
+                    <button className="btn ghost" type="button" onClick={() => setCredentials(null)}>
+                      Close
+                    </button>
+                  </div>
+                </div>
+              </section>
+            )}
 
             <section className="grid two">
               <div className="panel">
