@@ -14,7 +14,6 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import * as Location from "expo-location";
 import {
-  getDriverTrackingDebug,
   requestDriverBackgroundPermissions,
   stopDriverBackgroundTracking,
   updateDriverBackgroundNotification,
@@ -161,7 +160,6 @@ export default function Trip() {
   const [locationDisclosureVisible, setLocationDisclosureVisible] = useState(false);
   const [openingKmInput, setOpeningKmInput] = useState("");
   const [closingKmInput, setClosingKmInput] = useState("");
-  const [trackingDebug, setTrackingDebug] = useState(null);
   const locationDisclosureResolverRef = useRef(null);
 
   const isTripCompleted = trip?.status === "Completed";
@@ -343,11 +341,6 @@ export default function Trip() {
     }
   };
 
-  const refreshTrackingDebug = async () => {
-    const next = await getDriverTrackingDebug();
-    setTrackingDebug(next);
-  };
-
   const requestLocationDisclosureAcknowledgement = () =>
     new Promise((resolve) => {
       locationDisclosureResolverRef.current = resolve;
@@ -481,13 +474,6 @@ export default function Trip() {
   useEffect(() => {
     if (tripId) loadTrip();
   }, [tripId]);
-
-  useEffect(() => {
-    if (!tripId) return undefined;
-    void refreshTrackingDebug();
-    const interval = setInterval(refreshTrackingDebug, 5000);
-    return () => clearInterval(interval);
-  }, [tripId, isTracking]);
 
   useEffect(() => {
     if (!tripId) return undefined;
@@ -658,21 +644,6 @@ export default function Trip() {
           <Text style={styles.notice}>{locationNotice}</Text>
         </View>
       ) : null}
-      {isTracking ? (
-        <View style={styles.debugCard}>
-          <Text style={styles.debugTitle}>Tracking debug</Text>
-          <Text style={styles.debugText}>
-            Task active: {trackingDebug?.started ? "yes" : "no"}
-          </Text>
-          <Text style={styles.debugText}>
-            Last post: {trackingDebug?.debug?.lastPostAt ? new Date(trackingDebug.debug.lastPostAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false }) : "--"}
-          </Text>
-          <Text style={styles.debugText}>
-            Source: {trackingDebug?.debug?.source || "--"} | HTTP: {trackingDebug?.debug?.status ?? "--"}
-          </Text>
-        </View>
-      ) : null}
-
       {!trip ? (
         <Text style={styles.helper}>Loading trip...</Text>
       ) : (
@@ -1320,28 +1291,6 @@ const styles = StyleSheet.create({
     borderColor: "rgba(239,68,68,0.4)",
     paddingHorizontal: 12,
     paddingVertical: 10,
-  },
-  debugCard: {
-    marginTop: 12,
-    backgroundColor: "rgba(14,116,144,0.15)",
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: "rgba(34,211,238,0.35)",
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-    gap: 4,
-  },
-  debugTitle: {
-    color: "#67E8F9",
-    fontWeight: "800",
-    fontSize: 12,
-    textTransform: "uppercase",
-    letterSpacing: 1,
-  },
-  debugText: {
-    color: "#CFFAFE",
-    fontSize: 12.5,
-    fontWeight: "600",
   },
   helper: {
     marginTop: 16,
