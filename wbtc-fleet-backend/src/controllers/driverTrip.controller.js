@@ -167,6 +167,25 @@ const getEndLocation = (route, direction) => {
 
 const normalizeLocation = (value) => String(value || "").trim().toLowerCase();
 
+const deriveUpcomingStopWaiting = ({ waitingSummary, approachingStop }) => {
+  const normalizedApproachingStop = String(approachingStop || "").trim().toLowerCase();
+  if (!normalizedApproachingStop) {
+    return {
+      stopName: null,
+      passengersWaiting: 0,
+    };
+  }
+
+  const match = (waitingSummary?.stops || []).find(
+    (item) => String(item?.stopName || "").trim().toLowerCase() === normalizedApproachingStop
+  );
+
+  return {
+    stopName: match?.stopName || String(approachingStop || "").trim() || null,
+    passengersWaiting: Number(match?.passengersWaiting || 0),
+  };
+};
+
 const parseDate = (dateStr) => {
   try {
     return getOpsDayWindow(String(dateStr)).start;
@@ -339,6 +358,10 @@ const mapAssignment = async (assignment, busById = new Map(), options = {}) => {
       passedStops: trip?.passedStops || [],
     },
     waitingSummary,
+    upcomingStopWaiting: deriveUpcomingStopWaiting({
+      waitingSummary,
+      approachingStop: trip?.approachingStop || null,
+    }),
     pickupLocation,
     dropLocation,
     routeStops: routeStops.map((stop) => ({

@@ -14,9 +14,11 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import * as Location from "expo-location";
 import {
+  getDriverTrackingDebug,
   requestDriverBackgroundPermissions,
   startDriverBackgroundTracking,
   stopDriverBackgroundTracking,
+  writeDriverTrackingDebug,
 } from "../lib/driverBackgroundLocation";
 
 const API_BASE_KEY = "wbtc_api_base";
@@ -158,6 +160,7 @@ export default function Trip() {
   const [endModalVisible, setEndModalVisible] = useState(false);
   const [openingKmInput, setOpeningKmInput] = useState("");
   const [closingKmInput, setClosingKmInput] = useState("");
+  const [trackingDebug, setTrackingDebug] = useState(null);
 
   const isTripCompleted = trip?.status === "Completed";
   const hasStarted = Boolean(trip?.timing?.actualStartTime);
@@ -203,7 +206,12 @@ export default function Trip() {
       };
     });
   }, [progressStops.upcomingStops, trip?.waitingSummary?.stops]);
-  const nextUpcomingStop = upcomingStopsWithWaiting[0] || null;
+  const nextUpcomingStop = trip?.upcomingStopWaiting?.stopName
+    ? {
+        name: trip.upcomingStopWaiting.stopName,
+        passengersWaiting: trip.upcomingStopWaiting.passengersWaiting || 0,
+      }
+    : upcomingStopsWithWaiting[0] || null;
   const secondUpcomingStop = upcomingStopsWithWaiting[1] || null;
 
   const openingKmValue = parseKm(openingKmInput);
@@ -287,7 +295,7 @@ export default function Trip() {
         };
       }
 
-      await fetch(`${apiBase}/api/driver-trips/location`, {
+      const response = await fetch(`${apiBase}/api/driver-trips/location`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -299,9 +307,23 @@ export default function Trip() {
           longitude: coords.longitude,
         }),
       });
+
+      await writeDriverTrackingDebug({
+        lastPostAt: new Date().toISOString(),
+        source: "foreground",
+        ok: response.ok,
+        status: response.status,
+        latitude: coords.latitude,
+        longitude: coords.longitude,
+      });
     } catch (err) {
       setLocationNotice(err.message);
     }
+  };
+
+  const refreshTrackingDebug = async () => {
+    const next = await getDriverTrackingDebug();
+    setTrackingDebug(next);
   };
 
   const handleStart = async (openingKm) => {
@@ -323,6 +345,20 @@ export default function Trip() {
       const text = await response.text();
       const data = parseApiText(text);
       if (!response.ok) throw new Error(data.message || "Failed to start trip");
+      const permission = await requestDriverBackgroundPermissions();
+      if (!permission.ok) {
+        throw new Error(
+          permission.reason === "background_denied"
+            ? "Background location permission denied."
+            : "Location permission denied."
+        );
+      }
+      await startDriverBackgroundTracking({
+        tripInstanceId: tripId,
+        apiBase,
+        token,
+      });
+      await sendLocationUpdate();
       await loadTrip();
       return true;
     } catch (err) {
@@ -393,6 +429,13 @@ export default function Trip() {
 
   useEffect(() => {
     if (!tripId) return undefined;
+    void refreshTrackingDebug();
+    const interval = setInterval(refreshTrackingDebug, 5000);
+    return () => clearInterval(interval);
+  }, [tripId, isTracking]);
+
+  useEffect(() => {
+    if (!tripId) return undefined;
     const interval = setInterval(loadTrip, 20000);
     return () => clearInterval(interval);
   }, [tripId]);
@@ -403,8 +446,12 @@ export default function Trip() {
     let cancelled = false;
 
     const syncBackgroundTracking = async () => {
+      if (!trip) return;
+
       if (!isTracking) {
-        await stopDriverBackgroundTracking();
+        if (trip.status === "Completed") {
+          await stopDriverBackgroundTracking();
+        }
         return;
       }
 
@@ -451,10 +498,83 @@ export default function Trip() {
   }, [isTracking, tripId]);
 
   useEffect(() => {
-    return () => {
-      void stopDriverBackgroundTracking();
+    if (!tripId || !isTracking) return undefined;
+
+    let watchSub = null;
+    let backupInterval = null;
+    let cancelled = false;
+    let lastSentMs = 0;
+    const THROTTLE_MS = 15000;
+
+    const postCoords = async (coords) => {
+      const now = Date.now();
+      if (now - lastSentMs < THROTTLE_MS) return;
+      lastSentMs = now;
+      await sendLocationUpdate({
+        latitude: coords.latitude,
+        longitude: coords.longitude,
+      });
     };
-  }, []);
+
+    const startForegroundTracking = async () => {
+      try {
+        const permission = await Location.requestForegroundPermissionsAsync();
+        if (permission.status !== "granted") {
+          if (!cancelled) setLocationNotice("Location permission denied.");
+          return;
+        }
+
+        try {
+          const last = await Location.getLastKnownPositionAsync({
+            maxAge: 10 * 60 * 1000,
+            requiredAccuracy: 1000,
+          });
+          if (last) {
+            lastSentMs = 0;
+            await postCoords(last.coords);
+          }
+        } catch {
+          // Best effort only. The watcher/backup polling below will continue.
+        }
+
+        try {
+          watchSub = await Location.watchPositionAsync(
+            {
+              accuracy: Location.Accuracy.Balanced,
+              timeInterval: THROTTLE_MS,
+              distanceInterval: 30,
+            },
+            (location) => {
+              void postCoords(location.coords);
+            }
+          );
+        } catch {
+          // Non-fatal: polling fallback below still runs.
+        }
+
+        backupInterval = setInterval(async () => {
+          try {
+            const position = await Location.getLastKnownPositionAsync({ maxAge: 60 * 1000 });
+            if (position) await postCoords(position.coords);
+          } catch {
+            // Non-fatal.
+          }
+        }, 30000);
+      } catch (err) {
+        if (!cancelled) {
+          setLocationNotice(err.message || "Unable to start foreground trip tracking.");
+        }
+      }
+    };
+
+    void startForegroundTracking();
+
+    return () => {
+      cancelled = true;
+      if (watchSub) watchSub.remove();
+      if (backupInterval) clearInterval(backupInterval);
+    };
+  }, [isTracking, tripId]);
 
   return (
     <ScrollView contentContainerStyle={styles.container}>
@@ -471,6 +591,20 @@ export default function Trip() {
       {locationNotice ? (
         <View style={styles.noticeCard}>
           <Text style={styles.notice}>{locationNotice}</Text>
+        </View>
+      ) : null}
+      {isTracking ? (
+        <View style={styles.debugCard}>
+          <Text style={styles.debugTitle}>Tracking debug</Text>
+          <Text style={styles.debugText}>
+            Task active: {trackingDebug?.started ? "yes" : "no"}
+          </Text>
+          <Text style={styles.debugText}>
+            Last post: {trackingDebug?.debug?.lastPostAt ? new Date(trackingDebug.debug.lastPostAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false }) : "--"}
+          </Text>
+          <Text style={styles.debugText}>
+            Source: {trackingDebug?.debug?.source || "--"} | HTTP: {trackingDebug?.debug?.status ?? "--"}
+          </Text>
         </View>
       ) : null}
 
@@ -594,7 +728,9 @@ export default function Trip() {
                     <Text style={styles.progressLabel}>Upcoming stop</Text>
                     <Text style={styles.progressValue}>{nextUpcomingStop?.name || "--"}</Text>
                     <Text style={styles.progressMeta}>
-                      {nextUpcomingStop ? `${nextUpcomingStop.passengersWaiting} passengers waiting` : "No upcoming stop available"}
+                      {nextUpcomingStop
+                        ? `${nextUpcomingStop.passengersWaiting} passengers tapped waiting`
+                        : "No upcoming stop available"}
                     </Text>
                   </View>
                   <View style={styles.progressTile}>
@@ -1088,6 +1224,28 @@ const styles = StyleSheet.create({
     borderColor: "rgba(239,68,68,0.4)",
     paddingHorizontal: 12,
     paddingVertical: 10,
+  },
+  debugCard: {
+    marginTop: 12,
+    backgroundColor: "rgba(14,116,144,0.15)",
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: "rgba(34,211,238,0.35)",
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    gap: 4,
+  },
+  debugTitle: {
+    color: "#67E8F9",
+    fontWeight: "800",
+    fontSize: 12,
+    textTransform: "uppercase",
+    letterSpacing: 1,
+  },
+  debugText: {
+    color: "#CFFAFE",
+    fontSize: 12.5,
+    fontWeight: "600",
   },
   helper: {
     marginTop: 16,

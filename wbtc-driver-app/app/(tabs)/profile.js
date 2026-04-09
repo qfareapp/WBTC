@@ -45,6 +45,15 @@ const toDateString = (date) => {
   return `${year}-${month}-${day}`;
 };
 
+const formatDepot = (depot) => {
+  if (!depot) return "--";
+  if (typeof depot === "string") return depot;
+  if (typeof depot === "object") {
+    return depot.depotName || depot.depotCode || depot._id || depot.id || "--";
+  }
+  return "--";
+};
+
 export default function DriverProfile() {
   const router = useRouter();
   const { t } = useAppLanguage();
@@ -57,7 +66,7 @@ export default function DriverProfile() {
   const [rangeEndDate, setRangeEndDate] = useState(today());
   const [showStartPicker, setShowStartPicker] = useState(false);
   const [showEndPicker, setShowEndPicker] = useState(false);
-  const [profileOpen, setProfileOpen] = useState(false);
+  const [profileOpen, setProfileOpen] = useState(true);
   const [activeTab, setActiveTab] = useState("today");
 
   const loadSummary = async (startDate, endDate) => {
@@ -91,7 +100,10 @@ export default function DriverProfile() {
   useEffect(() => {
     const loadDriver = async () => {
       const driverJson = await AsyncStorage.getItem(DRIVER_KEY);
-      if (driverJson) setDriver(JSON.parse(driverJson));
+      if (driverJson) {
+        const parsedDriver = JSON.parse(driverJson);
+        setDriver(parsedDriver);
+      }
       await loadSummary(rangeStartDate, rangeEndDate);
     };
     loadDriver();
@@ -113,7 +125,10 @@ export default function DriverProfile() {
   const handleRefresh = async () => {
     setRefreshing(true);
     const driverJson = await AsyncStorage.getItem(DRIVER_KEY);
-    if (driverJson) setDriver(JSON.parse(driverJson));
+    if (driverJson) {
+      const parsedDriver = JSON.parse(driverJson);
+      setDriver(parsedDriver);
+    }
     await loadSummary(rangeStartDate, rangeEndDate);
     setRefreshing(false);
   };
@@ -141,7 +156,9 @@ export default function DriverProfile() {
             <View style={styles.profileHead}>
               <Text style={styles.roleTag}>{t("driverProfile", "role")}</Text>
               <Text style={styles.title}>{driver?.name || t("driverProfile", "role")}</Text>
-              <Text style={styles.subtitle}>{driver?.empId || "--"} | {driver?.status || t("common", "statusUnknown")}</Text>
+              <Text style={styles.subtitle}>
+                {driver?.empId || "--"} | {driver?.status || t("common", "statusUnknown")}
+              </Text>
             </View>
           </View>
           <View style={styles.languageToggleWrap}>
@@ -166,7 +183,7 @@ export default function DriverProfile() {
               </View>
               <View style={styles.infoRowBox}>
                 <Text style={styles.label}>{t("driverProfile", "depot")}</Text>
-                <Text style={styles.value}>{driver?.depotId || "--"}</Text>
+                <Text style={styles.value}>{formatDepot(driver?.depotId)}</Text>
               </View>
               <View style={styles.infoRowBox}>
                 <Text style={styles.label}>{t("driverProfile", "status")}</Text>

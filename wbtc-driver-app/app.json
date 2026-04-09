@@ -1,13 +1,11 @@
 {
   "expo": {
-    "name": "WBTC Driver",
+    "name": "Qfare Partner",
     "slug": "wbtc-driver-app",
     "version": "1.0.1",
     "scheme": "wbtcdriver",
     "icon": "./assets/images/icon.png",
     "splash": {
-      "image": "./assets/images/splash-icon.png",
-      "resizeMode": "cover",
       "backgroundColor": "#051326"
     },
     "plugins": [
@@ -25,6 +23,9 @@
       [
         "expo-notifications",
         {
+          "icon": "./assets/images/android-icon-monochrome.png",
+          "color": "#00C87A",
+          "defaultChannel": "trip-offers",
           "sounds": [
             "./assets/sounds/qfare_bus_jingle.wav"
           ]
@@ -32,10 +33,13 @@
       ]
     ],
     "android": {
-      "package": "com.wbtc.driver",
+      "package": "com.qfare.partner",
       "googleServicesFile": "./google-services.json",
       "versionCode": 2,
       "usesCleartextTraffic": true,
+      "blockedPermissions": [
+        "android.permission.SYSTEM_ALERT_WINDOW"
+      ],
       "adaptiveIcon": {
         "foregroundImage": "./assets/images/android-icon-foreground.png",
         "backgroundImage": "./assets/images/android-icon-background.png",
