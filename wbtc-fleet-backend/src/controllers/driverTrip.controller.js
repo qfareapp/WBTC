@@ -167,9 +167,53 @@ const getEndLocation = (route, direction) => {
 
 const normalizeLocation = (value) => String(value || "").trim().toLowerCase();
 
-const deriveUpcomingStopWaiting = ({ waitingSummary, approachingStop }) => {
+const orderRouteStopsByDirection = (routeStops = [], direction) => {
+  const stops = [...routeStops];
+  return direction === "DOWN" ? stops.reverse() : stops;
+};
+
+const deriveUpcomingStopWaiting = ({
+  waitingSummary,
+  approachingStop,
+  passedStops,
+  routeStops,
+  direction,
+  hasStarted,
+}) => {
+  const orderedStops = orderRouteStopsByDirection(routeStops, direction);
+  const passedSet = new Set((passedStops || []).map((stop) => String(stop || "").trim().toLowerCase()));
   const normalizedApproachingStop = String(approachingStop || "").trim().toLowerCase();
-  if (!normalizedApproachingStop) {
+
+  if (!orderedStops.length) {
+    const fallbackMatch = (waitingSummary?.stops || []).find(
+      (item) => String(item?.stopName || "").trim().toLowerCase() === normalizedApproachingStop
+    );
+    return {
+      stopName: fallbackMatch?.stopName || null,
+      passengersWaiting: Number(fallbackMatch?.passengersWaiting || 0),
+    };
+  }
+
+  const approachingIndex = normalizedApproachingStop
+    ? orderedStops.findIndex(
+        (stop) => String(stop?.name || "").trim().toLowerCase() === normalizedApproachingStop
+      )
+    : -1;
+  const lastPassedIndex = orderedStops.reduce(
+    (latestIndex, stop, index) =>
+      passedSet.has(String(stop?.name || "").trim().toLowerCase()) ? index : latestIndex,
+    -1
+  );
+  const currentStopIndex =
+    approachingIndex >= 0
+      ? approachingIndex
+      : hasStarted
+      ? Math.min(lastPassedIndex + 1, orderedStops.length - 1)
+      : -1;
+  const nextStop = currentStopIndex >= 0 ? orderedStops[currentStopIndex + 1] || null : null;
+  const nextStopName = String(nextStop?.name || "").trim();
+
+  if (!nextStopName) {
     return {
       stopName: null,
       passengersWaiting: 0,
@@ -177,11 +221,11 @@ const deriveUpcomingStopWaiting = ({ waitingSummary, approachingStop }) => {
   }
 
   const match = (waitingSummary?.stops || []).find(
-    (item) => String(item?.stopName || "").trim().toLowerCase() === normalizedApproachingStop
+    (item) => String(item?.stopName || "").trim().toLowerCase() === nextStopName.toLowerCase()
   );
 
   return {
-    stopName: match?.stopName || String(approachingStop || "").trim() || null,
+    stopName: match?.stopName || nextStopName,
     passengersWaiting: Number(match?.passengersWaiting || 0),
   };
 };
@@ -309,7 +353,7 @@ const mapAssignment = async (assignment, busById = new Map(), options = {}) => {
       })
     : { totalWaiting: 0, stops: [] };
   const routeStops =
-    includeRouteStops && route?._id
+    route?._id
       ? await RouteStop.find({ routeId: route._id }).sort({ index: 1 }).select("index name").lean()
       : [];
 
@@ -361,10 +405,14 @@ const mapAssignment = async (assignment, busById = new Map(), options = {}) => {
     upcomingStopWaiting: deriveUpcomingStopWaiting({
       waitingSummary,
       approachingStop: trip?.approachingStop || null,
+      passedStops: trip?.passedStops || [],
+      routeStops,
+      direction,
+      hasStarted: Boolean(trip?.actualStartTime),
     }),
     pickupLocation,
     dropLocation,
-    routeStops: routeStops.map((stop) => ({
+    routeStops: (includeRouteStops ? routeStops : []).map((stop) => ({
       index: stop.index,
       name: stop.name,
     })),

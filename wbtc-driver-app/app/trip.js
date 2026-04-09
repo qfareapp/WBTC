@@ -46,6 +46,10 @@ const parseKm = (value) => {
 
 const sanitizeKmInput = (value) => String(value ?? "").replace(/[^0-9.,]/g, "");
 const normalizeStopName = (value) => String(value || "").trim().toLowerCase();
+const orderRouteStopsByDirection = (routeStops = [], direction) => {
+  const stops = [...routeStops];
+  return direction === "DOWN" ? stops.reverse() : stops;
+};
 
 function SwipeConfirm({ label, onConfirm, disabled = false }) {
   const translateX = useRef(new Animated.Value(0)).current;
@@ -165,7 +169,10 @@ export default function Trip() {
   const isTripCompleted = trip?.status === "Completed";
   const hasStarted = Boolean(trip?.timing?.actualStartTime);
   const isTracking = hasStarted && !isTripCompleted;
-  const routeStops = useMemo(() => trip?.routeStops || [], [trip?.routeStops]);
+  const routeStops = useMemo(
+    () => orderRouteStopsByDirection(trip?.routeStops || [], trip?.direction),
+    [trip?.direction, trip?.routeStops]
+  );
   const progressStops = useMemo(() => {
     if (!routeStops.length) {
       return { lastStop: null, currentStop: null, upcomingStops: [] };
