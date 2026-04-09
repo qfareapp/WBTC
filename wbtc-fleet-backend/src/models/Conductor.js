@@ -11,6 +11,10 @@ const ConductorSchema = new mongoose.Schema(
     shiftType: { type: String, enum: ["Morning", "Evening", "General"], default: "General" },
     status: { type: String, enum: ["Available", "OnLeave", "Suspended"], default: "Available", index: true },
     phone: { type: String },
+    passwordHash: { type: String, required: true, select: false },
+    mustChangePassword: { type: Boolean, default: true, index: true },
+    passwordUpdatedAt: { type: Date, default: null },
+    passwordResetAt: { type: Date, default: null },
   },
   { timestamps: true }
 );

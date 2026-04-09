@@ -3,10 +3,35 @@ const Depot = require("../models/Depot");
 const User = require("../models/User");
 const ApiError = require("../utils/ApiError");
 const asyncHandler = require("../utils/asyncHandler");
+const { DEFAULT_CREW_PASSWORD, hashPassword } = require("../utils/crewPassword");
 
 const normalizeDepotScope = (req) => {
   if (req.user.role === "ADMIN") return null;
-  return req.user.depotId;
+  if (req.user.role === "DEPOT_MANAGER") return req.user.depotId;
+  return null;
+};
+
+const ensureDriverAccess = (req, driver) => {
+  if (req.user.role === "ADMIN") return;
+  if (req.user.role === "DEPOT_MANAGER") {
+    if (String(driver.depotId) !== String(req.user.depotId || "")) {
+      throw new ApiError(403, "Forbidden");
+    }
+    return;
+  }
+  if (req.user.role === "OWNER") {
+    if (String(driver.ownerId || "") !== String(req.user.userId || "")) {
+      throw new ApiError(403, "Forbidden");
+    }
+    return;
+  }
+  throw new ApiError(403, "Forbidden");
+};
+
+const serializeDriver = (driver) => {
+  const plain = typeof driver.toObject === "function" ? driver.toObject() : { ...driver };
+  delete plain.passwordHash;
+  return plain;
 };
 
 exports.createDriver = asyncHandler(async (req, res) => {
@@ -48,6 +73,8 @@ exports.createDriver = asyncHandler(async (req, res) => {
     throw new ApiError(400, "Driver operatorType must match selected depot operatorType");
   }
 
+  const passwordHash = await hashPassword(DEFAULT_CREW_PASSWORD);
+
   const driver = await Driver.create({
     empId,
     name,
@@ -60,9 +87,20 @@ exports.createDriver = asyncHandler(async (req, res) => {
     shiftType,
     status,
     phone,
+    passwordHash,
+    mustChangePassword: true,
+    passwordResetAt: new Date(),
   });
 
-  res.status(201).json({ ok: true, driver });
+  res.status(201).json({
+    ok: true,
+    driver: serializeDriver(driver),
+    credentials: {
+      empId: driver.empId,
+      temporaryPassword: DEFAULT_CREW_PASSWORD,
+      mustChangePassword: true,
+    },
+  });
 });
 
 exports.listDrivers = asyncHandler(async (req, res) => {
@@ -73,6 +111,7 @@ exports.listDrivers = asyncHandler(async (req, res) => {
 
   const query = {};
   if (finalDepotId) query.depotId = finalDepotId;
+  if (req.user.role === "OWNER") query.ownerId = req.user.userId;
   if (status) query.status = status;
   if (operatorType) {
     query.$or = [{ operatorType }, ...(operatorType === "WBTC" ? [{ operatorType: { $exists: false } }] : [])];
@@ -83,7 +122,7 @@ exports.listDrivers = asyncHandler(async (req, res) => {
     .populate("ownerId", "name username")
     .sort({ name: 1 });
 
-  res.json({ ok: true, drivers });
+  res.json({ ok: true, drivers: drivers.map((driver) => serializeDriver(driver)) });
 });
 
 exports.updateDriver = asyncHandler(async (req, res) => {
@@ -104,11 +143,9 @@ exports.updateDriver = asyncHandler(async (req, res) => {
 
   const driver = await Driver.findById(id);
   if (!driver) throw new ApiError(404, "Driver not found");
+  ensureDriverAccess(req, driver);
 
   const scopeDepotId = normalizeDepotScope(req);
-  if (scopeDepotId && String(driver.depotId) !== String(scopeDepotId)) {
-    throw new ApiError(403, "Forbidden");
-  }
 
   const finalDepotId = scopeDepotId || depotId || driver.depotId;
   if (!finalDepotId) throw new ApiError(400, "depotId required");
@@ -160,5 +197,36 @@ exports.updateDriver = asyncHandler(async (req, res) => {
     .populate("depotId", "depotName depotCode")
     .populate("ownerId", "name username");
 
-  res.json({ ok: true, driver: updatedDriver });
+  res.json({ ok: true, driver: serializeDriver(updatedDriver) });
+});
+
+exports.resetDriverPassword = asyncHandler(async (req, res) => {
+  const { id } = req.params;
+  const { temporaryPassword } = req.body || {};
+
+  const driver = await Driver.findById(id);
+  if (!driver) throw new ApiError(404, "Driver not found");
+  ensureDriverAccess(req, driver);
+
+  const nextPassword = String(temporaryPassword || DEFAULT_CREW_PASSWORD).trim();
+  if (!nextPassword) throw new ApiError(400, "temporaryPassword required");
+
+  driver.passwordHash = await hashPassword(nextPassword);
+  driver.mustChangePassword = true;
+  driver.passwordResetAt = new Date();
+  await driver.save();
+
+  res.json({
+    ok: true,
+    driver: {
+      id: driver._id,
+      name: driver.name,
+      empId: driver.empId,
+    },
+    credentials: {
+      empId: driver.empId,
+      temporaryPassword: nextPassword,
+      mustChangePassword: true,
+    },
+  });
 });

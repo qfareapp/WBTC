@@ -1,6 +1,9 @@
 const router = require("express").Router();
-const { loginDriver } = require("../controllers/driverAuth.controller");
+const auth = require("../middleware/auth");
+const requireRole = require("../middleware/requireRole");
+const { loginDriver, changeDriverPassword } = require("../controllers/driverAuth.controller");
 
 router.post("/login", loginDriver);
+router.post("/change-password", auth, requireRole("DRIVER"), changeDriverPassword);
 
 module.exports = router;

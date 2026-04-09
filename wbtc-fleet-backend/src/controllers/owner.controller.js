@@ -489,7 +489,8 @@ exports.updateOwnerBusLocation = asyncHandler(async (req, res) => {
 
 exports.listOwnerPersonnel = asyncHandler(async (req, res) => {
   const ownerId = req.user.userId;
-  const query = { ownerId, status: "Available" };
+  const includeAll = String(req.query.all || "").toLowerCase() === "true";
+  const query = includeAll ? { ownerId } : { ownerId, status: "Available" };
   const [drivers, conductors] = await Promise.all([
     Driver.find(query).select("name empId depotId status").lean(),
     Conductor.find(query).select("name empId depotId status").lean(),
