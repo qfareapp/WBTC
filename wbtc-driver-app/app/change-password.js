@@ -21,7 +21,7 @@ export default function ChangePassword() {
   useEffect(() => {
     const loadRole = async () => {
       const savedRole = await AsyncStorage.getItem(USER_ROLE_KEY);
-      if (!savedRole || !["DRIVER", "CONDUCTOR"].includes(savedRole)) {
+      if (!savedRole || !["DRIVER", "CONDUCTOR", "OWNER"].includes(savedRole)) {
         router.replace("/login");
         return;
       }
@@ -58,7 +58,12 @@ export default function ChangePassword() {
         throw new Error("Your session has expired. Please log in again.");
       }
 
-      const path = role === "CONDUCTOR" ? "/api/conductor-auth/change-password" : "/api/driver-auth/change-password";
+      const path =
+        role === "CONDUCTOR"
+          ? "/api/conductor-auth/change-password"
+          : role === "OWNER"
+          ? "/api/auth/change-password"
+          : "/api/driver-auth/change-password";
       const response = await fetch(`${apiBase}${path}`, {
         method: "POST",
         headers: {
@@ -77,7 +82,9 @@ export default function ChangePassword() {
 
       await AsyncStorage.setItem(MUST_CHANGE_PASSWORD_KEY, "false");
       setMessage("Password updated successfully.");
-      router.replace(role === "CONDUCTOR" ? "/(conductor-tabs)/active" : "/(tabs)/active");
+      router.replace(
+        role === "CONDUCTOR" ? "/(conductor-tabs)/active" : role === "OWNER" ? "/(owner-tabs)/active" : "/(tabs)/active"
+      );
     } catch (err) {
       setError(err.message);
     } finally {
@@ -90,7 +97,9 @@ export default function ChangePassword() {
       <View style={styles.card}>
         <Text style={styles.title}>Set Your New Password</Text>
         <Text style={styles.subtitle}>
-          Use your temporary password once, then choose a new password for future logins.
+          {role === "OWNER"
+            ? "Use your current or temporary password once, then choose a new password for future owner logins."
+            : "Use your temporary password once, then choose a new password for future logins."}
         </Text>
 
         <Text style={styles.label}>Current password</Text>
@@ -98,7 +107,7 @@ export default function ChangePassword() {
           style={styles.input}
           value={currentPassword}
           onChangeText={setCurrentPassword}
-          placeholder="Temporary password"
+          placeholder={role === "OWNER" ? "Current or temporary password" : "Temporary password"}
           placeholderTextColor="rgba(255,255,255,0.24)"
           secureTextEntry
           autoCapitalize="none"

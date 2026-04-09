@@ -20,6 +20,7 @@ const CONDUCTOR_KEY = "wbtc_conductor_profile";
 const USER_ROLE_KEY = "wbtc_user_role";
 const API_BASE_KEY = "wbtc_api_base";
 const PRINTER_KEY = "wbtc_conductor_printer";
+const MUST_CHANGE_PASSWORD_KEY = "wbtc_must_change_password";
 
 let bluetoothClassicCache = null;
 let bluetoothManagerChecked = false;
@@ -214,7 +215,7 @@ export default function ConductorProfile() {
   };
 
   const handleLogout = async () => {
-    await AsyncStorage.multiRemove([TOKEN_KEY, USER_ROLE_KEY, CONDUCTOR_KEY, API_BASE_KEY, PRINTER_KEY]);
+    await AsyncStorage.multiRemove([TOKEN_KEY, USER_ROLE_KEY, CONDUCTOR_KEY, API_BASE_KEY, PRINTER_KEY, MUST_CHANGE_PASSWORD_KEY]);
     router.replace("/login");
   };
 

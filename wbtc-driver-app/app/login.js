@@ -57,7 +57,7 @@ export default function Login() {
       if (savedRole === "CONDUCTOR") setRole("CONDUCTOR");
       if (savedRole === "OWNER") setRole("OWNER");
       if (token) {
-        if (mustChangePassword === "true" && (savedRole === "DRIVER" || savedRole === "CONDUCTOR")) {
+        if (mustChangePassword === "true" && (savedRole === "DRIVER" || savedRole === "CONDUCTOR" || savedRole === "OWNER")) {
           router.replace("/change-password");
           return;
         }
@@ -134,11 +134,7 @@ export default function Login() {
       await AsyncStorage.setItem(API_BASE_KEY, activeApiBase);
       await AsyncStorage.setItem(TOKEN_KEY, data.token);
       await AsyncStorage.setItem(USER_ROLE_KEY, role);
-      if (role === "OWNER") {
-        await AsyncStorage.removeItem(MUST_CHANGE_PASSWORD_KEY);
-      } else {
-        await AsyncStorage.setItem(MUST_CHANGE_PASSWORD_KEY, data.mustChangePassword ? "true" : "false");
-      }
+      await AsyncStorage.setItem(MUST_CHANGE_PASSWORD_KEY, data.mustChangePassword ? "true" : "false");
       if (role === "CONDUCTOR") {
         await AsyncStorage.removeItem(DRIVER_KEY);
         await AsyncStorage.removeItem(OWNER_KEY);
@@ -151,7 +147,7 @@ export default function Login() {
         await AsyncStorage.removeItem(DRIVER_KEY);
         await AsyncStorage.removeItem(CONDUCTOR_KEY);
         await AsyncStorage.setItem(OWNER_KEY, JSON.stringify(data.user || {}));
-        router.replace("/(owner-tabs)/active");
+        router.replace(data.mustChangePassword ? "/change-password" : "/(owner-tabs)/active");
       } else {
         await AsyncStorage.removeItem(CONDUCTOR_KEY);
         await AsyncStorage.removeItem(OWNER_KEY);

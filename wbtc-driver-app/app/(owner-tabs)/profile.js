@@ -11,6 +11,7 @@ const TOKEN_KEY = "wbtc_driver_token";
 const USER_ROLE_KEY = "wbtc_user_role";
 const API_BASE_KEY = "wbtc_api_base";
 const OWNER_KEY = "wbtc_owner_profile";
+const MUST_CHANGE_PASSWORD_KEY = "wbtc_must_change_password";
 
 const formatMoney = (value) => {
   const num = Number(value);
@@ -60,7 +61,7 @@ export default function OwnerProfile() {
   }, [loadPaymentSummary]);
 
   const handleLogout = async () => {
-    await AsyncStorage.multiRemove([TOKEN_KEY, USER_ROLE_KEY, OWNER_KEY, API_BASE_KEY]);
+    await AsyncStorage.multiRemove([TOKEN_KEY, USER_ROLE_KEY, OWNER_KEY, API_BASE_KEY, MUST_CHANGE_PASSWORD_KEY]);
     router.replace("/login");
   };
 
@@ -149,6 +150,11 @@ export default function OwnerProfile() {
       </TouchableOpacity>
 
       {notice ? <Text style={styles.error}>{notice}</Text> : null}
+
+      <TouchableOpacity style={styles.changePassword} onPress={() => router.push("/change-password")}>
+        <Ionicons name="lock-closed-outline" size={16} color="#FFFFFF" />
+        <Text style={styles.changePasswordText}>Change Password</Text>
+      </TouchableOpacity>
 
       <TouchableOpacity style={styles.logout} onPress={handleLogout}>
         <MaterialCommunityIcons name="logout" size={16} color="#FFFFFF" />
@@ -367,5 +373,20 @@ const styles = StyleSheet.create({
   refreshText: {
     color: "rgba(255,255,255,0.8)",
     fontWeight: "700",
+  },
+  changePassword: {
+    marginTop: 12,
+    backgroundColor: "#3650A8",
+    paddingVertical: 14,
+    borderRadius: 16,
+    alignItems: "center",
+    justifyContent: "center",
+    flexDirection: "row",
+    gap: 8,
+  },
+  changePasswordText: {
+    color: "#FFFFFF",
+    fontWeight: "800",
+    letterSpacing: 0.4,
   },
 });

@@ -18,6 +18,8 @@ function OwnersOverview({ apiBase, token }) {
   const [tagBusy, setTagBusy] = useState(false);
   const [notice, setNotice] = useState(null);
   const [loading, setLoading] = useState(false);
+  const [resettingOwnerId, setResettingOwnerId] = useState("");
+  const [credentials, setCredentials] = useState(null);
 
   const showNotice = (type, message) => {
     setNotice({ type, message });
@@ -142,6 +144,54 @@ function OwnersOverview({ apiBase, token }) {
     } finally {
       setCreateOwnerBusy(false);
     }
+  };
+
+  const handleResetOwnerPassword = async (owner) => {
+    setResettingOwnerId(String(owner.id));
+    try {
+      const response = await fetch(`${apiBase}/api/admin/owners/${owner.id}/reset-password`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({}),
+      });
+      const text = await response.text();
+      const data = text ? JSON.parse(text) : {};
+      if (!response.ok) throw new Error(data.message || "Failed to reset owner password");
+      setCredentials({
+        name: owner.name,
+        username: data.credentials?.username || owner.username,
+        password: data.credentials?.temporaryPassword || "",
+      });
+      showNotice("success", `Temporary password generated for ${owner.name}.`);
+    } catch (error) {
+      showNotice("error", error.message);
+    } finally {
+      setResettingOwnerId("");
+    }
+  };
+
+  const handleCopyCredentials = async () => {
+    if (!credentials) return;
+    const text = `Username: ${credentials.username}\nTemporary password: ${credentials.password}`;
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(text);
+      showNotice("success", "Credentials copied.");
+      return;
+    }
+    showNotice("error", "Clipboard is not available in this browser.");
+  };
+
+  const handleShareCredentials = async () => {
+    if (!credentials) return;
+    const text = `Username: ${credentials.username}\nTemporary password: ${credentials.password}`;
+    if (navigator.share) {
+      await navigator.share({ text, title: `${credentials.name} credentials` });
+      return;
+    }
+    await handleCopyCredentials();
   };
 
   useEffect(() => {
@@ -319,6 +369,35 @@ function OwnersOverview({ apiBase, token }) {
                 <h3>Owner accounts</h3>
                 <span className="pill">{owners.length} total</span>
               </div>
+              {credentials ? (
+                <div className="panel" style={{ marginBottom: "12px", background: "var(--panel-strong)" }}>
+                  <div className="panel-header">
+                    <h3>Temporary credentials</h3>
+                    <span className="pill">{credentials.name}</span>
+                  </div>
+                  <div className="grid two">
+                    <label className="field">
+                      Username
+                      <input value={credentials.username} readOnly />
+                    </label>
+                    <label className="field">
+                      Temporary password
+                      <input value={credentials.password} readOnly />
+                    </label>
+                  </div>
+                  <div className="inline" style={{ marginTop: "12px" }}>
+                    <button className="btn outline" type="button" onClick={handleCopyCredentials}>
+                      Copy
+                    </button>
+                    <button className="btn primary" type="button" onClick={handleShareCredentials}>
+                      Share
+                    </button>
+                    <button className="btn ghost" type="button" onClick={() => setCredentials(null)}>
+                      Close
+                    </button>
+                  </div>
+                </div>
+              ) : null}
               {loading ? (
                 <div className="list-item">
                   <div>
@@ -344,6 +423,14 @@ function OwnersOverview({ apiBase, token }) {
                         <span className="pill">Status: {entry.owner.active ? "Active" : "Inactive"}</span>
                         <span className="pill">Buses: {entry.totalBuses}</span>
                         <span className="pill">Routes: {entry.totalRoutes}</span>
+                        <button
+                          className="btn outline"
+                          type="button"
+                          onClick={() => handleResetOwnerPassword(entry.owner)}
+                          disabled={resettingOwnerId === String(entry.owner.id)}
+                        >
+                          {resettingOwnerId === String(entry.owner.id) ? "Resetting..." : "Reset password"}
+                        </button>
                       </div>
                       <div className="grid two" style={{ marginTop: "10px" }}>
                         <div>

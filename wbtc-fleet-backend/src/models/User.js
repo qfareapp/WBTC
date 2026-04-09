@@ -13,6 +13,9 @@ const UserSchema = new mongoose.Schema(
     },
     depotId: { type: mongoose.Schema.Types.ObjectId, ref: "Depot", default: null },
     active: { type: Boolean, default: true },
+    mustChangePassword: { type: Boolean, default: false, index: true },
+    passwordUpdatedAt: { type: Date, default: null },
+    passwordResetAt: { type: Date, default: null },
   },
   { timestamps: true }
 );

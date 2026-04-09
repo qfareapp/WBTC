@@ -13,6 +13,7 @@ const TOKEN_KEY = "wbtc_driver_token";
 const DRIVER_KEY = "wbtc_driver_profile";
 const CONDUCTOR_KEY = "wbtc_conductor_profile";
 const USER_ROLE_KEY = "wbtc_user_role";
+const MUST_CHANGE_PASSWORD_KEY = "wbtc_must_change_password";
 const today = () => getOpsDate();
 const monthStart = () => {
   const now = new Date();
@@ -119,7 +120,7 @@ export default function DriverProfile() {
 
   const handleLogout = async () => {
     await unregisterStoredDriverPushToken({ role: "DRIVER" });
-    await AsyncStorage.multiRemove([TOKEN_KEY, USER_ROLE_KEY, DRIVER_KEY, CONDUCTOR_KEY, API_BASE_KEY]);
+    await AsyncStorage.multiRemove([TOKEN_KEY, USER_ROLE_KEY, DRIVER_KEY, CONDUCTOR_KEY, API_BASE_KEY, MUST_CHANGE_PASSWORD_KEY]);
     router.replace("/login");
   };
 

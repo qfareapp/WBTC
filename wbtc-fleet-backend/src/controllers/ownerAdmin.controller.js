@@ -6,6 +6,7 @@ const OwnerPaymentSettlement = require("../models/OwnerPaymentSettlement");
 const ApiError = require("../utils/ApiError");
 const asyncHandler = require("../utils/asyncHandler");
 const { toIsoDay, getPeriodWindow, computeOwnerPaymentRows } = require("../utils/ownerPayments");
+const { generateTemporaryPassword, hashPassword } = require("../utils/crewPassword");
 
 exports.listOwnersOverview = asyncHandler(async (req, res) => {
   const owners = await User.find({ role: "OWNER" })
@@ -338,6 +339,31 @@ exports.tagBusToOwner = asyncHandler(async (req, res) => {
       id: owner._id,
       name: owner.name,
       username: owner.username,
+    },
+  });
+});
+
+exports.resetOwnerPassword = asyncHandler(async (req, res) => {
+  const { ownerId } = req.params;
+
+  const owner = await User.findOne({ _id: ownerId, role: "OWNER", active: true }).select(
+    "_id name username role"
+  );
+  if (!owner) throw new ApiError(404, "Owner not found");
+
+  const temporaryPassword = generateTemporaryPassword();
+  owner.passwordHash = await hashPassword(temporaryPassword);
+  owner.mustChangePassword = true;
+  owner.passwordResetAt = new Date();
+  await owner.save();
+
+  res.json({
+    ok: true,
+    message: "Owner password reset successfully",
+    credentials: {
+      username: owner.username,
+      temporaryPassword,
+      mustChangePassword: true,
     },
   });
 });
