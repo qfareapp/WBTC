@@ -158,9 +158,11 @@ export default function Trip() {
   const [locationNotice, setLocationNotice] = useState("");
   const [startModalVisible, setStartModalVisible] = useState(false);
   const [endModalVisible, setEndModalVisible] = useState(false);
+  const [locationDisclosureVisible, setLocationDisclosureVisible] = useState(false);
   const [openingKmInput, setOpeningKmInput] = useState("");
   const [closingKmInput, setClosingKmInput] = useState("");
   const [trackingDebug, setTrackingDebug] = useState(null);
+  const locationDisclosureResolverRef = useRef(null);
 
   const isTripCompleted = trip?.status === "Completed";
   const hasStarted = Boolean(trip?.timing?.actualStartTime);
@@ -346,6 +348,35 @@ export default function Trip() {
     setTrackingDebug(next);
   };
 
+  const requestLocationDisclosureAcknowledgement = () =>
+    new Promise((resolve) => {
+      locationDisclosureResolverRef.current = resolve;
+      setLocationDisclosureVisible(true);
+    });
+
+  const resolveLocationDisclosure = (accepted) => {
+    setLocationDisclosureVisible(false);
+    const resolver = locationDisclosureResolverRef.current;
+    locationDisclosureResolverRef.current = null;
+    if (resolver) resolver(accepted);
+  };
+
+  const ensureBackgroundLocationDisclosure = async () => {
+    const [foregroundStatus, backgroundStatus] = await Promise.all([
+      Location.getForegroundPermissionsAsync(),
+      Location.getBackgroundPermissionsAsync(),
+    ]);
+    if (foregroundStatus.status === "granted" && backgroundStatus.status === "granted") {
+      return true;
+    }
+    const accepted = await requestLocationDisclosureAcknowledgement();
+    if (!accepted) {
+      setLocationNotice("Background location permission was not requested.");
+      return false;
+    }
+    return true;
+  };
+
   const handleStart = async (openingKm) => {
     setBusy(true);
     setNotice("");
@@ -354,6 +385,16 @@ export default function Trip() {
         AsyncStorage.getItem(API_BASE_KEY),
         AsyncStorage.getItem(TOKEN_KEY),
       ]);
+      const disclosureAccepted = await ensureBackgroundLocationDisclosure();
+      if (!disclosureAccepted) return false;
+      const permission = await requestDriverBackgroundPermissions();
+      if (!permission.ok) {
+        throw new Error(
+          permission.reason === "background_denied"
+            ? "Background location permission denied."
+            : "Location permission denied."
+        );
+      }
       const response = await fetch(`${apiBase}/api/driver-trips/start`, {
         method: "POST",
         headers: {
@@ -365,14 +406,6 @@ export default function Trip() {
       const text = await response.text();
       const data = parseApiText(text);
       if (!response.ok) throw new Error(data.message || "Failed to start trip");
-      const permission = await requestDriverBackgroundPermissions();
-      if (!permission.ok) {
-        throw new Error(
-          permission.reason === "background_denied"
-            ? "Background location permission denied."
-            : "Location permission denied."
-        );
-      }
       await updateDriverBackgroundNotification({
         tripInstanceId: tripId,
         apiBase,
@@ -484,6 +517,8 @@ export default function Trip() {
         ]);
         if (!apiBase || !token) return;
 
+        const disclosureAccepted = await ensureBackgroundLocationDisclosure();
+        if (!disclosureAccepted) return;
         const permission = await requestDriverBackgroundPermissions();
         if (!permission.ok) {
           if (!cancelled) {
@@ -857,6 +892,37 @@ export default function Trip() {
             <TouchableOpacity style={styles.modalCancel} onPress={() => setEndModalVisible(false)} disabled={busy}>
               <Text style={styles.modalCancelText}>Cancel</Text>
             </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+
+      <Modal
+        visible={locationDisclosureVisible}
+        transparent
+        animationType="fade"
+        onRequestClose={() => resolveLocationDisclosure(false)}
+      >
+        <View style={styles.modalBackdrop}>
+          <View style={styles.modalCard}>
+            <Text style={styles.modalTitle}>Allow background location for live trips</Text>
+            <Text style={styles.modalHint}>
+              Qfare collects location data even when the app is not in use during an active live trip.
+            </Text>
+            <Text style={styles.modalHint}>
+              This is required to track trip movement, update route progress, support transport monitoring, and keep
+              trip operations active in the background.
+            </Text>
+            <Text style={styles.modalDisclosureNote}>
+              Background location is used only for active trip operations and not for advertising or marketing.
+            </Text>
+            <View style={styles.disclosureActions}>
+              <TouchableOpacity style={styles.disclosureSecondary} onPress={() => resolveLocationDisclosure(false)}>
+                <Text style={styles.disclosureSecondaryText}>Not now</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={styles.disclosurePrimary} onPress={() => resolveLocationDisclosure(true)}>
+                <Text style={styles.disclosurePrimaryText}>Continue</Text>
+              </TouchableOpacity>
+            </View>
           </View>
         </View>
       </Modal>
@@ -1313,6 +1379,13 @@ const styles = StyleSheet.create({
   modalHint: {
     marginTop: 10,
     color: "rgba(255,255,255,0.5)",
+    lineHeight: 20,
+  },
+  modalDisclosureNote: {
+    marginTop: 12,
+    color: "#BFDBFE",
+    lineHeight: 20,
+    fontWeight: "600",
   },
   modalCancel: {
     marginTop: 12,
@@ -1365,5 +1438,36 @@ const styles = StyleSheet.create({
     color: "#FFFFFF",
     fontWeight: "700",
     fontSize: 16,
+  },
+  disclosureActions: {
+    marginTop: 18,
+    flexDirection: "row",
+    gap: 10,
+  },
+  disclosureSecondary: {
+    flex: 1,
+    minHeight: 46,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.14)",
+    backgroundColor: "rgba(255,255,255,0.04)",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  disclosureSecondaryText: {
+    color: "rgba(255,255,255,0.72)",
+    fontWeight: "700",
+  },
+  disclosurePrimary: {
+    flex: 1,
+    minHeight: 46,
+    borderRadius: 12,
+    backgroundColor: "#0090E0",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  disclosurePrimaryText: {
+    color: "#FFFFFF",
+    fontWeight: "800",
   },
 });
