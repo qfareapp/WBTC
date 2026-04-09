@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { ActivityIndicator, ScrollView, StyleSheet, Text, TouchableOpacity, View } from "react-native";
+import { ActivityIndicator, ScrollView, StyleSheet, Text, TouchableOpacity, View, Linking } from "react-native";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { useRouter } from "expo-router";
 import { Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
@@ -12,6 +12,7 @@ const USER_ROLE_KEY = "wbtc_user_role";
 const API_BASE_KEY = "wbtc_api_base";
 const OWNER_KEY = "wbtc_owner_profile";
 const MUST_CHANGE_PASSWORD_KEY = "wbtc_must_change_password";
+const PRIVACY_POLICY_URL = "https://wbtc-rose.vercel.app/privacy-policy";
 
 const formatMoney = (value) => {
   const num = Number(value);
@@ -151,7 +152,7 @@ export default function OwnerProfile() {
 
       {notice ? <Text style={styles.error}>{notice}</Text> : null}
 
-      <TouchableOpacity style={styles.secondaryAction} onPress={() => router.push("/privacy-policy")}>
+      <TouchableOpacity style={styles.secondaryAction} onPress={() => Linking.openURL(PRIVACY_POLICY_URL).catch(() => setNotice("Unable to open privacy policy."))}>
         <Ionicons name="document-text-outline" size={16} color="#9CCBFF" />
         <Text style={styles.secondaryActionText}>Privacy Policy</Text>
       </TouchableOpacity>

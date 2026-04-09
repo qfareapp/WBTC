@@ -8,6 +8,7 @@ import {
   Platform,
   PermissionsAndroid,
   NativeModules,
+  Linking,
 } from "react-native";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { Ionicons } from "@expo/vector-icons";
@@ -21,6 +22,7 @@ const USER_ROLE_KEY = "wbtc_user_role";
 const API_BASE_KEY = "wbtc_api_base";
 const PRINTER_KEY = "wbtc_conductor_printer";
 const MUST_CHANGE_PASSWORD_KEY = "wbtc_must_change_password";
+const PRIVACY_POLICY_URL = "https://wbtc-rose.vercel.app/privacy-policy";
 
 let bluetoothClassicCache = null;
 let bluetoothManagerChecked = false;
@@ -362,7 +364,7 @@ export default function ConductorProfile() {
           </View>
         </View>
 
-        <TouchableOpacity style={styles.privacyButton} onPress={() => router.push("/privacy-policy")}>
+        <TouchableOpacity style={styles.privacyButton} onPress={() => Linking.openURL(PRIVACY_POLICY_URL).catch(() => setNotice("Unable to open privacy policy."))}>
           <Ionicons name="document-text-outline" size={16} color="#9CCBFF" />
           <Text style={styles.privacyButtonText}>Privacy Policy</Text>
         </TouchableOpacity>

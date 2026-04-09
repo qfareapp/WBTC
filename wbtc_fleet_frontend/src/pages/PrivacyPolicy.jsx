@@ -1,5 +1,3 @@
-import { Link } from "react-router-dom";
-
 const policySections = [
   {
     title: "1. Information We Collect",
@@ -170,110 +168,136 @@ const policySections = [
   },
 ];
 
-const textStyle = { margin: 0, color: "var(--muted)", lineHeight: 1.7 };
-const bulletStyle = { ...textStyle, marginTop: "4px" };
-const groupTitleStyle = {
-  margin: "10px 0 6px",
-  color: "var(--text)",
-  fontSize: "0.96rem",
-  fontWeight: 700,
+const styles = {
+  page: {
+    minHeight: "100vh",
+    background: "linear-gradient(180deg, #f4f7f8 0%, #eef4f1 100%)",
+    padding: "32px 18px 48px",
+  },
+  shell: {
+    width: "100%",
+    maxWidth: "920px",
+    margin: "0 auto",
+  },
+  hero: {
+    background: "#ffffff",
+    border: "1px solid rgba(27, 31, 42, 0.08)",
+    borderRadius: "20px",
+    padding: "24px 26px",
+    boxShadow: "0 18px 40px rgba(17, 24, 39, 0.08)",
+  },
+  heroTop: {
+    display: "flex",
+    justifyContent: "space-between",
+    gap: "14px",
+    alignItems: "center",
+    flexWrap: "wrap",
+  },
+  title: {
+    margin: 0,
+    color: "#1b1f2a",
+    fontSize: "2rem",
+    fontWeight: 800,
+  },
+  pill: {
+    display: "inline-flex",
+    alignItems: "center",
+    padding: "8px 14px",
+    borderRadius: "999px",
+    border: "1px solid rgba(27, 31, 42, 0.12)",
+    color: "#5d687a",
+    background: "#ffffff",
+    fontSize: "0.95rem",
+  },
+  text: {
+    margin: "12px 0 0",
+    color: "#5d687a",
+    lineHeight: 1.75,
+    fontSize: "1rem",
+  },
+  panel: {
+    marginTop: "18px",
+    background: "#ffffff",
+    border: "1px solid rgba(27, 31, 42, 0.08)",
+    borderRadius: "20px",
+    padding: "22px 26px",
+    boxShadow: "0 14px 32px rgba(17, 24, 39, 0.06)",
+  },
+  sectionTitle: {
+    margin: 0,
+    color: "#1b1f2a",
+    fontSize: "1.15rem",
+    fontWeight: 800,
+  },
+  groupTitle: {
+    margin: "14px 0 6px",
+    color: "#1b1f2a",
+    fontSize: "0.98rem",
+    fontWeight: 700,
+  },
+  bullet: {
+    margin: "4px 0 0",
+    color: "#5d687a",
+    lineHeight: 1.7,
+    fontSize: "0.98rem",
+  },
 };
 
 export default function PrivacyPolicy() {
   return (
-    <div className="app">
-      <div className="background">
-        <span className="orb orb-a" />
-        <span className="orb orb-b" />
-        <span className="orb orb-c" />
-      </div>
-
-      <div className="layout">
-        <aside className="sidebar">
-          <div className="sidebar-brand">
-            <div className="brand-mark" />
-            <div>
-              <p className="sidebar-title">WBTC Fleet</p>
-              <span className="pill">Ops console</span>
-            </div>
+    <div style={styles.page}>
+      <div style={styles.shell}>
+        <section style={styles.hero}>
+          <div style={styles.heroTop}>
+            <h1 style={styles.title}>Privacy Policy for Qfare</h1>
+            <span style={styles.pill}>Effective Date: [Insert Date]</span>
           </div>
-          <nav className="nav">
-            <Link className="nav-item" to="/dashboard">Overview</Link>
-            <Link className="nav-item" to="/owners">Owners</Link>
-            <Link className="nav-item" to="/privacy-policy">Privacy Policy</Link>
-          </nav>
-        </aside>
+          <p style={styles.text}>
+            Qfare ("we", "our", "us") provides digital tools for transport operations, including owner, driver, and
+            conductor workflows, live trip management, crew assignment, trip tracking, and notifications. This Privacy
+            Policy explains how we collect, use, store, and share information when you use the Qfare mobile app,
+            related web panels, and backend services.
+          </p>
+          <p style={styles.text}>
+            By using Qfare, you agree to the collection and use of information in accordance with this Privacy Policy.
+          </p>
+        </section>
 
-        <div className="content">
-          <header className="topbar">
-            <div className="brand">
-              <div className="brand-mark" />
-              <div>
-                <h1>Privacy Policy</h1>
-                <span className="pill">Qfare</span>
-              </div>
-            </div>
-          </header>
-
-          <main className="main">
-            <section className="panel">
-              <div className="panel-header">
-                <h3>Privacy Policy for Qfare</h3>
-                <span className="pill">Effective Date: [Insert Date]</span>
-              </div>
-              <p style={textStyle}>
-                Qfare ("we", "our", "us") provides digital tools for transport operations, including owner, driver,
-                and conductor workflows, live trip management, crew assignment, trip tracking, and notifications. This
-                Privacy Policy explains how we collect, use, store, and share information when you use the Qfare
-                mobile app, related web panels, and backend services.
+        {policySections.map((section) => (
+          <section key={section.title} style={styles.panel}>
+            <h2 style={styles.sectionTitle}>{section.title}</h2>
+            {section.body ? <p style={styles.text}>{section.body}</p> : null}
+            {section.paragraphs?.map((paragraph) => (
+              <p key={paragraph} style={styles.text}>
+                {paragraph}
               </p>
-              <p style={{ ...textStyle, marginTop: "10px" }}>
-                By using Qfare, you agree to the collection and use of information in accordance with this Privacy
-                Policy.
-              </p>
-            </section>
-
-            {policySections.map((section) => (
-              <section key={section.title} className="panel">
-                <div className="panel-header">
-                  <h3>{section.title}</h3>
-                </div>
-                {section.body ? <p style={textStyle}>{section.body}</p> : null}
-                {section.paragraphs?.map((paragraph) => (
-                  <p key={paragraph} style={textStyle}>
-                    {paragraph}
-                  </p>
-                ))}
-                {section.groups?.map((group) => (
-                  <div key={group.heading}>
-                    <p style={groupTitleStyle}>{group.heading}</p>
-                    {group.items.map((item) => (
-                      <p key={item} style={bulletStyle}>
-                        {"\u2022"} {item}
-                      </p>
-                    ))}
-                  </div>
-                ))}
-                {section.items?.map((item) => (
-                  <p key={item} style={bulletStyle}>
+            ))}
+            {section.groups?.map((group) => (
+              <div key={group.heading}>
+                <p style={styles.groupTitle}>{group.heading}</p>
+                {group.items.map((item) => (
+                  <p key={item} style={styles.bullet}>
                     {"\u2022"} {item}
                   </p>
                 ))}
-                {section.footer ? <p style={{ ...textStyle, marginTop: "10px" }}>{section.footer}</p> : null}
-              </section>
-            ))}
-
-            <section className="panel">
-              <div className="panel-header">
-                <h3>Short Play Store Disclosure Text</h3>
               </div>
-              <p style={textStyle}>
-                “Qfare collects location data, including background location during active trips, to support live trip
-                tracking, route operations, and transport monitoring for assigned duty services.”
+            ))}
+            {section.items?.map((item) => (
+              <p key={item} style={styles.bullet}>
+                {"\u2022"} {item}
               </p>
-            </section>
-          </main>
-        </div>
+            ))}
+            {section.footer ? <p style={styles.text}>{section.footer}</p> : null}
+          </section>
+        ))}
+
+        <section style={styles.panel}>
+          <h2 style={styles.sectionTitle}>Short Play Store Disclosure Text</h2>
+          <p style={styles.text}>
+            “Qfare collects location data, including background location during active trips, to support live trip
+            tracking, route operations, and transport monitoring for assigned duty services.”
+          </p>
+        </section>
       </div>
     </div>
   );

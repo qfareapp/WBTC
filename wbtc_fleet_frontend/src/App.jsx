@@ -111,7 +111,7 @@ function App() {
         />
         <Route
           path="/privacy-policy"
-          element={token ? <PrivacyPolicy /> : <Navigate to="/" replace />}
+          element={<PrivacyPolicy />}
         />
         <Route
           path="/dashboard"

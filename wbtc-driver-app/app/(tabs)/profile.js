@@ -1,5 +1,5 @@
 ﻿import { useEffect, useState } from "react";
-import { View, Text, StyleSheet, TouchableOpacity, ScrollView, RefreshControl, Platform } from "react-native";
+import { View, Text, StyleSheet, TouchableOpacity, ScrollView, RefreshControl, Platform, Linking } from "react-native";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { useRouter } from "expo-router";
 import DateTimePicker from "@react-native-community/datetimepicker";
@@ -14,6 +14,7 @@ const DRIVER_KEY = "wbtc_driver_profile";
 const CONDUCTOR_KEY = "wbtc_conductor_profile";
 const USER_ROLE_KEY = "wbtc_user_role";
 const MUST_CHANGE_PASSWORD_KEY = "wbtc_must_change_password";
+const PRIVACY_POLICY_URL = "https://wbtc-rose.vercel.app/privacy-policy";
 const today = () => getOpsDate();
 const monthStart = () => {
   const now = new Date();
@@ -344,7 +345,7 @@ export default function DriverProfile() {
           </View>
         </View>
 
-        <TouchableOpacity style={styles.secondaryAction} onPress={() => router.push("/privacy-policy")}>
+        <TouchableOpacity style={styles.secondaryAction} onPress={() => Linking.openURL(PRIVACY_POLICY_URL).catch(() => setNotice("Unable to open privacy policy."))}>
           <Text style={styles.secondaryActionText}>Privacy Policy</Text>
         </TouchableOpacity>
 
