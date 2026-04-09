@@ -16,7 +16,6 @@ import * as Location from "expo-location";
 import {
   getDriverTrackingDebug,
   requestDriverBackgroundPermissions,
-  startDriverBackgroundTracking,
   stopDriverBackgroundTracking,
   updateDriverBackgroundNotification,
   writeDriverTrackingDebug,
@@ -374,10 +373,12 @@ export default function Trip() {
             : "Location permission denied."
         );
       }
-      await startDriverBackgroundTracking({
+      await updateDriverBackgroundNotification({
         tripInstanceId: tripId,
         apiBase,
         token,
+        stopName: trip?.upcomingStopWaiting?.stopName || null,
+        passengersWaiting: trip?.upcomingStopWaiting?.passengersWaiting || 0,
       });
       await sendLocationUpdate();
       await loadTrip();
@@ -497,10 +498,12 @@ export default function Trip() {
 
         if (!cancelled) setLocationNotice("");
 
-        await startDriverBackgroundTracking({
+        await updateDriverBackgroundNotification({
           tripInstanceId: tripId,
           apiBase,
           token,
+          stopName: trip?.upcomingStopWaiting?.stopName || null,
+          passengersWaiting: trip?.upcomingStopWaiting?.passengersWaiting || 0,
         });
 
         await sendLocationUpdate();
@@ -516,7 +519,13 @@ export default function Trip() {
     return () => {
       cancelled = true;
     };
-  }, [isTracking, tripId]);
+  }, [
+    isTracking,
+    tripId,
+    trip?.status,
+    trip?.upcomingStopWaiting?.stopName,
+    trip?.upcomingStopWaiting?.passengersWaiting,
+  ]);
 
   useEffect(() => {
     if (!tripId || !isTracking) return undefined;
