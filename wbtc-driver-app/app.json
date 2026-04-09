@@ -36,7 +36,6 @@
       "package": "com.qfare.partner",
       "googleServicesFile": "./google-services.json",
       "versionCode": 2,
-      "usesCleartextTraffic": true,
       "blockedPermissions": [
         "android.permission.SYSTEM_ALERT_WINDOW"
       ],

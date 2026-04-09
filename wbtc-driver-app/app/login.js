@@ -27,8 +27,6 @@ const roleMeta = {
 export default function Login() {
   const router = useRouter();
   const [apiBase, setApiBase] = useState(PRODUCTION_API_BASE);
-  const [devApiBase, setDevApiBase] = useState("");
-  const [devModeEnabled, setDevModeEnabled] = useState(false);
   const [empId, setEmpId] = useState("");
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
@@ -38,22 +36,11 @@ export default function Login() {
 
   useEffect(() => {
     const loadSaved = async () => {
-      const storedBase = await AsyncStorage.getItem(API_BASE_KEY);
       const token = await AsyncStorage.getItem(TOKEN_KEY);
       const savedRole = await AsyncStorage.getItem(USER_ROLE_KEY);
       const mustChangePassword = await AsyncStorage.getItem(MUST_CHANGE_PASSWORD_KEY);
-      const isDevBase =
-        Boolean(storedBase) &&
-        storedBase !== PRODUCTION_API_BASE &&
-        (storedBase.includes("localhost") ||
-          storedBase.includes("192.168.") ||
-          storedBase.includes("10.") ||
-          storedBase.includes("172."));
-      const normalizedBase = isDevBase ? storedBase : PRODUCTION_API_BASE;
-      setApiBase(normalizedBase);
-      setDevApiBase(isDevBase ? storedBase : "");
-      setDevModeEnabled(isDevBase);
-      await AsyncStorage.setItem(API_BASE_KEY, normalizedBase);
+      setApiBase(PRODUCTION_API_BASE);
+      await AsyncStorage.setItem(API_BASE_KEY, PRODUCTION_API_BASE);
       if (savedRole === "CONDUCTOR") setRole("CONDUCTOR");
       if (savedRole === "OWNER") setRole("OWNER");
       if (token) {
@@ -74,7 +61,7 @@ export default function Login() {
   }, [router]);
 
   const handleLogin = async () => {
-    const activeApiBase = devModeEnabled && devApiBase.trim() ? devApiBase.trim() : PRODUCTION_API_BASE;
+    const activeApiBase = PRODUCTION_API_BASE;
     if (role === "OWNER") {
       if (!username.trim() || !password.trim()) {
         setError("Username and password are required.");
@@ -189,36 +176,17 @@ export default function Login() {
         <View style={styles.card}>
           <View style={styles.cardBar} />
 
-          <TouchableOpacity
-            style={styles.serverPill}
-            activeOpacity={0.9}
-            onLongPress={() => setDevModeEnabled((prev) => !prev)}
-          >
+          <View style={styles.serverPill}>
             <View style={styles.serverIconWrap}>
               <Ionicons name="globe-outline" size={16} color="#60A5FA" />
             </View>
             <View style={styles.serverCopy}>
               <Text style={styles.serverLabel}>Server</Text>
-              <Text style={styles.serverValue}>{devModeEnabled && devApiBase.trim() ? devApiBase : apiBase}</Text>
-              <Text style={styles.serverHint}>Long press to {devModeEnabled ? "disable" : "enable"} dev mode</Text>
+              <Text style={styles.serverValue}>{apiBase}</Text>
+              <Text style={styles.serverHint}>Secure production endpoint</Text>
             </View>
             <View style={styles.serverStatusDot} />
-          </TouchableOpacity>
-
-          {devModeEnabled ? (
-            <>
-              <Text style={styles.label}>Development API URL</Text>
-              <TextInput
-                style={styles.input}
-                value={devApiBase}
-                onChangeText={setDevApiBase}
-                placeholder="http://192.168.15.163:5000"
-                placeholderTextColor="rgba(255,255,255,0.24)"
-                autoCapitalize="none"
-                autoCorrect={false}
-              />
-            </>
-          ) : null}
+          </View>
 
           {role === "OWNER" ? (
             <>
@@ -323,9 +291,7 @@ export default function Login() {
         </View>
 
         <Text style={styles.help}>
-          {devModeEnabled
-            ? "Development mode is enabled. The app will use your custom API URL."
-            : "Connected to the live WBTC server"}
+          Connected to the secure live Qfare server
         </Text>
         <TouchableOpacity style={styles.policyLink} onPress={() => router.push("/privacy-policy")}>
           <Text style={styles.policyLinkText}>Privacy Policy</Text>
