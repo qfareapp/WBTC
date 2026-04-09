@@ -16,6 +16,7 @@ import OwnersOverview from "./pages/OwnersOverview.jsx";
 import PaymentsOverview from "./pages/PaymentsOverview.jsx";
 import Login from "./pages/Login.jsx";
 import Register from "./pages/Register.jsx";
+import PrivacyPolicy from "./pages/PrivacyPolicy.jsx";
 
 const storedApiBase = localStorage.getItem("wbtc_api_base");
 const defaultApiBase = import.meta.env.DEV ? "http://localhost:5000" : "https://wbtc-aduk.onrender.com";
@@ -107,6 +108,10 @@ function App() {
               <Navigate to="/" replace />
             )
           }
+        />
+        <Route
+          path="/privacy-policy"
+          element={token ? <PrivacyPolicy /> : <Navigate to="/" replace />}
         />
         <Route
           path="/dashboard"

@@ -151,6 +151,11 @@ export default function OwnerProfile() {
 
       {notice ? <Text style={styles.error}>{notice}</Text> : null}
 
+      <TouchableOpacity style={styles.secondaryAction} onPress={() => router.push("/privacy-policy")}>
+        <Ionicons name="document-text-outline" size={16} color="#9CCBFF" />
+        <Text style={styles.secondaryActionText}>Privacy Policy</Text>
+      </TouchableOpacity>
+
       <TouchableOpacity style={styles.changePassword} onPress={() => router.push("/change-password")}>
         <Ionicons name="lock-closed-outline" size={16} color="#FFFFFF" />
         <Text style={styles.changePasswordText}>Change Password</Text>
@@ -373,6 +378,23 @@ const styles = StyleSheet.create({
   refreshText: {
     color: "rgba(255,255,255,0.8)",
     fontWeight: "700",
+  },
+  secondaryAction: {
+    marginTop: 12,
+    backgroundColor: "rgba(255,255,255,0.04)",
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.08)",
+    paddingVertical: 14,
+    borderRadius: 16,
+    alignItems: "center",
+    justifyContent: "center",
+    flexDirection: "row",
+    gap: 8,
+  },
+  secondaryActionText: {
+    color: "#9CCBFF",
+    fontWeight: "800",
+    letterSpacing: 0.3,
   },
   changePassword: {
     marginTop: 12,

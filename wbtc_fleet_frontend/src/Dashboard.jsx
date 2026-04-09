@@ -379,6 +379,7 @@ function Dashboard({ apiBase, setApiBase, token, setToken, user, setUser, operat
             <Link className="nav-item" to="/scheduling">Trip scheduling</Link>
             <Link className="nav-item" to="/payments">Payment</Link>
             <Link className="nav-item live-nav" to="/live-trips">Live trips</Link>
+            <Link className="nav-item" to="/privacy-policy">Privacy Policy</Link>
           </nav>
           <div className="sidebar-footer">
             <span className="pill">API: {apiBase}</span>

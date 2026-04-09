@@ -344,6 +344,10 @@ export default function DriverProfile() {
           </View>
         </View>
 
+        <TouchableOpacity style={styles.secondaryAction} onPress={() => router.push("/privacy-policy")}>
+          <Text style={styles.secondaryActionText}>Privacy Policy</Text>
+        </TouchableOpacity>
+
         <TouchableOpacity style={styles.logout} onPress={handleLogout}>
           <Text style={styles.logoutText}>{t("common", "logout")}</Text>
         </TouchableOpacity>
@@ -645,6 +649,19 @@ const styles = StyleSheet.create({
     width: 1,
     alignSelf: "stretch",
     backgroundColor: "rgba(255,255,255,0.08)",
+  },
+  secondaryAction: {
+    marginTop: 14,
+    backgroundColor: "rgba(255,255,255,0.04)",
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.08)",
+    paddingVertical: 13,
+    borderRadius: 14,
+    alignItems: "center",
+  },
+  secondaryActionText: {
+    color: "#9CCBFF",
+    fontWeight: "700",
   },
   logout: {
     marginTop: 20,

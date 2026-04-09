@@ -362,6 +362,11 @@ export default function ConductorProfile() {
           </View>
         </View>
 
+        <TouchableOpacity style={styles.privacyButton} onPress={() => router.push("/privacy-policy")}>
+          <Ionicons name="document-text-outline" size={16} color="#9CCBFF" />
+          <Text style={styles.privacyButtonText}>Privacy Policy</Text>
+        </TouchableOpacity>
+
         <TouchableOpacity style={styles.logout} onPress={handleLogout}>
           <Ionicons name="log-out-outline" size={18} color="#FFFFFF" />
           <Text style={styles.logoutText}>{t("common", "logout")}</Text>
@@ -811,6 +816,23 @@ const styles = StyleSheet.create({
   },
   secondaryActionTextDisabled: {
     color: "rgba(255,255,255,0.25)",
+  },
+  privacyButton: {
+    marginTop: 16,
+    minHeight: 48,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.08)",
+    backgroundColor: "rgba(255,255,255,0.04)",
+    alignItems: "center",
+    justifyContent: "center",
+    flexDirection: "row",
+    gap: 8,
+  },
+  privacyButtonText: {
+    color: "#9CCBFF",
+    fontSize: 13.5,
+    fontWeight: "800",
   },
   logout: {
     marginTop: 18,

@@ -327,6 +327,9 @@ export default function Login() {
             ? "Development mode is enabled. The app will use your custom API URL."
             : "Connected to the live WBTC server"}
         </Text>
+        <TouchableOpacity style={styles.policyLink} onPress={() => router.push("/privacy-policy")}>
+          <Text style={styles.policyLinkText}>Privacy Policy</Text>
+        </TouchableOpacity>
       </ScrollView>
     </View>
   );
@@ -526,5 +529,16 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: "rgba(255,255,255,0.2)",
     textAlign: "center",
+  },
+  policyLink: {
+    marginTop: 10,
+    alignSelf: "center",
+    paddingVertical: 8,
+    paddingHorizontal: 10,
+  },
+  policyLinkText: {
+    color: "#7DD3FC",
+    fontSize: 13,
+    fontWeight: "600",
   },
 });
