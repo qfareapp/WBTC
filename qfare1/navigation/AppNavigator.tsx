@@ -1,5 +1,5 @@
-import React from 'react';
-import { ActivityIndicator, StyleSheet, View } from 'react-native';
+import React, { useEffect, useState } from 'react';
+import { StyleSheet, View } from 'react-native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { Ionicons } from '@expo/vector-icons';
@@ -11,6 +11,7 @@ import LoginScreen from '../screens/LoginScreen';
 import OtpScreen from '../screens/OtpScreen';
 import CompleteProfileScreen from '../screens/CompleteProfileScreen';
 import { useAuth } from '../lib/auth';
+import LoadingScreen from '../components/LoadingScreen';
 import { palette } from '../lib/theme';
 
 export type RootStackParamList = {
@@ -126,11 +127,20 @@ const TabsNavigator = () => (
 
 const AppNavigator = () => {
   const { token, user, loading } = useAuth();
+  const [minimumBootElapsed, setMinimumBootElapsed] = useState(false);
 
-  if (loading) {
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setMinimumBootElapsed(true);
+    }, 1800);
+
+    return () => clearTimeout(timer);
+  }, []);
+
+  if (loading || !minimumBootElapsed) {
     return (
       <View style={styles.splash}>
-        <ActivityIndicator size="large" color={palette.accent} />
+        <LoadingScreen />
       </View>
     );
   }

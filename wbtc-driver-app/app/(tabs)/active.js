@@ -5,6 +5,7 @@ import { useRouter } from "expo-router";
 import { useAppLanguage } from "../../contexts/shared-language";
 import useOfferAlert from "../../hooks/use-offer-alert";
 import { getOpsDate } from "../../utils/opsTime";
+import QfareLogo from "../../components/QfareLogo";
 
 const API_BASE_KEY = "wbtc_api_base";
 const TOKEN_KEY = "wbtc_driver_token";
@@ -237,7 +238,7 @@ export default function ActiveTrips() {
         <View style={styles.header}>
         <View>
           <Text style={styles.kicker}>{t("common", "today")}</Text>
-          <Text style={styles.title}>{t("driverActive", "title")}</Text>
+          <QfareLogo size="small" align="left" />
           <Text style={styles.subtitle}>
             {isOnDuty ? t("driverActive", "subtitleOnDuty") : t("driverActive", "subtitleOffDuty")}
           </Text>

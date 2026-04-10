@@ -7,6 +7,7 @@ const API_BASE_KEY = "wbtc_api_base";
 const TOKEN_KEY = "wbtc_driver_token";
 const USER_ROLE_KEY = "wbtc_user_role";
 const PUSH_TOKEN_KEY = "wbtc_expo_push_token";
+const PUSH_REGISTRATION_ERROR_KEY = "wbtc_push_registration_error";
 const OFFER_CHANNEL_ID = "trip-offers";
 
 Notifications.setNotificationHandler({
@@ -71,6 +72,8 @@ const getPushRegistration = async () => {
         provider: "fcm",
       };
     }
+
+    throw new Error("Android FCM token was not available. Check google-services.json and rebuild the native app.");
   }
 
   const projectId = getProjectId();
@@ -95,6 +98,7 @@ const getStoredDriverAuth = async (overrides = {}) => {
 
 export const syncDriverPushTokenRegistration = async (overrides = {}) => {
   try {
+    await AsyncStorage.removeItem(PUSH_REGISTRATION_ERROR_KEY);
     const { apiBase, authToken, role } = await getStoredDriverAuth(overrides);
     if (!apiBase || !authToken || role !== "DRIVER") return null;
 
@@ -102,6 +106,7 @@ export const syncDriverPushTokenRegistration = async (overrides = {}) => {
     if (!registration?.token) return null;
 
     await AsyncStorage.setItem(PUSH_TOKEN_KEY, registration.token);
+    await AsyncStorage.removeItem(PUSH_REGISTRATION_ERROR_KEY);
 
     await fetch(`${apiBase}/api/driver-trips/push-token`, {
       method: "POST",
@@ -117,7 +122,11 @@ export const syncDriverPushTokenRegistration = async (overrides = {}) => {
     });
 
     return registration.token;
-  } catch {
+  } catch (error) {
+    await AsyncStorage.setItem(
+      PUSH_REGISTRATION_ERROR_KEY,
+      String(error?.message || "Push registration failed")
+    );
     return null;
   }
 };
@@ -145,3 +154,4 @@ export const unregisterStoredDriverPushToken = async (overrides = {}) => {
 };
 
 export const getOfferNotificationChannelId = () => OFFER_CHANNEL_ID;
+export const getStoredPushRegistrationError = async () => AsyncStorage.getItem(PUSH_REGISTRATION_ERROR_KEY);

@@ -38,6 +38,19 @@ const getBusStatusConfig = (bus) => {
   return { key: "halted", icon: "pause", accent: "#FB923C", bg: "rgba(251,146,60,0.14)", text: "#FB923C" };
 };
 
+const getBusLocationLabel = (bus, t) => {
+  if (bus?.liveRoute) {
+    return (
+      bus?.liveCurrentStop?.name ||
+      bus?.currentLocation ||
+      bus?.lastTripEndLocation?.name ||
+      t("ownerActive", "locationUnavailable")
+    );
+  }
+
+  return bus?.currentLocation || bus?.lastTripEndLocation?.name || t("ownerActive", "locationUnavailable");
+};
+
 export default function OwnerActive() {
   const router = useRouter();
   const { t } = useAppLanguage();
@@ -393,7 +406,7 @@ export default function OwnerActive() {
                   <View style={styles.locationRow}>
                     <Ionicons name="location-outline" size={14} color="#8DB4E2" />
                     <Text style={styles.locationText}>
-                      {bus.currentLocation || bus.lastTripEndLocation?.name || t("ownerActive", "locationUnavailable")}
+                      {getBusLocationLabel(bus, t)}
                     </Text>
                   </View>
                   {hasAssignedCrew ? (

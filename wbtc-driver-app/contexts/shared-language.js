@@ -97,6 +97,7 @@ const translations = {
       totalTrips: "Total trips",
       totalKm: "Total KM",
       driveHrs: "Drive hrs",
+      failedLoadProfile: "Failed to load profile",
       failedLoadSummary: "Failed to load summary",
     },
     ownerTabs: {
@@ -319,6 +320,7 @@ const translations = {
       totalTrips: "মোট ট্রিপ",
       totalKm: "মোট কিমি",
       driveHrs: "ড্রাইভ ঘণ্টা",
+      failedLoadProfile: "প্রোফাইল লোড করা যায়নি",
       failedLoadSummary: "সারাংশ লোড করা যায়নি",
     },
     ownerTabs: {

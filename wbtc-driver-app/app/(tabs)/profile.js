@@ -70,6 +70,42 @@ export default function DriverProfile() {
   const [profileOpen, setProfileOpen] = useState(true);
   const [activeTab, setActiveTab] = useState("today");
 
+  const loadDriverProfile = async () => {
+    const [apiBase, token, driverJson] = await Promise.all([
+      AsyncStorage.getItem(API_BASE_KEY),
+      AsyncStorage.getItem(TOKEN_KEY),
+      AsyncStorage.getItem(DRIVER_KEY),
+    ]);
+    if (!apiBase || !token) {
+      router.replace("/login");
+      return null;
+    }
+
+    const storedDriver = driverJson ? JSON.parse(driverJson) : null;
+    if (storedDriver) setDriver(storedDriver);
+
+    try {
+      const response = await fetch(`${apiBase}/api/driver-auth/me`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      const text = await response.text();
+      const data = text ? JSON.parse(text) : {};
+      if (!response.ok) throw new Error(data.message || t("driverProfile", "failedLoadProfile"));
+
+      const liveDriver = data.driver || {};
+      const mergedDriver = {
+        ...(storedDriver || {}),
+        ...liveDriver,
+      };
+      setDriver(mergedDriver);
+      await AsyncStorage.setItem(DRIVER_KEY, JSON.stringify(mergedDriver));
+      return mergedDriver;
+    } catch (err) {
+      if (storedDriver) return storedDriver;
+      throw err;
+    }
+  };
+
   const loadSummary = async (startDate, endDate) => {
     setSummaryLoading(true);
     try {
@@ -100,10 +136,10 @@ export default function DriverProfile() {
 
   useEffect(() => {
     const loadDriver = async () => {
-      const driverJson = await AsyncStorage.getItem(DRIVER_KEY);
-      if (driverJson) {
-        const parsedDriver = JSON.parse(driverJson);
-        setDriver(parsedDriver);
+      try {
+        await loadDriverProfile();
+      } catch (err) {
+        setNotice(err.message);
       }
       await loadSummary(rangeStartDate, rangeEndDate);
     };
@@ -125,10 +161,10 @@ export default function DriverProfile() {
 
   const handleRefresh = async () => {
     setRefreshing(true);
-    const driverJson = await AsyncStorage.getItem(DRIVER_KEY);
-    if (driverJson) {
-      const parsedDriver = JSON.parse(driverJson);
-      setDriver(parsedDriver);
+    try {
+      await loadDriverProfile();
+    } catch (err) {
+      setNotice(err.message);
     }
     await loadSummary(rangeStartDate, rangeEndDate);
     setRefreshing(false);

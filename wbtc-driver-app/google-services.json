@@ -1,21 +1,21 @@
 {
   "project_info": {
-    "project_number": "724625859501",
-    "project_id": "wbtc-driver-map",
-    "storage_bucket": "wbtc-driver-map.firebasestorage.app"
+    "project_number": "967249677156",
+    "project_id": "qfare-partner",
+    "storage_bucket": "qfare-partner.firebasestorage.app"
   },
   "client": [
     {
       "client_info": {
-        "mobilesdk_app_id": "1:724625859501:android:b99d5a44e619d0b2e3f724",
+        "mobilesdk_app_id": "1:967249677156:android:4ab4300ca21cef643d0871",
         "android_client_info": {
-          "package_name": "com.wbtc.driver"
+          "package_name": "com.qfare.partner"
         }
       },
       "oauth_client": [],
       "api_key": [
         {
-          "current_key": "AIzaSyAxS1Ck3izjweHzFk8tW2RpMyigLVSE-0o"
+          "current_key": "AIzaSyCPSHZ1K8JrU5W2GtKkOiuxdqqbn1UQc9k"
         }
       ],
       "services": {

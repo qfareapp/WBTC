@@ -1,23 +1,18 @@
-import { Text, View, StyleSheet } from "react-native";
+import { Image, View, StyleSheet } from "react-native";
+
+const logoSource = require("../assets/images/qfare-logo.png");
 
 export default function QfareLogo({ size = "large", align = "center" }) {
-  const scale = size === "small" ? 0.72 : 1;
+  const width = size === "small" ? 180 : 250;
+  const height = size === "small" ? 72 : 100;
 
   return (
     <View style={[styles.wrap, align === "left" ? styles.left : styles.center]}>
-      <Text
-        style={[
-          styles.wordmark,
-          {
-            fontSize: 52 * scale,
-            lineHeight: 56 * scale,
-            letterSpacing: -2.4 * scale,
-          },
-        ]}
-      >
-        <Text style={styles.q}>q</Text>
-        <Text style={styles.fare}>fare</Text>
-      </Text>
+      <Image
+        source={logoSource}
+        style={{ width, height }}
+        resizeMode="contain"
+      />
     </View>
   );
 }
@@ -31,14 +26,5 @@ const styles = StyleSheet.create({
   },
   left: {
     alignItems: "flex-start",
-  },
-  wordmark: {
-    fontWeight: "800",
-  },
-  q: {
-    color: "#00C87A",
-  },
-  fare: {
-    color: "#FFFFFF",
   },
 });

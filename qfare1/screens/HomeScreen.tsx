@@ -1,10 +1,13 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+﻿import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Alert,
+  Animated,
   Dimensions,
   FlatList,
   ImageBackground,
+  Keyboard,
   Linking,
+  Modal,
   Pressable,
   RefreshControl,
   ScrollView,
@@ -18,12 +21,15 @@ import { CompositeNavigationProp } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { BottomTabNavigationProp } from '@react-navigation/bottom-tabs';
 import { Ionicons } from '@expo/vector-icons';
+import * as Location from 'expo-location';
 import { WebView } from 'react-native-webview';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { BottomTabParamList, RootStackParamList } from '../navigation/AppNavigator';
 import { apiGet, apiPost } from '../lib/api';
 import { useAuth } from '../lib/auth';
 import { palette } from '../lib/theme';
 
+const WAITING_DISCLAIMER_ACK_KEY = 'passenger_waiting_disclaimer_ack';
 const today = (() => {
   const now = new Date();
   const year = now.getFullYear();
@@ -38,7 +44,7 @@ const BANNER_SLIDES = [
     key: 'hero',
     eyebrow: 'Unreserved made easy',
     title: 'Scan. Pay.\nRide.',
-    subtitle: 'Board any bus, scan its QR and get a digital ticket instantly — no queue.',
+    subtitle: 'Board any bus, scan its QR and get a digital ticket instantly - no queue.',
     accentKey: 'accent' as const,
     cta: null,
   },
@@ -54,7 +60,7 @@ const BANNER_SLIDES = [
     key: 'live',
     eyebrow: 'Real-time tracking',
     title: 'Track your\nbus live.',
-    subtitle: 'See exactly where your bus is right now — position updated every 5 seconds.',
+    subtitle: 'See exactly where your bus is right now - position updated every 5 seconds.',
     accentKey: 'gold' as const,
     cta: null,
   },
@@ -138,6 +144,24 @@ type LiveRoute = {
   stops: RouteStop[];
 };
 
+type RoutePreview = {
+  route: PublicRoute;
+  stops: string[];
+};
+
+type StopNavigationPrompt = {
+  name: string;
+  latitude: number;
+  longitude: number;
+  distanceMeters: number;
+};
+
+type WaitingDisclaimerPrompt = {
+  tripId: string;
+};
+
+const normalizeStopName = (value: string) => value.trim().toLowerCase();
+
 const haversineKm = (lat1: number, lon1: number, lat2: number, lon2: number) => {
   const R = 6371;
   const dLat = ((lat2 - lat1) * Math.PI) / 180;
@@ -179,15 +203,72 @@ const resolveCurrentStop = (
   };
 };
 
+const getOrderedRouteStops = (route: PublicRoute, fromValue: string, toValue: string) => {
+  const fromNorm = normalizeStopName(fromValue);
+  const toNorm = normalizeStopName(toValue);
+
+  if (!fromNorm || !toNorm) {
+    return route.stops;
+  }
+
+  const fromIndex = route.stops.findIndex(stop => normalizeStopName(stop) === fromNorm);
+  const toIndex = route.stops.findIndex(stop => normalizeStopName(stop) === toNorm);
+
+  if (fromIndex === -1 || toIndex === -1 || fromIndex === toIndex) {
+    return route.stops;
+  }
+
+  if (fromIndex < toIndex) {
+    return route.stops.slice(fromIndex, toIndex + 1);
+  }
+
+  return route.stops.slice(toIndex, fromIndex + 1).reverse();
+};
+
+const getTripNearestRouteStop = (trip: LiveTrip, stops: RouteStop[]) => {
+  if (typeof trip.lastLatitude !== 'number' || typeof trip.lastLongitude !== 'number') {
+    return null;
+  }
+
+  const nearest = resolveCurrentStop(
+    trip.lastLatitude,
+    trip.lastLongitude,
+    stops,
+    trip.direction
+  );
+
+  if (!nearest) {
+    return null;
+  }
+
+  const routeStop = stops.find(stop => normalizeStopName(stop.name) === normalizeStopName(nearest.name));
+  if (!routeStop) {
+    return null;
+  }
+
+  return {
+    routeStop,
+    status: nearest.status,
+  };
+};
+
+const getWaitingDisclaimerStorageKey = (userId: string) =>
+  `${WAITING_DISCLAIMER_ACK_KEY}:${userId}`;
+
 const HomeScreen: React.FC<Props> = ({ navigation }) => {
-  const { token } = useAuth();
+  const { token, user } = useAuth();
   const maxFavoriteStops = 6;
+  const favoritePickerPreviewCount = 8;
   const [from, setFrom] = useState('');
   const [to, setTo] = useState('');
   const [activeStopField, setActiveStopField] = useState<'from' | 'to'>('from');
   const [favoriteStops, setFavoriteStops] = useState<string[]>([]);
   const [showFavoritePicker, setShowFavoritePicker] = useState(false);
+  const [favoriteSearch, setFavoriteSearch] = useState('');
   const [favoriteRemoveMode, setFavoriteRemoveMode] = useState(false);
+  const [selectedRoutePreview, setSelectedRoutePreview] = useState<RoutePreview | null>(null);
+  const [stopNavigationPrompt, setStopNavigationPrompt] = useState<StopNavigationPrompt | null>(null);
+  const [waitingDisclaimerPrompt, setWaitingDisclaimerPrompt] = useState<WaitingDisclaimerPrompt | null>(null);
   const [showHowItWorks, setShowHowItWorks] = useState(false);
   const [routes, setRoutes] = useState<PublicRoute[]>([]);
   const [loadingRoutes, setLoadingRoutes] = useState(false);
@@ -206,6 +287,7 @@ const HomeScreen: React.FC<Props> = ({ navigation }) => {
   const [waitingBusyByTrip, setWaitingBusyByTrip] = useState<Record<string, boolean>>({});
   const [activeSlide, setActiveSlide] = useState(0);
   const sliderRef = useRef<FlatList>(null);
+  const liveButtonPulse = useRef(new Animated.Value(0)).current;
 
   const loadRoutes = async () => {
     setLoadingRoutes(true);
@@ -236,16 +318,47 @@ const HomeScreen: React.FC<Props> = ({ navigation }) => {
     return () => clearInterval(timer);
   }, []);
 
+  useEffect(() => {
+    const loop = Animated.loop(
+      Animated.sequence([
+        Animated.timing(liveButtonPulse, {
+          toValue: 1,
+          duration: 900,
+          useNativeDriver: true,
+        }),
+        Animated.timing(liveButtonPulse, {
+          toValue: 0,
+          duration: 900,
+          useNativeDriver: true,
+        }),
+      ]),
+    );
+
+    loop.start();
+
+    return () => {
+      loop.stop();
+      liveButtonPulse.stopAnimation();
+    };
+  }, [liveButtonPulse]);
+
   const matchingRoutes = useMemo(() => {
-    const fromNorm = from.trim().toLowerCase();
-    const toNorm = to.trim().toLowerCase();
+    const fromNorm = normalizeStopName(from);
+    const toNorm = normalizeStopName(to);
     if (!fromNorm && !toNorm) return [];
     return routes.filter(route => {
-      const hasFrom = fromNorm ? route.stops.some(stop => stop.toLowerCase().includes(fromNorm)) : true;
-      const hasTo = toNorm ? route.stops.some(stop => stop.toLowerCase().includes(toNorm)) : true;
+      const hasFrom = fromNorm ? route.stops.some(stop => normalizeStopName(stop) === fromNorm) : true;
+      const hasTo = toNorm ? route.stops.some(stop => normalizeStopName(stop) === toNorm) : true;
       return hasFrom && hasTo;
     });
   }, [from, routes, to]);
+
+  const matchingRoutePreviews = useMemo(
+    () => matchingRoutes.map(route => ({ route, stops: getOrderedRouteStops(route, from, to) })),
+    [from, matchingRoutes, to]
+  );
+
+  const hasRouteSearch = Boolean(from.trim() || to.trim());
 
   const allStops = useMemo(() => {
     const seen = new Set<string>();
@@ -273,6 +386,33 @@ const HomeScreen: React.FC<Props> = ({ navigation }) => {
     [allStops, favoriteStops]
   );
 
+  const searchableFavoriteStops = useMemo(
+    () => availableFavoriteStops.filter(stop => stop.trim().length >= 3),
+    [availableFavoriteStops]
+  );
+
+  const favoritePickerStops = useMemo(() => {
+    const query = favoriteSearch.trim().toLowerCase();
+    const source = searchableFavoriteStops.length ? searchableFavoriteStops : availableFavoriteStops;
+
+    if (!query) {
+      return source.slice(0, favoritePickerPreviewCount);
+    }
+
+    return [...source]
+      .filter(stop => stop.toLowerCase().includes(query))
+      .sort((left, right) => {
+        const leftLower = left.toLowerCase();
+        const rightLower = right.toLowerCase();
+        const leftStarts = leftLower.startsWith(query) ? 0 : 1;
+        const rightStarts = rightLower.startsWith(query) ? 0 : 1;
+        if (leftStarts !== rightStarts) return leftStarts - rightStarts;
+        if (left.length !== right.length) return left.length - right.length;
+        return left.localeCompare(right);
+      })
+      .slice(0, 12);
+  }, [availableFavoriteStops, favoriteSearch, favoritePickerPreviewCount, searchableFavoriteStops]);
+
   const suggestions = useMemo(() => {
     const activeText = (activeStopField === 'from' ? from : to).trim().toLowerCase();
     if (!activeText) return [];
@@ -293,17 +433,50 @@ const HomeScreen: React.FC<Props> = ({ navigation }) => {
   // If both stops are found and have different indices, only show trips in that direction.
   // Falls back to showing all trips when from/to aren't set or not found in this route.
   const filteredLiveTrips = useMemo(() => {
-    const fromNorm = from.trim().toLowerCase();
-    const toNorm = to.trim().toLowerCase();
+    const fromNorm = normalizeStopName(from);
+    const toNorm = normalizeStopName(to);
     if (!fromNorm || !toNorm || !liveRoute?.stops?.length) return liveTrips;
 
-    const fromStop = liveRoute.stops.find(s => s.name.toLowerCase().includes(fromNorm));
-    const toStop = liveRoute.stops.find(s => s.name.toLowerCase().includes(toNorm));
+    const fromStop = liveRoute.stops.find(s => normalizeStopName(s.name) === fromNorm);
+    const toStop = liveRoute.stops.find(s => normalizeStopName(s.name) === toNorm);
 
     if (!fromStop || !toStop || fromStop.index === toStop.index) return liveTrips;
 
     const wantedDirection: 'UP' | 'DOWN' = fromStop.index < toStop.index ? 'UP' : 'DOWN';
-    return liveTrips.filter(trip => trip.direction === wantedDirection);
+    return liveTrips.filter(trip => {
+      if (trip.direction !== wantedDirection) {
+        return false;
+      }
+
+      const passedSelectedStop = trip.passedStops.some(stop => normalizeStopName(stop) === fromNorm);
+      const nearestStop = getTripNearestRouteStop(trip, liveRoute.stops);
+      const approachingSelectedStop = normalizeStopName(trip.approachingStop ?? '') === fromNorm;
+
+      if (nearestStop) {
+        const currentIndex = nearestStop.routeStop.index;
+        const atSelectedStop = currentIndex === fromStop.index && nearestStop.status === 'at';
+
+        if (atSelectedStop) {
+          return true;
+        }
+
+        if (passedSelectedStop) {
+          return false;
+        }
+
+        if (wantedDirection === 'UP') {
+          return currentIndex < fromStop.index || approachingSelectedStop;
+        }
+
+        return currentIndex > fromStop.index || approachingSelectedStop;
+      }
+
+      if (passedSelectedStop) {
+        return false;
+      }
+
+      return true;
+    });
   }, [liveTrips, from, to, liveRoute]);
 
   const formatUpdated = (value: string | null) => {
@@ -319,9 +492,9 @@ const HomeScreen: React.FC<Props> = ({ navigation }) => {
   const staleColor = (value: string | null) => {
     if (!value) return palette.danger;
     const diffMin = Math.round((Date.now() - new Date(value).getTime()) / 60000);
-    if (diffMin <= 5) return palette.accent;   // green — fresh
-    if (diffMin <= 15) return palette.gold;    // amber — getting stale
-    return palette.danger;                      // red — stale
+    if (diffMin <= 5) return palette.accent;   // green - fresh
+    if (diffMin <= 15) return palette.gold;    // amber - getting stale
+    return palette.danger;                      // red â€” stale
   };
 
   const fetchTripLocationName = async (tripId: string, lat: number, lng: number) => {
@@ -382,7 +555,7 @@ const HomeScreen: React.FC<Props> = ({ navigation }) => {
       );
       setTripEtas(prev => ({ ...prev, [tripId]: data.eta ?? null }));
     } catch {
-      // non-fatal — ETA is a best-effort feature
+      // non-fatal - ETA is a best-effort feature
     }
   };
 
@@ -410,6 +583,15 @@ const HomeScreen: React.FC<Props> = ({ navigation }) => {
     }
   };
 
+  const sendWaitingNotificationForTrip = async (tripId: string, stopName: string) => {
+    const data = await apiPost<{ ok: boolean; waiting: WaitingStatus }>(
+      `/api/public/trips/${tripId}/waiting`,
+      { stopName },
+      token
+    );
+    setWaitingStatusByTrip(prev => ({ ...prev, [tripId]: data.waiting ?? null }));
+  };
+
   const notifyWaitingForTrip = async (tripId: string, stopName: string) => {
     if (!token) {
       Alert.alert('Login required', 'Please sign in to notify the crew.');
@@ -417,12 +599,7 @@ const HomeScreen: React.FC<Props> = ({ navigation }) => {
     }
     setWaitingBusyByTrip(prev => ({ ...prev, [tripId]: true }));
     try {
-      const data = await apiPost<{ ok: boolean; waiting: WaitingStatus }>(
-        `/api/public/trips/${tripId}/waiting`,
-        { stopName },
-        token
-      );
-      setWaitingStatusByTrip(prev => ({ ...prev, [tripId]: data.waiting ?? null }));
+      await sendWaitingNotificationForTrip(tripId, stopName);
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Failed to notify crew';
       Alert.alert('Could not notify crew', message);
@@ -467,6 +644,7 @@ const HomeScreen: React.FC<Props> = ({ navigation }) => {
   }, [liveTrips]);
 
   const handleStopSelect = (stop: string) => {
+    Keyboard.dismiss();
     if (activeStopField === 'from') {
       setFrom(stop);
       if (to === stop) setTo('');
@@ -484,12 +662,95 @@ const HomeScreen: React.FC<Props> = ({ navigation }) => {
     Linking.openURL(url);
   };
 
+  const navigateToCoordinates = (latitude: number, longitude: number) => {
+    const url = `https://www.google.com/maps/dir/?api=1&destination=${latitude},${longitude}&travelmode=walking`;
+    Linking.openURL(url);
+  };
+
+  const maybeShowWaitingDisclaimer = async (tripId: string) => {
+    if (!user?.id) {
+      return;
+    }
+
+    const acknowledged = await AsyncStorage.getItem(getWaitingDisclaimerStorageKey(user.id));
+    if (acknowledged === '1') {
+      return;
+    }
+
+    setWaitingDisclaimerPrompt({ tripId });
+  };
+
+  const acknowledgeWaitingDisclaimer = async () => {
+    if (user?.id) {
+      await AsyncStorage.setItem(getWaitingDisclaimerStorageKey(user.id), '1');
+    }
+    setWaitingDisclaimerPrompt(null);
+  };
+
+  const handleWaitingAction = async (tripId: string, stopName: string) => {
+    if (!token) {
+      Alert.alert('Login required', 'Please sign in to notify the crew.');
+      return;
+    }
+
+    const stop = liveRoute?.stops?.find(
+      item =>
+        normalizeStopName(item.name) === normalizeStopName(stopName) &&
+        typeof item.latitude === 'number' &&
+        typeof item.longitude === 'number'
+    );
+
+    if (!stop?.latitude || !stop?.longitude) {
+      Alert.alert('Stop location unavailable', 'This stop does not have location coordinates yet.');
+      return;
+    }
+
+    setWaitingBusyByTrip(prev => ({ ...prev, [tripId]: true }));
+    try {
+      const permission = await Location.requestForegroundPermissionsAsync();
+      if (permission.status !== 'granted') {
+        Alert.alert('Location required', 'Allow location access to confirm you are at the selected bus stop.');
+        return;
+      }
+
+      const userPosition = await Location.getCurrentPositionAsync({
+        accuracy: Location.Accuracy.High,
+      });
+
+      const distanceMeters = haversineKm(
+        userPosition.coords.latitude,
+        userPosition.coords.longitude,
+        stop.latitude,
+        stop.longitude
+      ) * 1000;
+
+      if (distanceMeters <= 20) {
+        await sendWaitingNotificationForTrip(tripId, stopName);
+        await maybeShowWaitingDisclaimer(tripId);
+        return;
+      }
+
+      setStopNavigationPrompt({
+        name: stop.name,
+        latitude: stop.latitude,
+        longitude: stop.longitude,
+        distanceMeters: Math.round(distanceMeters),
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Could not verify your location';
+      Alert.alert('Location check failed', message);
+    } finally {
+      setWaitingBusyByTrip(prev => ({ ...prev, [tripId]: false }));
+    }
+  };
+
   const handleAddFavorite = (stop: string) => {
     if (favoriteStops.length >= maxFavoriteStops) {
       setShowFavoritePicker(false);
       return;
     }
     setFavoriteStops(current => [...current, stop]);
+    setFavoriteSearch('');
     setShowFavoritePicker(false);
   };
 
@@ -517,10 +778,26 @@ const HomeScreen: React.FC<Props> = ({ navigation }) => {
     }
   };
 
+  const liveButtonScale = liveButtonPulse.interpolate({
+    inputRange: [0, 1],
+    outputRange: [1, 1.05],
+  });
+
+  const liveButtonGlowOpacity = liveButtonPulse.interpolate({
+    inputRange: [0, 1],
+    outputRange: [0.12, 0.28],
+  });
+
+  const liveDotScale = liveButtonPulse.interpolate({
+    inputRange: [0, 1],
+    outputRange: [1, 1.35],
+  });
+
   return (
     <ScrollView
       style={styles.container}
       contentContainerStyle={styles.content}
+      keyboardShouldPersistTaps="handled"
       refreshControl={
         <RefreshControl
           refreshing={refreshing}
@@ -743,7 +1020,10 @@ const HomeScreen: React.FC<Props> = ({ navigation }) => {
               styles.addFavoriteButton,
               favoriteStops.length >= maxFavoriteStops && styles.addFavoriteButtonDisabled
             ]}
-            onPress={() => setShowFavoritePicker(current => !current)}
+            onPress={() => {
+              setFavoriteSearch('');
+              setShowFavoritePicker(current => !current);
+            }}
             disabled={favoriteStops.length >= maxFavoriteStops}
           >
             <Ionicons
@@ -786,7 +1066,7 @@ const HomeScreen: React.FC<Props> = ({ navigation }) => {
                       handleRemoveFavorite(stop);
                     }}
                   >
-                    <Text style={styles.removeFavoriteButtonText}>−</Text>
+                    <Text style={styles.removeFavoriteButtonText}>-</Text>
                   </TouchableOpacity>
                 )}
                 {isFrom && <Ionicons name="navigate" size={10} color={palette.accent} style={{ marginRight: 4 }} />}
@@ -821,37 +1101,77 @@ const HomeScreen: React.FC<Props> = ({ navigation }) => {
             <Text style={styles.favoritePickerHint}>
               From all available routes · max {maxFavoriteStops}
             </Text>
-            <View style={styles.favoriteChipsRow}>
-              {availableFavoriteStops.length && favoriteStops.length < maxFavoriteStops ? (
-                availableFavoriteStops.map(stop => (
-                  <TouchableOpacity
-                    key={stop}
-                    style={styles.favoritePickerChip}
-                    onPress={event => {
-                      event.stopPropagation();
-                      handleAddFavorite(stop);
-                    }}
-                  >
-                    <Ionicons name="add-outline" size={13} color={palette.accent} />
-                    <Text style={styles.favoritePickerChipText}>{stop}</Text>
-                  </TouchableOpacity>
-                ))
-              ) : (
-                <Text style={styles.hint}>
-                  {favoriteStops.length >= maxFavoriteStops
-                    ? `You already have ${maxFavoriteStops} favourite stops.`
-                    : 'All stops are already in favourites.'}
+            {favoriteStops.length < maxFavoriteStops ? (
+              <>
+                <View style={styles.favoriteSearchRow}>
+                  <Ionicons name="search-outline" size={14} color={palette.textFaint} />
+                  <TextInput
+                    value={favoriteSearch}
+                    onChangeText={setFavoriteSearch}
+                    placeholder="Search stops"
+                    placeholderTextColor={palette.textFaint}
+                    style={styles.favoriteSearchInput}
+                    autoCorrect={false}
+                    autoCapitalize="words"
+                  />
+                  {favoriteSearch.trim() ? (
+                    <TouchableOpacity onPress={() => setFavoriteSearch('')}>
+                      <Ionicons name="close-circle" size={16} color={palette.textFaint} />
+                    </TouchableOpacity>
+                  ) : null}
+                </View>
+                <Text style={styles.favoritePickerSubhint}>
+                  {favoriteSearch.trim()
+                    ? 'Matching stops'
+                    : `Showing ${Math.min(favoritePickerStops.length, favoritePickerPreviewCount)} suggested stops`}
                 </Text>
-              )}
-            </View>
+                <ScrollView
+                  style={styles.favoritePickerScroll}
+                  contentContainerStyle={styles.favoritePickerScrollContent}
+                  nestedScrollEnabled
+                  showsVerticalScrollIndicator={false}
+                >
+                  <View style={styles.favoriteChipsRow}>
+                    {favoritePickerStops.length ? (
+                      favoritePickerStops.map(stop => (
+                        <TouchableOpacity
+                          key={stop}
+                          style={styles.favoritePickerChip}
+                          onPress={event => {
+                            event.stopPropagation();
+                            handleAddFavorite(stop);
+                          }}
+                        >
+                          <Ionicons name="add-outline" size={13} color={palette.accent} />
+                          <Text style={styles.favoritePickerChipText}>{stop}</Text>
+                        </TouchableOpacity>
+                      ))
+                    ) : (
+                      <Text style={styles.hint}>
+                        No stop names match "{favoriteSearch.trim()}".
+                      </Text>
+                    )}
+                  </View>
+                </ScrollView>
+              </>
+            ) : null}
+            {favoriteStops.length >= maxFavoriteStops ? (
+              <Text style={styles.hint}>
+                {`You already have ${maxFavoriteStops} favourite stops.`}
+              </Text>
+            ) : null}
           </View>
         )}
 
         {/* Matching routes */}
-        {matchingRoutes.length > 0 ? (
+        {matchingRoutePreviews.length > 0 ? (
           <View style={styles.routeList}>
-            {matchingRoutes.map(route => (
-              <View key={route.id} style={styles.routeCard}>
+            {matchingRoutePreviews.map(({ route, stops }) => (
+              <Pressable
+                key={route.id}
+                style={styles.routeCard}
+                onPress={() => setSelectedRoutePreview({ route, stops })}
+              >
                 <View style={styles.routeCardAccent} />
                 <View style={styles.routeCardBody}>
                   <View style={styles.routeTop}>
@@ -860,9 +1180,18 @@ const HomeScreen: React.FC<Props> = ({ navigation }) => {
                         <Text style={styles.routeCodeBadgeText}>{route.routeCode}</Text>
                       </View>
                       <Text style={styles.routePath}>
-                        {route.source}{'  →  '}{route.destination}
+                        {route.source}{'  ->  '}{route.destination}
                       </Text>
                     </View>
+                    <Animated.View
+                      style={[
+                        styles.liveButtonWrap,
+                        {
+                          opacity: liveButtonGlowOpacity,
+                          transform: [{ scale: liveButtonScale }],
+                        },
+                      ]}
+                    />
                     <TouchableOpacity
                       style={styles.liveButton}
                       onPress={() => {
@@ -870,20 +1199,137 @@ const HomeScreen: React.FC<Props> = ({ navigation }) => {
                         void loadLiveStatus(route.id);
                       }}
                     >
-                      <View style={styles.liveDotSmall} />
+                      <Animated.View style={[styles.liveDotSmall, { transform: [{ scale: liveDotScale }] }]} />
                       <Text style={styles.liveButtonText}>Live</Text>
                     </TouchableOpacity>
                   </View>
                   <Text style={styles.routeName}>{route.routeName}</Text>
                   <Text style={styles.routeStops} numberOfLines={2}>
-                    {route.stops.join('  ·  ')}
+                    {stops.join('  ·  ')}
                   </Text>
                 </View>
-              </View>
+              </Pressable>
             ))}
+          </View>
+        ) : hasRouteSearch && !loadingRoutes && !routesError ? (
+          <View style={[styles.emptyState, styles.routeEmptyState]}>
+            <Ionicons name="search-outline" size={24} color={palette.textFaint} />
+            <Text style={styles.emptyTitle}>No routes found</Text>
+            <Text style={styles.emptyText}>
+              No routes match the selected source and destination.
+            </Text>
           </View>
         ) : null}
       </Pressable>
+
+      <Modal
+        visible={Boolean(selectedRoutePreview)}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setSelectedRoutePreview(null)}
+      >
+        <Pressable style={styles.routeModalBackdrop} onPress={() => setSelectedRoutePreview(null)}>
+          <Pressable style={styles.routeModalCard} onPress={() => {}}>
+            <View style={styles.routeModalHeader}>
+              <View style={styles.routeModalTitleWrap}>
+                <Text style={styles.routeModalTitle}>Route stops</Text>
+                {selectedRoutePreview ? (
+                  <Text style={styles.routeModalSubtitle}>
+                    {selectedRoutePreview.route.routeCode} · {selectedRoutePreview.route.routeName}
+                  </Text>
+                ) : null}
+              </View>
+              <TouchableOpacity onPress={() => setSelectedRoutePreview(null)} style={styles.routeModalClose}>
+                <Ionicons name="close-outline" size={20} color={palette.textMuted} />
+              </TouchableOpacity>
+            </View>
+
+            <ScrollView style={styles.routeModalScroll} showsVerticalScrollIndicator={false}>
+              {selectedRoutePreview?.stops.map((stop, index) => {
+                const isLast = index === selectedRoutePreview.stops.length - 1;
+                return (
+                  <View key={`${stop}-${index}`} style={styles.routeModalStopRow}>
+                    <View style={styles.routeModalRail}>
+                      <View style={styles.routeModalStopDot} />
+                      {!isLast ? <View style={styles.routeModalStopLine} /> : null}
+                    </View>
+                    <Text style={styles.routeModalStopText}>{stop}</Text>
+                  </View>
+                );
+              })}
+            </ScrollView>
+          </Pressable>
+        </Pressable>
+      </Modal>
+
+      <Modal
+        visible={Boolean(stopNavigationPrompt)}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setStopNavigationPrompt(null)}
+      >
+        <Pressable style={styles.routeModalBackdrop} onPress={() => setStopNavigationPrompt(null)}>
+          <Pressable style={styles.routeModalCard} onPress={() => {}}>
+            <View style={styles.routeModalHeader}>
+              <View style={styles.routeModalTitleWrap}>
+                <Text style={styles.routeModalTitle}>Navigate to bus stop</Text>
+                {stopNavigationPrompt ? (
+                  <Text style={styles.routeModalSubtitle}>
+                    You are about {stopNavigationPrompt.distanceMeters} meters away from {stopNavigationPrompt.name}.
+                  </Text>
+                ) : null}
+              </View>
+              <TouchableOpacity onPress={() => setStopNavigationPrompt(null)} style={styles.routeModalClose}>
+                <Ionicons name="close-outline" size={20} color={palette.textMuted} />
+              </TouchableOpacity>
+            </View>
+
+            <Text style={styles.navigatePromptText}>
+              Move within 20 meters of the selected source stop to mark that you are waiting.
+            </Text>
+
+            <TouchableOpacity
+              style={styles.navigatePromptButton}
+              onPress={() => {
+                if (!stopNavigationPrompt) return;
+                navigateToCoordinates(stopNavigationPrompt.latitude, stopNavigationPrompt.longitude);
+                setStopNavigationPrompt(null);
+              }}
+            >
+              <Ionicons name="navigate" size={16} color="#fff" />
+              <Text style={styles.navigatePromptButtonText}>Open Google navigation</Text>
+            </TouchableOpacity>
+          </Pressable>
+        </Pressable>
+      </Modal>
+
+      <Modal
+        visible={Boolean(waitingDisclaimerPrompt)}
+        transparent
+        animationType="fade"
+        onRequestClose={() => {}}
+      >
+        <Pressable style={styles.routeModalBackdrop}>
+          <View style={styles.routeModalCard}>
+            <View style={styles.routeModalHeader}>
+              <View style={styles.routeModalTitleWrap}>
+                <Text style={styles.routeModalTitle}>Important</Text>
+              </View>
+            </View>
+
+            <Text style={styles.navigatePromptText}>
+              Notifying the crew doesn’t guarantee the bus will wait—please reach on time.
+            </Text>
+
+            <TouchableOpacity
+              style={styles.navigatePromptButton}
+              onPress={() => { void acknowledgeWaitingDisclaimer(); }}
+            >
+              <Text style={styles.navigatePromptButtonText}>I Know</Text>
+            </TouchableOpacity>
+          </View>
+        </Pressable>
+      </Modal>
 
       {/* Live buses */}
       {activeRouteId && (
@@ -918,7 +1364,7 @@ const HomeScreen: React.FC<Props> = ({ navigation }) => {
               <Ionicons name="swap-horizontal-outline" size={28} color={palette.textFaint} />
               <Text style={styles.emptyTitle}>No buses in this direction</Text>
               <Text style={styles.emptyText}>
-                No active buses heading {from.trim()} → {to.trim()} right now.
+                No active buses heading {from.trim()} -> {to.trim()} right now.
               </Text>
             </View>
           )}
@@ -932,8 +1378,8 @@ const HomeScreen: React.FC<Props> = ({ navigation }) => {
               ? resolveCurrentStop(trip.lastLatitude as number, trip.lastLongitude as number, stops, trip.direction)
               : null;
             const dirLabel = trip.direction === 'UP'
-              ? `${liveRoute?.source ?? ''}  →  ${liveRoute?.destination ?? ''}`
-              : `${liveRoute?.destination ?? ''}  →  ${liveRoute?.source ?? ''}`;
+              ? `${liveRoute?.source ?? ''}  ->  ${liveRoute?.destination ?? ''}`
+              : `${liveRoute?.destination ?? ''}  ->  ${liveRoute?.source ?? ''}`;
             const isExpanded = expandedTrips[tripId] ?? false;
             const waitingStatus = waitingStatusByTrip[tripId];
             const waitingBusy = waitingBusyByTrip[tripId] ?? false;
@@ -953,7 +1399,7 @@ const HomeScreen: React.FC<Props> = ({ navigation }) => {
               ? eta
                 ? eta.text
                 : hasLocation
-                  ? 'Calculating…'
+                  ? 'Calculating...'
                   : null
               : null;
 
@@ -966,7 +1412,7 @@ const HomeScreen: React.FC<Props> = ({ navigation }) => {
 
             return (
               <View key={tripId} style={styles.liveTripCard}>
-                {/* ── Tappable header ── */}
+                {/* Tappable header */}
                 <TouchableOpacity
                   style={styles.liveTripHeader}
                   onPress={toggleExpanded}
@@ -997,7 +1443,7 @@ const HomeScreen: React.FC<Props> = ({ navigation }) => {
                   />
                 </TouchableOpacity>
 
-                {/* ── Expanded body ── */}
+                {/* Expanded body */}
                 {isExpanded && (
                   <>
                     {/* Direction row */}
@@ -1006,7 +1452,7 @@ const HomeScreen: React.FC<Props> = ({ navigation }) => {
                       <Text style={styles.expandedDirText}>{dirLabel}</Text>
                     </View>
 
-                    {/* Per-bus map — OpenStreetMap tiles (no CDN dependency) */}
+                    {/* Per-bus map - OpenStreetMap tiles (no CDN dependency) */}
                     {busRegion && (() => {
                       const lat = Number(trip.lastLatitude);
                       const lng = Number(trip.lastLongitude);
@@ -1037,7 +1483,7 @@ for(var dx=-3;dx<=3;dx++){for(var dy=-3;dy<=3;dy++){
   img.style.top=(H/2+(dy-0.5)*256)+'px';
   map.appendChild(img);
 }}
-var m=document.createElement('div');m.id='marker';m.innerHTML='🚌';
+var m=document.createElement('div');m.id='marker';m.innerHTML='BUS';
 m.style.left=W/2+'px';m.style.top=H/2+'px';map.appendChild(m);
 var lb=document.createElement('div');lb.id='label';lb.innerText='${busLabel}';
 lb.style.left=W/2+'px';lb.style.top=H/2+'px';map.appendChild(lb);
@@ -1086,7 +1532,7 @@ lb.style.left=W/2+'px';lb.style.top=H/2+'px';map.appendChild(lb);
                           ) : (
                             <>
                               <Text style={styles.busLocationStopName}>
-                                {trip.lastLocationName || tripLocationNames[tripId] || 'Locating…'}
+                                {trip.lastLocationName || tripLocationNames[tripId] || 'Locating...'}
                               </Text>
                               <Text style={styles.busLocationSub}>No stop lat/lng configured yet</Text>
                             </>
@@ -1120,7 +1566,7 @@ lb.style.left=W/2+'px';lb.style.top=H/2+'px';map.appendChild(lb);
                         />
                         <View style={styles.etaContent}>
                           <Text style={eta ? styles.etaText : styles.etaTextPending}>
-                            {eta ? eta.text : 'Calculating ETA…'}
+                            {eta ? eta.text : 'Calculating ETA...'}
                           </Text>
                           {eta && (
                             <Text style={styles.etaSubText}>
@@ -1164,7 +1610,7 @@ lb.style.left=W/2+'px';lb.style.top=H/2+'px';map.appendChild(lb);
                               alreadyNotifiedSelectedStop && styles.waitingButtonActive,
                               waitingBusy && styles.waitingButtonDisabled,
                             ]}
-                            onPress={() => { void notifyWaitingForTrip(tripId, selectedStop); }}
+                            onPress={() => { void handleWaitingAction(tripId, selectedStop); }}
                             disabled={waitingBusy}
                           >
                             <Text
@@ -1207,7 +1653,7 @@ lb.style.left=W/2+'px';lb.style.top=H/2+'px';map.appendChild(lb);
                                     ? load.capacity > 0
                                       ? `${load.onboard} / ${load.capacity} seats occupied`
                                       : `${load.onboard} passengers onboard`
-                                    : 'Estimating…'}
+                                    : 'Estimating...'}
                               </Text>
                             </View>
                           </View>
@@ -1456,12 +1902,57 @@ const styles = StyleSheet.create({
   },
   favoritePickerTitle: { color: palette.text, fontSize: 14, fontWeight: '800' },
   favoritePickerHint: { color: palette.textMuted, fontSize: 12, marginTop: 3, marginBottom: 12 },
+  favoriteSearchRow: {
+    flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 10,
+    backgroundColor: palette.surfaceMuted, borderWidth: 1, borderColor: palette.border,
+    borderRadius: 14, paddingHorizontal: 12, paddingVertical: 10
+  },
+  favoriteSearchInput: {
+    flex: 1, color: palette.text, paddingHorizontal: 0, paddingVertical: 0, fontSize: 13.5, fontWeight: '600'
+  },
+  favoritePickerSubhint: { color: palette.textFaint, fontSize: 11.5, marginBottom: 10 },
+  favoritePickerScroll: { maxHeight: 260 },
+  favoritePickerScrollContent: { paddingBottom: 4 },
   favoritePickerChip: {
     backgroundColor: palette.surfaceMuted, borderWidth: 1, borderColor: palette.border,
     borderRadius: 999, paddingHorizontal: 12, paddingVertical: 8,
     flexDirection: 'row', alignItems: 'center', gap: 5
   },
   favoritePickerChipText: { color: palette.text, fontSize: 12.5, fontWeight: '600' },
+
+  routeModalBackdrop: {
+    flex: 1, backgroundColor: 'rgba(6, 17, 30, 0.78)', padding: 20, justifyContent: 'center'
+  },
+  routeModalCard: {
+    maxHeight: '72%', backgroundColor: palette.surface, borderWidth: 1, borderColor: palette.border,
+    borderRadius: 24, padding: 18
+  },
+  routeModalHeader: {
+    flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12, marginBottom: 14
+  },
+  routeModalTitleWrap: { flex: 1 },
+  routeModalTitle: { color: palette.text, fontSize: 18, fontWeight: '800' },
+  routeModalSubtitle: { color: palette.textMuted, fontSize: 12.5, marginTop: 4, lineHeight: 18 },
+  routeModalClose: {
+    width: 34, height: 34, borderRadius: 17, alignItems: 'center', justifyContent: 'center',
+    backgroundColor: palette.surfaceStrong, borderWidth: 1, borderColor: palette.border
+  },
+  routeModalScroll: { maxHeight: 420 },
+  routeModalStopRow: { flexDirection: 'row', gap: 12, minHeight: 36 },
+  routeModalRail: { width: 16, alignItems: 'center' },
+  routeModalStopDot: {
+    width: 10, height: 10, borderRadius: 5, backgroundColor: palette.accent, marginTop: 4
+  },
+  routeModalStopLine: {
+    width: 2, flex: 1, marginTop: 4, marginBottom: -4, backgroundColor: 'rgba(0, 200, 150, 0.22)'
+  },
+  routeModalStopText: { flex: 1, color: palette.text, fontSize: 14, fontWeight: '600', paddingBottom: 14 },
+  navigatePromptText: { color: palette.textMuted, fontSize: 13.5, lineHeight: 20, marginBottom: 18 },
+  navigatePromptButton: {
+    backgroundColor: palette.accent, borderRadius: 16, paddingVertical: 14, paddingHorizontal: 16,
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8
+  },
+  navigatePromptButtonText: { color: '#fff', fontSize: 14, fontWeight: '800' },
 
   // Route list
   routeList: { marginTop: 14, gap: 10 },
@@ -1481,10 +1972,15 @@ const styles = StyleSheet.create({
   routeCodeBadgeText: { color: palette.blue, fontSize: 13, fontWeight: '800' },
   routePath: { color: palette.textMuted, fontSize: 12.5, fontWeight: '600' },
   routeName: { color: palette.text, marginTop: 8, fontWeight: '700', fontSize: 13.5 },
+  liveButtonWrap: {
+    position: 'absolute', right: 0, top: 0, bottom: 0,
+    borderRadius: 20, backgroundColor: palette.accent
+  },
   liveButton: {
     backgroundColor: palette.accentSoft, borderWidth: 1, borderColor: 'rgba(0, 200, 150, 0.28)',
     borderRadius: 20, paddingHorizontal: 12, paddingVertical: 7,
-    flexDirection: 'row', alignItems: 'center', gap: 5
+    flexDirection: 'row', alignItems: 'center', gap: 5,
+    position: 'relative'
   },
   liveDotSmall: { width: 6, height: 6, borderRadius: 3, backgroundColor: palette.accent },
   liveButtonText: { color: palette.accent, fontSize: 12, fontWeight: '700' },
@@ -1498,6 +1994,7 @@ const styles = StyleSheet.create({
     backgroundColor: palette.surfaceStrong, borderWidth: 1, borderColor: palette.border,
     borderRadius: 16, padding: 20, alignItems: 'center', gap: 8
   },
+  routeEmptyState: { marginTop: 14 },
   emptyTitle: { color: palette.textMuted, fontSize: 14, fontWeight: '700' },
   emptyText: { color: palette.textFaint, fontSize: 12, textAlign: 'center' },
   liveMap: {
@@ -1653,3 +2150,5 @@ const styles = StyleSheet.create({
 });
 
 export default HomeScreen;
+
+

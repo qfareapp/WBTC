@@ -17,6 +17,7 @@ import PaymentsOverview from "./pages/PaymentsOverview.jsx";
 import Login from "./pages/Login.jsx";
 import Register from "./pages/Register.jsx";
 import PrivacyPolicy from "./pages/PrivacyPolicy.jsx";
+import QfarePassengerPrivacyPolicy from "./pages/QfarePassengerPrivacyPolicy.jsx";
 
 const storedApiBase = localStorage.getItem("wbtc_api_base");
 const defaultApiBase = import.meta.env.DEV ? "http://localhost:5000" : "https://wbtc-aduk.onrender.com";
@@ -112,6 +113,10 @@ function App() {
         <Route
           path="/privacy-policy"
           element={<PrivacyPolicy />}
+        />
+        <Route
+          path="/qfare-privacy-policy"
+          element={<QfarePassengerPrivacyPolicy />}
         />
         <Route
           path="/dashboard"
