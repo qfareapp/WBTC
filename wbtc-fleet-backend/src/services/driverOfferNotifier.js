@@ -57,13 +57,13 @@ const buildNotificationText = (offers) => {
 
   if (count === 1) {
     return {
-      title: "WBTC Driver - New trip offer",
+      title: "New Trip Offer",
       body: content,
     };
   }
 
   return {
-    title: `WBTC Driver - ${count} trip offers available`,
+    title: "New Trip Offer",
     body: content,
   };
 };

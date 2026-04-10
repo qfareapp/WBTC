@@ -4,6 +4,15 @@ const Driver = require("../models/Driver");
 const ApiError = require("../utils/ApiError");
 const asyncHandler = require("../utils/asyncHandler");
 
+const buildDriverProfile = (driver) => ({
+  id: driver._id,
+  name: driver.name,
+  empId: driver.empId,
+  depotId: driver.depotId,
+  status: driver.status,
+  currentLocation: driver.currentLocation || null,
+});
+
 const signDriverToken = (driver) =>
   jwt.sign(
     { userId: driver._id, role: "DRIVER", depotId: driver.depotId || null },
@@ -25,13 +34,17 @@ exports.loginDriver = asyncHandler(async (req, res) => {
     ok: true,
     token: signDriverToken(driver),
     mustChangePassword: Boolean(driver.mustChangePassword),
-    driver: {
-      id: driver._id,
-      name: driver.name,
-      empId: driver.empId,
-      depotId: driver.depotId,
-      status: driver.status,
-    },
+    driver: buildDriverProfile(driver),
+  });
+});
+
+exports.getDriverProfile = asyncHandler(async (req, res) => {
+  const driver = await Driver.findById(req.user.userId).populate("depotId", "depotName depotCode");
+  if (!driver) throw new ApiError(404, "Driver not found");
+
+  res.json({
+    ok: true,
+    driver: buildDriverProfile(driver),
   });
 });
 
