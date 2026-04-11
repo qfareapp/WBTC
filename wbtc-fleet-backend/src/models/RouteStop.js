@@ -7,6 +7,7 @@ const RouteStopSchema = new mongoose.Schema(
     name: { type: String, required: true },
     latitude: { type: Number, default: null },
     longitude: { type: Number, default: null },
+    landmarkImageUrl: { type: String, default: null },
   },
   { timestamps: true }
 );

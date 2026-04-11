@@ -174,7 +174,7 @@ exports.getRouteLiveStatus = asyncHandler(async (req, res) => {
       .sort({ startTime: 1 }),
     RouteStop.find({ routeId: route._id })
       .sort({ index: 1 })
-      .select("index name latitude longitude"),
+      .select("index name latitude longitude landmarkImageUrl"),
   ]);
 
   const payload = trips.map((trip) => {
@@ -213,6 +213,7 @@ exports.getRouteLiveStatus = asyncHandler(async (req, res) => {
       name: s.name,
       latitude: s.latitude ?? null,
       longitude: s.longitude ?? null,
+      landmarkImageUrl: s.landmarkImageUrl ?? null,
     })),
     trips: payload,
   });

@@ -3,6 +3,7 @@ import {
   ActivityIndicator,
   Alert,
   KeyboardAvoidingView,
+  Linking,
   Platform,
   ScrollView,
   StyleSheet,
@@ -18,6 +19,8 @@ import { palette } from '../lib/theme';
 import { RootStackParamList } from '../navigation/AppNavigator';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'Login'>;
+
+const PRIVACY_POLICY_URL = 'https://wbtc-rose.vercel.app/qfare-privacy-policy';
 
 const LoginScreen: React.FC<Props> = ({ navigation }) => {
   const { sendOtp } = useAuth();
@@ -44,7 +47,7 @@ const LoginScreen: React.FC<Props> = ({ navigation }) => {
   return (
     <KeyboardAvoidingView
       style={styles.flex}
-      behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+      behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
     >
       <ScrollView
         style={styles.container}
@@ -102,6 +105,9 @@ const LoginScreen: React.FC<Props> = ({ navigation }) => {
 
         <Text style={styles.footerText}>
           By continuing, you agree to qfare's terms of service.
+        </Text>
+        <Text style={styles.footerLink} onPress={() => { void Linking.openURL(PRIVACY_POLICY_URL); }}>
+          Privacy Policy
         </Text>
       </ScrollView>
     </KeyboardAvoidingView>
@@ -173,6 +179,13 @@ const styles = StyleSheet.create({
   btnText: { color: '#fff', fontSize: 16, fontWeight: '800' },
 
   footerText: { color: palette.textFaint, fontSize: 12, textAlign: 'center', lineHeight: 18 },
+  footerLink: {
+    color: palette.blue,
+    fontSize: 12.5,
+    textAlign: 'center',
+    marginTop: 8,
+    textDecorationLine: 'underline',
+  },
 });
 
 export default LoginScreen;

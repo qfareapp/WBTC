@@ -170,6 +170,7 @@ exports.createRouteWithFare = asyncHandler(async (req, res) => {
       name: stop.name,
       latitude: stop.latitude != null && stop.latitude !== "" ? Number(stop.latitude) : null,
       longitude: stop.longitude != null && stop.longitude !== "" ? Number(stop.longitude) : null,
+      landmarkImageUrl: stop.landmarkImageUrl ? String(stop.landmarkImageUrl).trim() : null,
     }))
     .sort((a, b) => a.index - b.index);
 
@@ -205,6 +206,7 @@ exports.createRouteWithFare = asyncHandler(async (req, res) => {
       name: stop.name,
       latitude: stop.latitude ?? null,
       longitude: stop.longitude ?? null,
+      landmarkImageUrl: stop.landmarkImageUrl ?? null,
     }))
   );
 
@@ -294,6 +296,7 @@ exports.updateRouteWithFare = asyncHandler(async (req, res) => {
       name: stop.name,
       latitude: stop.latitude != null && stop.latitude !== "" ? Number(stop.latitude) : null,
       longitude: stop.longitude != null && stop.longitude !== "" ? Number(stop.longitude) : null,
+      landmarkImageUrl: stop.landmarkImageUrl ? String(stop.landmarkImageUrl).trim() : null,
     }))
     .sort((a, b) => a.index - b.index);
 
@@ -333,6 +336,7 @@ exports.updateRouteWithFare = asyncHandler(async (req, res) => {
       name: stop.name,
       latitude: stop.latitude ?? null,
       longitude: stop.longitude ?? null,
+      landmarkImageUrl: stop.landmarkImageUrl ?? null,
     }))
   );
 

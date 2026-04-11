@@ -4,10 +4,13 @@ import {
   Animated,
   Dimensions,
   FlatList,
+  Image,
   ImageBackground,
   Keyboard,
+  KeyboardAvoidingView,
   Linking,
   Modal,
+  Platform,
   Pressable,
   RefreshControl,
   ScrollView,
@@ -88,6 +91,7 @@ type RouteStop = {
   name: string;
   latitude: number | null;
   longitude: number | null;
+  landmarkImageUrl?: string | null;
 };
 
 type LiveTrip = {
@@ -158,6 +162,13 @@ type StopNavigationPrompt = {
 
 type WaitingDisclaimerPrompt = {
   tripId: string;
+};
+
+type StopLandmarkPreview = {
+  name: string;
+  imageUrl: string;
+  latitude: number | null;
+  longitude: number | null;
 };
 
 const normalizeStopName = (value: string) => value.trim().toLowerCase();
@@ -269,6 +280,7 @@ const HomeScreen: React.FC<Props> = ({ navigation }) => {
   const [selectedRoutePreview, setSelectedRoutePreview] = useState<RoutePreview | null>(null);
   const [stopNavigationPrompt, setStopNavigationPrompt] = useState<StopNavigationPrompt | null>(null);
   const [waitingDisclaimerPrompt, setWaitingDisclaimerPrompt] = useState<WaitingDisclaimerPrompt | null>(null);
+  const [stopLandmarkPreview, setStopLandmarkPreview] = useState<StopLandmarkPreview | null>(null);
   const [showHowItWorks, setShowHowItWorks] = useState(false);
   const [routes, setRoutes] = useState<PublicRoute[]>([]);
   const [loadingRoutes, setLoadingRoutes] = useState(false);
@@ -286,6 +298,7 @@ const HomeScreen: React.FC<Props> = ({ navigation }) => {
   const [waitingStatusByTrip, setWaitingStatusByTrip] = useState<Record<string, WaitingStatus | undefined>>({});
   const [waitingBusyByTrip, setWaitingBusyByTrip] = useState<Record<string, boolean>>({});
   const [activeSlide, setActiveSlide] = useState(0);
+  const [selectorRowHeight, setSelectorRowHeight] = useState(0);
   const sliderRef = useRef<FlatList>(null);
   const liveButtonPulse = useRef(new Animated.Value(0)).current;
 
@@ -794,6 +807,10 @@ const HomeScreen: React.FC<Props> = ({ navigation }) => {
   });
 
   return (
+    <KeyboardAvoidingView
+      style={styles.flex}
+      behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+    >
     <ScrollView
       style={styles.container}
       contentContainerStyle={styles.content}
@@ -908,107 +925,118 @@ const HomeScreen: React.FC<Props> = ({ navigation }) => {
           </View>
         )}
 
-        {/* Stop selectors */}
-        <View style={styles.selectorRow}>
+        {/* Stop selectors + absolute suggestions dropdown */}
+        <View style={styles.stopSelectorWrapper}>
           <View
-            style={[
-              styles.stopSelectorCard,
-              styles.inputFrom,
-              activeStopField === 'from' && styles.stopSelectorCardActiveFrom
-            ]}
+            style={styles.selectorRow}
+            onLayout={e => setSelectorRowHeight(e.nativeEvent.layout.height)}
           >
-            <Text style={styles.stopSelectorLabelFrom}>From</Text>
-            <View style={styles.stopInputRow}>
-              <Ionicons name="navigate" size={12} color={palette.accent} style={styles.stopInputIcon} />
-              <TextInput
-                value={from}
-                onChangeText={value => { setFrom(value); setActiveStopField('from'); }}
-                onFocus={() => setActiveStopField('from')}
-                style={[styles.stopSelectorInput, styles.stopSelectorValueFrom]}
-                placeholder="Origin"
-                placeholderTextColor={palette.textFaint}
-              />
+            <View
+              style={[
+                styles.stopSelectorCard,
+                styles.inputFrom,
+                activeStopField === 'from' && styles.stopSelectorCardActiveFrom
+              ]}
+            >
+              <Text style={styles.stopSelectorLabelFrom}>From</Text>
+              <View style={styles.stopInputRow}>
+                <Ionicons name="navigate" size={12} color={palette.accent} style={styles.stopInputIcon} />
+                <TextInput
+                  value={from}
+                  onChangeText={value => { setFrom(value); setActiveStopField('from'); }}
+                  onFocus={() => setActiveStopField('from')}
+                  style={[styles.stopSelectorInput, styles.stopSelectorValueFrom]}
+                  placeholder="Origin"
+                  placeholderTextColor={palette.textFaint}
+                />
+              </View>
+            </View>
+
+            <TouchableOpacity style={styles.swapButton} onPress={handleSwapStops}>
+              <Ionicons name="swap-horizontal" size={18} color={palette.accent} />
+            </TouchableOpacity>
+
+            <View
+              style={[
+                styles.stopSelectorCard,
+                styles.inputTo,
+                activeStopField === 'to' && styles.stopSelectorCardActiveTo
+              ]}
+            >
+              <Text style={styles.stopSelectorLabelTo}>To</Text>
+              <View style={styles.stopInputRow}>
+                <Ionicons name="location" size={12} color={palette.blue} style={styles.stopInputIcon} />
+                <TextInput
+                  value={to}
+                  onChangeText={value => { setTo(value); setActiveStopField('to'); }}
+                  onFocus={() => setActiveStopField('to')}
+                  style={[styles.stopSelectorInput, styles.stopSelectorValueTo]}
+                  placeholder="Destination"
+                  placeholderTextColor={palette.textFaint}
+                />
+              </View>
             </View>
           </View>
 
-          <TouchableOpacity style={styles.swapButton} onPress={handleSwapStops}>
-            <Ionicons name="swap-horizontal" size={18} color={palette.accent} />
-          </TouchableOpacity>
-
-          <View
-            style={[
-              styles.stopSelectorCard,
-              styles.inputTo,
-              activeStopField === 'to' && styles.stopSelectorCardActiveTo
-            ]}
-          >
-            <Text style={styles.stopSelectorLabelTo}>To</Text>
-            <View style={styles.stopInputRow}>
-              <Ionicons name="location" size={12} color={palette.blue} style={styles.stopInputIcon} />
-              <TextInput
-                value={to}
-                onChangeText={value => { setTo(value); setActiveStopField('to'); }}
-                onFocus={() => setActiveStopField('to')}
-                style={[styles.stopSelectorInput, styles.stopSelectorValueTo]}
-                placeholder="Destination"
-                placeholderTextColor={palette.textFaint}
-              />
-            </View>
-          </View>
-        </View>
-
-        {/* Autocomplete suggestions */}
-        {suggestions.length > 0 && (
-          <View style={styles.suggestionsCard}>
-            {suggestions.map((stop, idx) => {
-              const query = (activeStopField === 'from' ? from : to).trim().toLowerCase();
-              const matchIdx = stop.toLowerCase().indexOf(query);
-              const before = stop.slice(0, matchIdx);
-              const match = stop.slice(matchIdx, matchIdx + query.length);
-              const after = stop.slice(matchIdx + query.length);
-              const isFrom = activeStopField === 'from';
-              const hasCoords = liveRoute?.stops?.some(s => s.name.toLowerCase() === stop.toLowerCase() && s.latitude && s.longitude);
-              return (
-                <View
-                  key={stop}
-                  style={[
-                    styles.suggestionItem,
-                    idx < suggestions.length - 1 && styles.suggestionItemBorder,
-                  ]}
-                >
-                  <TouchableOpacity
-                    style={{ flex: 1, flexDirection: 'row', alignItems: 'center', gap: 8 }}
-                    onPress={() => handleStopSelect(stop)}
-                    activeOpacity={0.65}
-                  >
-                    <Ionicons
-                      name="location-outline"
-                      size={13}
-                      color={isFrom ? palette.accent : palette.blue}
-                      style={{ marginTop: 1 }}
-                    />
-                    <Text style={styles.suggestionText} numberOfLines={1}>
-                      {before}
-                      <Text style={[styles.suggestionMatch, { color: isFrom ? palette.accent : palette.blue }]}>
-                        {match}
-                      </Text>
-                      {after}
-                    </Text>
-                  </TouchableOpacity>
-                  {hasCoords && (
-                    <TouchableOpacity
-                      onPress={() => navigateToStop(stop)}
-                      hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-                      style={styles.navigateBtn}
+          {/* Autocomplete suggestions — absolute dropdown, floats above keyboard */}
+          {suggestions.length > 0 && selectorRowHeight > 0 && (
+            <View style={[styles.suggestionsCard, { top: selectorRowHeight + 6 }]}>
+              <ScrollView
+                keyboardShouldPersistTaps="handled"
+                bounces={false}
+                showsVerticalScrollIndicator={false}
+              >
+                {suggestions.map((stop, idx) => {
+                  const query = (activeStopField === 'from' ? from : to).trim().toLowerCase();
+                  const matchIdx = stop.toLowerCase().indexOf(query);
+                  const before = stop.slice(0, matchIdx);
+                  const match = stop.slice(matchIdx, matchIdx + query.length);
+                  const after = stop.slice(matchIdx + query.length);
+                  const isFrom = activeStopField === 'from';
+                  const hasCoords = liveRoute?.stops?.some(s => s.name.toLowerCase() === stop.toLowerCase() && s.latitude && s.longitude);
+                  return (
+                    <View
+                      key={stop}
+                      style={[
+                        styles.suggestionItem,
+                        idx < suggestions.length - 1 && styles.suggestionItemBorder,
+                      ]}
                     >
-                      <Ionicons name="navigate-outline" size={14} color={palette.accent} />
-                    </TouchableOpacity>
-                  )}
-                </View>
-              );
-            })}
-          </View>
-        )}
+                      <TouchableOpacity
+                        style={{ flex: 1, flexDirection: 'row', alignItems: 'center', gap: 8 }}
+                        onPress={() => handleStopSelect(stop)}
+                        activeOpacity={0.65}
+                      >
+                        <Ionicons
+                          name="location-outline"
+                          size={13}
+                          color={isFrom ? palette.accent : palette.blue}
+                          style={{ marginTop: 1 }}
+                        />
+                        <Text style={styles.suggestionText} numberOfLines={1}>
+                          {before}
+                          <Text style={[styles.suggestionMatch, { color: isFrom ? palette.accent : palette.blue }]}>
+                            {match}
+                          </Text>
+                          {after}
+                        </Text>
+                      </TouchableOpacity>
+                      {hasCoords && (
+                        <TouchableOpacity
+                          onPress={() => navigateToStop(stop)}
+                          hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                          style={styles.navigateBtn}
+                        >
+                          <Ionicons name="navigate-outline" size={14} color={palette.accent} />
+                        </TouchableOpacity>
+                      )}
+                    </View>
+                  );
+                })}
+              </ScrollView>
+            </View>
+          )}
+        </View>
 
         {/* Favourites header */}
         <View style={styles.favoritesHeader}>
@@ -1263,6 +1291,67 @@ const HomeScreen: React.FC<Props> = ({ navigation }) => {
       </Modal>
 
       <Modal
+        visible={Boolean(stopLandmarkPreview)}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setStopLandmarkPreview(null)}
+      >
+        <Pressable style={styles.routeModalBackdrop} onPress={() => setStopLandmarkPreview(null)}>
+          <Pressable style={styles.routeModalCard} onPress={() => {}}>
+            <View style={styles.routeModalHeader}>
+              <View style={styles.routeModalTitleWrap}>
+                <Text style={styles.routeModalTitle}>{stopLandmarkPreview?.name || 'Bus stop landmark'}</Text>
+                <Text style={styles.routeModalSubtitle}>
+                  Confirm the exact bus stop before notifying the crew.
+                </Text>
+              </View>
+              <TouchableOpacity onPress={() => setStopLandmarkPreview(null)} style={styles.routeModalClose}>
+                <Ionicons name="close-outline" size={20} color={palette.textMuted} />
+              </TouchableOpacity>
+            </View>
+
+            {stopLandmarkPreview?.imageUrl ? (
+              <Image
+                source={{ uri: stopLandmarkPreview.imageUrl }}
+                style={styles.stopLandmarkFullImage}
+                resizeMode="contain"
+              />
+            ) : null}
+
+            <TouchableOpacity
+              style={[
+                styles.navigatePromptButton,
+                styles.stopLandmarkNavigateButton,
+                (
+                  !stopLandmarkPreview ||
+                  typeof stopLandmarkPreview.latitude !== 'number' ||
+                  typeof stopLandmarkPreview.longitude !== 'number'
+                ) && styles.navigatePromptButtonDisabled,
+              ]}
+              onPress={() => {
+                if (
+                  stopLandmarkPreview &&
+                  typeof stopLandmarkPreview.latitude === 'number' &&
+                  typeof stopLandmarkPreview.longitude === 'number'
+                ) {
+                  navigateToCoordinates(stopLandmarkPreview.latitude, stopLandmarkPreview.longitude);
+                }
+                setStopLandmarkPreview(null);
+              }}
+              disabled={
+                !stopLandmarkPreview ||
+                typeof stopLandmarkPreview.latitude !== 'number' ||
+                typeof stopLandmarkPreview.longitude !== 'number'
+              }
+            >
+              <Ionicons name="navigate" size={16} color="#fff" />
+              <Text style={styles.navigatePromptButtonText}>Open Google navigation</Text>
+            </TouchableOpacity>
+          </Pressable>
+        </Pressable>
+      </Modal>
+
+      <Modal
         visible={Boolean(stopNavigationPrompt)}
         transparent
         animationType="fade"
@@ -1384,6 +1473,10 @@ const HomeScreen: React.FC<Props> = ({ navigation }) => {
             const waitingStatus = waitingStatusByTrip[tripId];
             const waitingBusy = waitingBusyByTrip[tripId] ?? false;
             const selectedStop = from.trim();
+            const selectedRouteStop = liveRoute?.stops?.find(
+              stop => normalizeStopName(stop.name) === normalizeStopName(selectedStop)
+            ) ?? null;
+            const stopLandmarkImageUrl = selectedRouteStop?.landmarkImageUrl?.trim() || '';
             const alreadyNotifiedSelectedStop =
               Boolean(waitingStatus?.stopName) &&
               String(waitingStatus?.stopName).trim().toLowerCase() === selectedStop.toLowerCase();
@@ -1629,6 +1722,33 @@ lb.style.left=W/2+'px';lb.style.top=H/2+'px';map.appendChild(lb);
                             </Text>
                           </TouchableOpacity>
                         </View>
+                        {stopLandmarkImageUrl ? (
+                          <TouchableOpacity
+                            style={styles.stopLandmarkThumbWrap}
+                            activeOpacity={0.85}
+                            onPress={() => {
+                              setStopLandmarkPreview({
+                                name: selectedRouteStop?.name || selectedStop,
+                                imageUrl: stopLandmarkImageUrl,
+                                latitude: selectedRouteStop?.latitude ?? null,
+                                longitude: selectedRouteStop?.longitude ?? null,
+                              });
+                            }}
+                          >
+                            <Image
+                              source={{ uri: stopLandmarkImageUrl }}
+                              style={styles.stopLandmarkThumb}
+                              resizeMode="cover"
+                            />
+                            <View style={styles.stopLandmarkThumbMeta}>
+                              <Text style={styles.stopLandmarkThumbTitle}>Bus stop landmark</Text>
+                              <Text style={styles.stopLandmarkThumbText}>
+                                Tap to view the exact stop image.
+                              </Text>
+                            </View>
+                            <Ionicons name="expand-outline" size={18} color={palette.blue} />
+                          </TouchableOpacity>
+                        ) : null}
                       </View>
                     )}
 
@@ -1727,10 +1847,12 @@ lb.style.left=W/2+'px';lb.style.top=H/2+'px';map.appendChild(lb);
           ))}
       </View>
     </ScrollView>
+    </KeyboardAvoidingView>
   );
 };
 
 const styles = StyleSheet.create({
+  flex: { flex: 1, backgroundColor: palette.bg },
   container: { flex: 1, backgroundColor: palette.bg },
   content: { padding: 20, paddingBottom: 32 },
 
@@ -1821,6 +1943,7 @@ const styles = StyleSheet.create({
   sectionMeta: { marginLeft: 'auto', color: palette.textFaint, fontSize: 12, fontWeight: '600' },
 
   // Stop selectors
+  stopSelectorWrapper: { position: 'relative', zIndex: 10 },
   selectorRow: { flexDirection: 'row', gap: 10, marginBottom: 2 },
   stopSelectorCard: {
     flex: 1, backgroundColor: palette.surfaceStrong, borderRadius: 18,
@@ -1847,11 +1970,23 @@ const styles = StyleSheet.create({
     alignItems: 'center', justifyContent: 'center'
   },
 
-  // Autocomplete suggestions
+  // Autocomplete suggestions — absolute dropdown
   suggestionsCard: {
-    marginTop: 8, borderRadius: 16, overflow: 'hidden',
-    borderWidth: 1, borderColor: palette.border,
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    maxHeight: 224,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: palette.border,
     backgroundColor: palette.surfaceStrong,
+    zIndex: 50,
+    elevation: 8,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.18,
+    shadowRadius: 10,
+    overflow: 'hidden',
   },
   suggestionItem: {
     flexDirection: 'row', alignItems: 'center', gap: 10,
@@ -1953,6 +2088,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8
   },
   navigatePromptButtonText: { color: '#fff', fontSize: 14, fontWeight: '800' },
+  navigatePromptButtonDisabled: { opacity: 0.5 },
 
   // Route list
   routeList: { marginTop: 14, gap: 10 },
@@ -2091,6 +2227,26 @@ const styles = StyleSheet.create({
   waitingCopy: { flex: 1 },
   waitingTitle: { color: palette.blue, fontSize: 13, fontWeight: '800' },
   waitingText: { color: palette.textMuted, fontSize: 11.5, marginTop: 3 },
+  stopLandmarkThumbWrap: {
+    marginTop: 12,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: 'rgba(68, 153, 255, 0.24)',
+    backgroundColor: 'rgba(10, 18, 34, 0.42)',
+    padding: 10,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+  },
+  stopLandmarkThumb: {
+    width: 62,
+    height: 62,
+    borderRadius: 12,
+    backgroundColor: palette.surfaceMuted,
+  },
+  stopLandmarkThumbMeta: { flex: 1 },
+  stopLandmarkThumbTitle: { color: palette.text, fontSize: 12.5, fontWeight: '800' },
+  stopLandmarkThumbText: { color: palette.textMuted, fontSize: 11.5, marginTop: 3, lineHeight: 16 },
   waitingButton: {
     borderRadius: 999,
     paddingHorizontal: 12,
@@ -2106,6 +2262,16 @@ const styles = StyleSheet.create({
   waitingButtonDisabled: { opacity: 0.7 },
   waitingButtonText: { color: palette.blue, fontSize: 12, fontWeight: '800' },
   waitingButtonTextActive: { color: '#fff' },
+  stopLandmarkFullImage: {
+    width: '100%',
+    height: 320,
+    borderRadius: 18,
+    backgroundColor: palette.surfaceStrong,
+    marginBottom: 16,
+  },
+  stopLandmarkNavigateButton: {
+    opacity: 1,
+  },
 
   // How it works
   collapseHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
@@ -2150,5 +2316,3 @@ const styles = StyleSheet.create({
 });
 
 export default HomeScreen;
-
-

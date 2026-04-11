@@ -1,5 +1,5 @@
 import React, { useCallback, useState } from 'react';
-import { ActivityIndicator, Alert, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { ActivityIndicator, Alert, Linking, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
 import { CompositeNavigationProp } from '@react-navigation/native';
 import { BottomTabNavigationProp } from '@react-navigation/bottom-tabs';
@@ -17,6 +17,8 @@ type Props = {
     NativeStackNavigationProp<RootStackParamList>
   >;
 };
+
+const PRIVACY_POLICY_URL = 'https://wbtc-rose.vercel.app/qfare-privacy-policy';
 
 const ProfileScreen: React.FC<Props> = ({ navigation }) => {
   const { user, logout } = useAuth();
@@ -256,7 +258,7 @@ const ProfileScreen: React.FC<Props> = ({ navigation }) => {
         </View>
       </View>
 
-      {/* ── Live Tickets ── */}
+      {/* Live Tickets */}
       <View style={styles.section}>
         <View style={styles.sectionHeader}>
           <View style={styles.sectionBar} />
@@ -317,6 +319,9 @@ const ProfileScreen: React.FC<Props> = ({ navigation }) => {
 
       <View style={styles.versionRow}>
         <Text style={styles.versionText}>qfare · v1.0.0</Text>
+        <Text style={styles.privacyLink} onPress={() => { void Linking.openURL(PRIVACY_POLICY_URL); }}>
+          Privacy Policy
+        </Text>
       </View>
     </ScrollView>
   );
@@ -461,6 +466,14 @@ const styles = StyleSheet.create({
 
   versionRow: { alignItems: 'center', marginTop: 6 },
   versionText: { color: palette.textFaint, fontSize: 12, fontWeight: '600' },
+  privacyLink: {
+    color: palette.blue,
+    fontSize: 12.5,
+    fontWeight: '600',
+    marginTop: 8,
+    textDecorationLine: 'underline',
+  },
 });
 
 export default ProfileScreen;
+

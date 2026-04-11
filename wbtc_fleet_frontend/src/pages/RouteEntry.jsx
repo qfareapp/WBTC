@@ -15,8 +15,33 @@ const initialRoute = {
   assignmentMode: "MANUAL",
 };
 
-const initialStop = { name: "", latitude: "", longitude: "", matchedStopName: "" };
+const initialStop = { name: "", latitude: "", longitude: "", matchedStopName: "", landmarkImageUrl: "" };
 const initialSlab = { fromKm: "", toKm: "", fare: "" };
+
+const resizeImageFile = (file, maxWidth = 480, maxHeight = 320, quality = 0.72) =>
+  new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const image = new Image();
+      image.onload = () => {
+        const scale = Math.min(maxWidth / image.width, maxHeight / image.height, 1);
+        const canvas = document.createElement("canvas");
+        canvas.width = Math.max(1, Math.round(image.width * scale));
+        canvas.height = Math.max(1, Math.round(image.height * scale));
+        const ctx = canvas.getContext("2d");
+        if (!ctx) {
+          reject(new Error("Could not prepare image canvas"));
+          return;
+        }
+        ctx.drawImage(image, 0, 0, canvas.width, canvas.height);
+        resolve(canvas.toDataURL("image/jpeg", quality));
+      };
+      image.onerror = () => reject(new Error("Could not read selected image"));
+      image.src = reader.result;
+    };
+    reader.onerror = () => reject(new Error("Could not load selected image"));
+    reader.readAsDataURL(file);
+  });
 
 function RouteEntry({ apiBase, token, operatorScope, setOperatorScope }) {
   const [route, setRoute] = useState(initialRoute);
@@ -77,6 +102,7 @@ function RouteEntry({ apiBase, token, operatorScope, setOperatorScope }) {
       latitude: suggestion.latitude != null ? String(suggestion.latitude) : "",
       longitude: suggestion.longitude != null ? String(suggestion.longitude) : "",
       matchedStopName: suggestion.name,
+      landmarkImageUrl: current.landmarkImageUrl || "",
     }));
     setStopSuggestions((p) => ({ ...p, [idx]: [] }));
     setStopFocused((p) => ({ ...p, [idx]: false }));
@@ -86,6 +112,17 @@ function RouteEntry({ apiBase, token, operatorScope, setOperatorScope }) {
     updateStop(idx, { matchedStopName: "" });
     setStopSuggestions((p) => ({ ...p, [idx]: [] }));
     setStopFocused((p) => ({ ...p, [idx]: false }));
+  };
+
+  const handleStopImageSelected = async (idx, file) => {
+    if (!file) return;
+    try {
+      const dataUrl = await resizeImageFile(file);
+      updateStop(idx, { landmarkImageUrl: dataUrl });
+      showNotice("success", "Bus stop image added.");
+    } catch (error) {
+      showNotice("error", error.message || "Could not process the selected image.");
+    }
   };
 
   const showNotice = (type, message) => {
@@ -225,6 +262,7 @@ function RouteEntry({ apiBase, token, operatorScope, setOperatorScope }) {
           name: stop.name.trim(),
           latitude: stop.latitude !== "" && stop.latitude != null ? Number(stop.latitude) : null,
           longitude: stop.longitude !== "" && stop.longitude != null ? Number(stop.longitude) : null,
+          landmarkImageUrl: stop.landmarkImageUrl || null,
         })),
         fareSlabs: fareSlabs.map((slab) => ({
           fromKm: Number(slab.fromKm),
@@ -293,6 +331,7 @@ function RouteEntry({ apiBase, token, operatorScope, setOperatorScope }) {
             latitude: stop.latitude != null ? String(stop.latitude) : "",
             longitude: stop.longitude != null ? String(stop.longitude) : "",
             matchedStopName: "",
+            landmarkImageUrl: stop.landmarkImageUrl || "",
           }))
       );
       setFareSlabs(
@@ -685,6 +724,46 @@ function RouteEntry({ apiBase, token, operatorScope, setOperatorScope }) {
                               step="any"
                               style={{ flex: 1, minWidth: "100px" }}
                             />
+                          </div>
+                          <div style={{ marginTop: "10px", display: "grid", gap: "8px" }}>
+                            <label className="field" style={{ marginBottom: 0 }}>
+                              Bus stop image / landmark thumbnail
+                              <input
+                                type="file"
+                                accept="image/*"
+                                onChange={(event) => {
+                                  const file = event.target.files?.[0];
+                                  void handleStopImageSelected(idx, file);
+                                  event.target.value = "";
+                                }}
+                              />
+                            </label>
+                            {stop.landmarkImageUrl ? (
+                              <div style={{ display: "flex", alignItems: "flex-start", gap: "10px", flexWrap: "wrap" }}>
+                                <img
+                                  src={stop.landmarkImageUrl}
+                                  alt={`${stop.name || "Stop"} landmark`}
+                                  style={{
+                                    width: "120px",
+                                    height: "72px",
+                                    objectFit: "cover",
+                                    borderRadius: "10px",
+                                    border: "1px solid var(--line)",
+                                  }}
+                                />
+                                <button
+                                  className="btn ghost"
+                                  type="button"
+                                  onClick={() => updateStop(idx, { landmarkImageUrl: "" })}
+                                >
+                                  Remove image
+                                </button>
+                              </div>
+                            ) : (
+                              <span style={{ fontSize: "11px", color: "var(--text-muted)" }}>
+                                Upload a small landmark image that passengers can tap to confirm the exact bus stop.
+                              </span>
+                            )}
                           </div>
                           {stop.latitude && stop.longitude && (
                             <a

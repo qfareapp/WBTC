@@ -1,6 +1,6 @@
 {
   "expo": {
-    "name": "qfare-app",
+    "name": "qfare",
     "slug": "qfare-app",
     "version": "1.0.0",
     "orientation": "portrait",
@@ -9,7 +9,7 @@
     "splash": {
       "image": "./assets/splash-icon.png",
       "resizeMode": "contain",
-      "backgroundColor": "#ffffff"
+      "backgroundColor": "#06111e"
     },
     "ios": {
       "supportsTablet": true
@@ -17,15 +17,33 @@
     "android": {
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
-        "backgroundColor": "#ffffff"
+        "backgroundColor": "#06111e"
       },
-      "package": "com.mepranjal.qfareapp"
+      "package": "com.mepranjal.qfareapp",
+      "softwareKeyboardLayoutMode": "pan",
+      "privacyPolicyUrl": "https://wbtc-rose.vercel.app/qfare-privacy-policy",
+      "permissions": [
+        "CAMERA",
+        "ACCESS_FINE_LOCATION",
+        "ACCESS_COARSE_LOCATION",
+        "RECEIVE_BOOT_COMPLETED",
+        "VIBRATE",
+        "POST_NOTIFICATIONS"
+      ]
     },
     "web": {
       "favicon": "./assets/favicon.png"
     },
     "plugins": [
-      "expo-font"
+      "expo-font",
+      "expo-camera",
+      ["expo-location", {
+        "locationWhenInUsePermission": "qfare uses your location to confirm you are at a bus stop before sending a wait notification."
+      }],
+      ["expo-notifications", {
+        "icon": "./assets/icon.png",
+        "color": "#00c896"
+      }]
     ],
     "extra": {
       "eas": {
