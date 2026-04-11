@@ -607,10 +607,10 @@ function RouteEntry({ apiBase, token, operatorScope, setOperatorScope }) {
                   </div>
                   <div className="list">
                     {stops.map((stop, idx) => (
-                      <div className="list-item" key={`stop-${idx}`}>
-                        <div style={{ flex: 1, width: "100%", minWidth: 0 }}>
+                      <div className="list-item stop-editor" key={`stop-${idx}`}>
+                        <div className="stop-editor-main">
                           <strong>Stop {idx}</strong>
-                          <div style={{ position: "relative", marginTop: "6px" }}>
+                          <div className="stop-editor-search">
                             <input
                               value={stop.name}
                               onChange={(event) => {
@@ -640,12 +640,7 @@ function RouteEntry({ apiBase, token, operatorScope, setOperatorScope }) {
                               autoComplete="off"
                             />
                             {stopFocused[idx] && stop.name.trim() && (
-                              <div style={{
-                                position: "absolute", top: "100%", left: 0, right: 0, zIndex: 100,
-                                background: "var(--panel)", border: "1px solid var(--line)",
-                                borderRadius: "8px", boxShadow: "0 4px 16px rgba(0,0,0,0.18)",
-                                maxHeight: "200px", overflowY: "auto",
-                              }}>
+                              <div className="stop-editor-suggestions">
                                 {(stopSuggestions[idx] || []).map((s, si) => (
                                   <div
                                     key={`${s.name}-${si}`}
@@ -687,10 +682,10 @@ function RouteEntry({ apiBase, token, operatorScope, setOperatorScope }) {
                               </div>
                             )}
                           </div>
-                          <div style={{ marginTop: "6px" }}>
+                          <div className="stop-editor-paste">
                             <input
                               placeholder="Paste coordinates  e.g. 22.6547, 88.4467"
-                              style={{ width: "100%", color: "var(--accent)" }}
+                              className="stop-editor-paste-input"
                               onPaste={(event) => {
                                 const text = event.clipboardData.getData("text");
                                 const parts = text.split(/[,\s]+/).map((p) => p.trim()).filter(Boolean);
@@ -703,7 +698,7 @@ function RouteEntry({ apiBase, token, operatorScope, setOperatorScope }) {
                               onChange={() => {}}
                             />
                           </div>
-                          <div style={{ display: "flex", gap: "8px", marginTop: "6px", flexWrap: "wrap" }}>
+                          <div className="stop-editor-coords">
                             <input
                               type="number"
                               value={stop.latitude}
@@ -712,7 +707,7 @@ function RouteEntry({ apiBase, token, operatorScope, setOperatorScope }) {
                               }}
                               placeholder="Latitude"
                               step="any"
-                              style={{ flex: 1, minWidth: "100px" }}
+                              className="stop-editor-coord-input"
                             />
                             <input
                               type="number"
@@ -722,11 +717,11 @@ function RouteEntry({ apiBase, token, operatorScope, setOperatorScope }) {
                               }}
                               placeholder="Longitude"
                               step="any"
-                              style={{ flex: 1, minWidth: "100px" }}
+                              className="stop-editor-coord-input"
                             />
                           </div>
-                          <div style={{ marginTop: "10px", display: "grid", gap: "8px" }}>
-                            <label className="field" style={{ marginBottom: 0 }}>
+                          <div className="stop-editor-upload">
+                            <label className="field stop-editor-upload-field">
                               Bus stop image / landmark thumbnail
                               <input
                                 type="file"
@@ -739,17 +734,11 @@ function RouteEntry({ apiBase, token, operatorScope, setOperatorScope }) {
                               />
                             </label>
                             {stop.landmarkImageUrl ? (
-                              <div style={{ display: "flex", alignItems: "flex-start", gap: "10px", flexWrap: "wrap" }}>
+                              <div className="stop-editor-upload-preview">
                                 <img
                                   src={stop.landmarkImageUrl}
                                   alt={`${stop.name || "Stop"} landmark`}
-                                  style={{
-                                    width: "120px",
-                                    height: "72px",
-                                    objectFit: "cover",
-                                    borderRadius: "10px",
-                                    border: "1px solid var(--line)",
-                                  }}
+                                  className="stop-editor-upload-image"
                                 />
                                 <button
                                   className="btn ghost"
@@ -760,7 +749,7 @@ function RouteEntry({ apiBase, token, operatorScope, setOperatorScope }) {
                                 </button>
                               </div>
                             ) : (
-                              <span style={{ fontSize: "11px", color: "var(--text-muted)" }}>
+                              <span className="stop-editor-upload-hint">
                                 Upload a small landmark image that passengers can tap to confirm the exact bus stop.
                               </span>
                             )}
@@ -776,7 +765,7 @@ function RouteEntry({ apiBase, token, operatorScope, setOperatorScope }) {
                             </a>
                           )}
                         </div>
-                        <div style={{ display: "flex", gap: "6px", flexShrink: 0 }}>
+                        <div className="stop-editor-actions">
                           <button className="btn ghost" type="button" onClick={() => moveStop(idx, -1)}>
                             Up
                           </button>
