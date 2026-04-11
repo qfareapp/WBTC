@@ -14,9 +14,15 @@ const {
   getRoutePerformance,
   searchStops,
 } = require("../controllers/route.controller");
+const { getStopImageUploadSignature } = require("../controllers/upload.controller");
 
 router.use(auth);
 
+router.post(
+  "/uploads/stop-image-signature",
+  requireRole("ADMIN", "DEPOT_MANAGER"),
+  getStopImageUploadSignature
+);
 router.post("/", requireRole("ADMIN", "DEPOT_MANAGER"), createRouteWithFare);
 router.put("/:id", requireRole("ADMIN", "DEPOT_MANAGER"), updateRouteWithFare);
 router.patch("/:id/assignment-mode", requireRole("ADMIN", "DEPOT_MANAGER"), updateAssignmentMode);

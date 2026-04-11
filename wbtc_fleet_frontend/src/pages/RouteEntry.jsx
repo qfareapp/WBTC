@@ -18,30 +18,62 @@ const initialRoute = {
 const initialStop = { name: "", latitude: "", longitude: "", matchedStopName: "", landmarkImageUrl: "" };
 const initialSlab = { fromKm: "", toKm: "", fare: "" };
 
-const resizeImageFile = (file, maxWidth = 480, maxHeight = 320, quality = 0.72) =>
+const fileToDataUrl = (file) =>
   new Promise((resolve, reject) => {
     const reader = new FileReader();
-    reader.onload = () => {
-      const image = new Image();
-      image.onload = () => {
-        const scale = Math.min(maxWidth / image.width, maxHeight / image.height, 1);
-        const canvas = document.createElement("canvas");
-        canvas.width = Math.max(1, Math.round(image.width * scale));
-        canvas.height = Math.max(1, Math.round(image.height * scale));
-        const ctx = canvas.getContext("2d");
-        if (!ctx) {
-          reject(new Error("Could not prepare image canvas"));
-          return;
-        }
-        ctx.drawImage(image, 0, 0, canvas.width, canvas.height);
-        resolve(canvas.toDataURL("image/jpeg", quality));
-      };
-      image.onerror = () => reject(new Error("Could not read selected image"));
-      image.src = reader.result;
-    };
+    reader.onload = () => resolve(reader.result);
     reader.onerror = () => reject(new Error("Could not load selected image"));
     reader.readAsDataURL(file);
   });
+
+const canvasToBlob = (canvas, quality) =>
+  new Promise((resolve, reject) => {
+    canvas.toBlob(
+      (blob) => {
+        if (!blob) {
+          reject(new Error("Could not compress selected image"));
+          return;
+        }
+        resolve(blob);
+      },
+      "image/jpeg",
+      quality
+    );
+  });
+
+const compressImageFile = async (file, maxWidth = 480, maxHeight = 320, maxBytes = 80 * 1024) => {
+  const src = await fileToDataUrl(file);
+  const image = await new Promise((resolve, reject) => {
+    const nextImage = new Image();
+    nextImage.onload = () => resolve(nextImage);
+    nextImage.onerror = () => reject(new Error("Could not read selected image"));
+    nextImage.src = src;
+  });
+
+  const scale = Math.min(maxWidth / image.width, maxHeight / image.height, 1);
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.max(1, Math.round(image.width * scale));
+  canvas.height = Math.max(1, Math.round(image.height * scale));
+  const ctx = canvas.getContext("2d");
+  if (!ctx) {
+    throw new Error("Could not prepare image canvas");
+  }
+  ctx.drawImage(image, 0, 0, canvas.width, canvas.height);
+
+  let quality = 0.82;
+  let blob = await canvasToBlob(canvas, quality);
+
+  while (blob.size > maxBytes && quality > 0.34) {
+    quality -= 0.08;
+    blob = await canvasToBlob(canvas, quality);
+  }
+
+  if (blob.size > maxBytes) {
+    throw new Error("Image could not be compressed below 80 KB");
+  }
+
+  return blob;
+};
 
 function RouteEntry({ apiBase, token, operatorScope, setOperatorScope }) {
   const [route, setRoute] = useState(initialRoute);
@@ -117,9 +149,10 @@ function RouteEntry({ apiBase, token, operatorScope, setOperatorScope }) {
   const handleStopImageSelected = async (idx, file) => {
     if (!file) return;
     try {
-      const dataUrl = await resizeImageFile(file);
-      updateStop(idx, { landmarkImageUrl: dataUrl });
-      showNotice("success", "Bus stop image added.");
+      setNotice({ type: "info", message: "Uploading bus stop image..." });
+      const imageUrl = await uploadStopImageToCloudinary(file);
+      updateStop(idx, { landmarkImageUrl: imageUrl });
+      showNotice("success", "Bus stop image uploaded.");
     } catch (error) {
       showNotice("error", error.message || "Could not process the selected image.");
     }
@@ -128,6 +161,52 @@ function RouteEntry({ apiBase, token, operatorScope, setOperatorScope }) {
   const showNotice = (type, message) => {
     setNotice({ type, message });
     setTimeout(() => setNotice(null), 4000);
+  };
+
+  const uploadStopImageToCloudinary = async (file) => {
+    const compressedBlob = await compressImageFile(file);
+
+    const signResponse = await fetch(`${apiBase}/api/routes/uploads/stop-image-signature`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${token}`,
+      },
+    });
+    const signText = await signResponse.text();
+    const signData = signText ? JSON.parse(signText) : {};
+    if (!signResponse.ok) {
+      throw new Error(signData.message || "Failed to prepare Cloudinary upload");
+    }
+
+    const formData = new FormData();
+    formData.append(
+      "file",
+      compressedBlob,
+      `${file.name.replace(/\.[^.]+$/, "") || "stop-image"}.jpg`
+    );
+    formData.append("api_key", signData.apiKey);
+    formData.append("timestamp", String(signData.timestamp));
+    formData.append("signature", signData.signature);
+    formData.append("folder", signData.folder);
+
+    const uploadResponse = await fetch(
+      `https://api.cloudinary.com/v1_1/${encodeURIComponent(signData.cloudName)}/image/upload`,
+      {
+        method: "POST",
+        body: formData,
+      }
+    );
+    const uploadText = await uploadResponse.text();
+    const uploadData = uploadText ? JSON.parse(uploadText) : {};
+    if (!uploadResponse.ok) {
+      throw new Error(uploadData.error?.message || "Cloudinary upload failed");
+    }
+
+    if (!uploadData.secure_url) {
+      throw new Error("Cloudinary upload did not return an image URL");
+    }
+
+    return uploadData.secure_url;
   };
 
   const addStop = () => setStops((prev) => [...prev, { ...initialStop }]);
