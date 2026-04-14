@@ -510,40 +510,10 @@ const HomeScreen: React.FC<Props> = ({ navigation }) => {
 
     const wantedDirection: 'UP' | 'DOWN' = fromStop.index < toStop.index ? 'UP' : 'DOWN';
     return liveTrips.filter(trip => {
-      if (trip.direction !== wantedDirection) {
-        return false;
-      }
+      if (trip.direction !== wantedDirection) return false;
 
       const progress = getTripProgressState(trip, liveRoute.stops, from, wantedDirection);
-      const passedSelectedStop = progress.crossedSelectedStop;
-      const nearestStop = progress.currentStop
-        ? {
-            routeStop: progress.currentStop,
-            status: getTripNearestRouteStop(trip, liveRoute.stops)?.status ?? 'near',
-          }
-        : null;
-      const approachingSelectedStop = normalizeStopName(trip.approachingStop ?? '') === fromNorm;
-
-      if (nearestStop) {
-        const currentIndex = nearestStop.routeStop.index;
-        const atSelectedStop = currentIndex === fromStop.index && nearestStop.status === 'at';
-
-        if (atSelectedStop) {
-          return true;
-        }
-
-        if (passedSelectedStop) {
-          return progress.crossedBeyondAllowance !== true;
-        }
-
-        if (wantedDirection === 'UP') {
-          return currentIndex < fromStop.index || approachingSelectedStop;
-        }
-
-        return currentIndex > fromStop.index || approachingSelectedStop;
-      }
-
-      if (passedSelectedStop) {
+      if (progress.crossedSelectedStop) {
         return progress.crossedBeyondAllowance !== true;
       }
 
