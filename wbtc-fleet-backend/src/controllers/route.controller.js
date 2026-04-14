@@ -10,14 +10,11 @@ const Bus = require("../models/Bus");
 const Depot = require("../models/Depot");
 const RouteDayActivation = require("../models/RouteDayActivation");
 const TicketBooking = require("../models/TicketBooking");
-const Driver = require("../models/Driver");
-const Conductor = require("../models/Conductor");
 const DriverAssignment = require("../models/DriverAssignment");
 const ConductorAssignment = require("../models/ConductorAssignment");
-const BusCrewMapping = require("../models/BusCrewMapping");
 const ApiError = require("../utils/ApiError");
 const asyncHandler = require("../utils/asyncHandler");
-const { getOpsDate, getOpsMonth, toOpsIsoDay, getOpsPeriodWindow } = require("../utils/opsTime");
+const { getOpsDate, getOpsMonth, getOpsNowParts, toOpsIsoDay, getOpsPeriodWindow } = require("../utils/opsTime");
 const {
   getPreferredStopFields,
   serializeRouteStop,
@@ -61,6 +58,19 @@ const fromMinutes = (mins) => {
   const hh = String(Math.floor(mins / 60)).padStart(2, "0");
   const mm = String(mins % 60).padStart(2, "0");
   return `${hh}:${mm}`;
+};
+
+const isTripUpcomingForDate = (date, startTime) => {
+  const tripStartMin = toMinutes(startTime);
+  if (tripStartMin == null) return false;
+
+  const opsDate = getOpsDate();
+  const dateCmp = String(date || "").localeCompare(opsDate);
+  if (dateCmp > 0) return true;
+  if (dateCmp < 0) return false;
+
+  const { nowMinutes } = getOpsNowParts();
+  return tripStartMin >= nowMinutes;
 };
 
 const buildOperatorFilter = (operatorType) => {
@@ -710,6 +720,9 @@ exports.activateRouteDay = asyncHandler(async (req, res) => {
     }
 
     if (["Scheduled", "Cancelled"].includes(existing.status)) {
+      if (existing.status === "Cancelled" && !isTripUpcomingForDate(date, trip.startTime)) {
+        return;
+      }
       existing.busId = busId;
       existing.endTime = trip.endTime;
       existing.status = "Scheduled";
@@ -806,44 +819,6 @@ exports.deactivateRouteDay = asyncHandler(async (req, res) => {
       status: "Scheduled",
     }),
   ]);
-
-  if (assignedBusIds.length) {
-    const activeMappings = await BusCrewMapping.find({
-      busId: { $in: assignedBusIds },
-      isActive: true,
-    }).select("driverId conductorId");
-
-    const driverIds = Array.from(
-      new Set(activeMappings.map((mapping) => String(mapping.driverId || "").trim()).filter(Boolean))
-    );
-    const conductorIds = Array.from(
-      new Set(activeMappings.map((mapping) => String(mapping.conductorId || "").trim()).filter(Boolean))
-    );
-
-    const resetUpdates = [
-      Bus.updateMany(
-        { _id: { $in: assignedBusIds } },
-        { $set: { currentLocation: null } }
-      ),
-    ];
-    if (driverIds.length) {
-      resetUpdates.push(
-        Driver.updateMany(
-          { _id: { $in: driverIds } },
-          { $set: { currentLocation: null } }
-        )
-      );
-    }
-    if (conductorIds.length) {
-      resetUpdates.push(
-        Conductor.updateMany(
-          { _id: { $in: conductorIds } },
-          { $set: { currentLocation: null } }
-        )
-      );
-    }
-    await Promise.all(resetUpdates);
-  }
 
   const deactivatedAt = new Date();
   await RouteDayActivation.deleteOne({ _id: activation._id });

@@ -330,8 +330,7 @@ function RouteTimeline({ apiBase, token }) {
       const data = parseApiText(text);
       if (!response.ok) throw new Error(data.message || "Failed to activate auto schedule");
       showNotice("success", "Auto schedule activated.");
-      setDayStatus((prev) => ({ ...prev, activated: true, autoOffersEnabled: true }));
-      await loadTrips();
+      await Promise.all([loadTrips(), loadDayStatus()]);
     } catch (error) {
       showNotice("error", error.message);
     } finally {
@@ -355,7 +354,7 @@ function RouteTimeline({ apiBase, token }) {
       const data = parseApiText(text);
       if (!response.ok) throw new Error(data.message || "Failed to deactivate route for day");
       showNotice("success", "Route deactivated. Auto offers stopped for this date.");
-      setDayStatus((prev) => ({ ...prev, activated: true, autoOffersEnabled: false }));
+      await Promise.all([loadTrips(), loadDayStatus()]);
     } catch (error) {
       showNotice("error", error.message);
     } finally {
