@@ -12,6 +12,7 @@ const ApiError = require("../utils/ApiError");
 const asyncHandler = require("../utils/asyncHandler");
 const { computeOwnerPaymentRows } = require("../utils/ownerPayments");
 const { getOpsDate, getOpsMonth, toOpsIsoDay, getOpsDayWindow, getOpsPeriodWindow } = require("../utils/opsTime");
+const { getStopFieldsForDirection, hasCoords } = require("../utils/routeStopDirection");
 
 const dayWindowFromIso = (isoDate) => getOpsDayWindow(isoDate);
 
@@ -27,7 +28,7 @@ const haversineKm = (lat1, lon1, lat2, lon2) => {
   return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 };
 
-const resolveNearestRouteStop = (location, stops = []) => {
+const resolveNearestRouteStop = (location, stops = [], direction = "UP") => {
   if (
     !location ||
     typeof location.latitude !== "number" ||
@@ -36,9 +37,14 @@ const resolveNearestRouteStop = (location, stops = []) => {
     return null;
   }
 
-  const geocodedStops = stops.filter(
-    (stop) => typeof stop.latitude === "number" && typeof stop.longitude === "number"
-  );
+  const geocodedStops = stops
+    .map((stop) => {
+      const directional = getStopFieldsForDirection(stop, direction);
+      return hasCoords(directional)
+        ? { ...stop, latitude: directional.latitude, longitude: directional.longitude }
+        : null;
+    })
+    .filter(Boolean);
   if (!geocodedStops.length) return null;
 
   let nearest = geocodedStops[0];
@@ -166,7 +172,7 @@ exports.getOwnerFleetDashboard = asyncHandler(async (req, res) => {
       date: getOpsDate(),
     })
       .select(
-        "busId routeId lastLatitude lastLongitude lastLocationAt driverLastLatitude driverLastLongitude driverLastLocationAt"
+        "busId routeId direction lastLatitude lastLongitude lastLocationAt driverLastLatitude driverLastLongitude driverLastLocationAt"
       )
       .populate("routeId", "routeCode routeName")
       .lean(),
@@ -202,7 +208,7 @@ exports.getOwnerFleetDashboard = asyncHandler(async (req, res) => {
   const routeStops = ownerRouteStopIds.length
     ? await RouteStop.find({ routeId: { $in: ownerRouteStopIds } })
         .sort({ index: 1 })
-        .select("routeId index name latitude longitude")
+        .select("routeId index name latitude longitude upLatitude upLongitude downLatitude downLongitude")
         .lean()
     : [];
   const routeMap = routes.reduce((acc, route) => {
@@ -299,7 +305,8 @@ exports.getOwnerFleetDashboard = asyncHandler(async (req, res) => {
     const liveCurrentStop = live?.routeId
       ? resolveNearestRouteStop(
           liveLocation,
-          routeStopsByRoute[String(live.routeId._id || live.routeId || "")] || []
+          routeStopsByRoute[String(live.routeId._id || live.routeId || "")] || [],
+          live.direction || "UP"
         )
       : null;
 

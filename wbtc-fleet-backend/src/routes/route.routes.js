@@ -13,6 +13,7 @@ const {
   releaseRouteBusForDate,
   getRoutePerformance,
   searchStops,
+  listStopBoardingPoints,
 } = require("../controllers/route.controller");
 const { getStopImageUploadSignature } = require("../controllers/upload.controller");
 
@@ -32,6 +33,7 @@ router.post("/:id/deactivate-day", requireRole("ADMIN", "DEPOT_MANAGER", "SCHEDU
 router.post("/:id/release-bus", requireRole("ADMIN", "DEPOT_MANAGER"), releaseRouteBusForDate);
 router.get("/performance", requireRole("ADMIN", "DEPOT_MANAGER", "SCHEDULER", "VIEWER"), getRoutePerformance);
 router.get("/stops/search", requireRole("ADMIN", "DEPOT_MANAGER", "SCHEDULER", "VIEWER"), searchStops);
+router.get("/stops/:stopId/boarding-points", requireRole("ADMIN", "DEPOT_MANAGER", "SCHEDULER", "VIEWER"), listStopBoardingPoints);
 router.get("/", requireRole("ADMIN", "DEPOT_MANAGER", "SCHEDULER", "VIEWER"), listRoutes);
 router.get("/:id", requireRole("ADMIN", "DEPOT_MANAGER", "SCHEDULER", "VIEWER"), getRouteFare);
 

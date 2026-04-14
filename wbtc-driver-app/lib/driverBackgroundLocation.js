@@ -202,4 +202,31 @@ export const writeDriverTrackingDebug = async (payload = {}) => {
   }
 };
 
+export const syncDriverBackgroundNotification = async ({
+  tripInstanceId,
+  apiBase,
+  token,
+  stopName,
+  passengersWaiting,
+  isReachingFinalStop = false,
+}) => {
+  const waitingCount = Number(passengersWaiting || 0);
+  const hasStop = Boolean(String(stopName || "").trim());
+  let notificationBody = DEFAULT_NOTIFICATION_BODY;
+
+  if (isReachingFinalStop) {
+    notificationBody = "Reaching final stop";
+  } else if (hasStop) {
+    notificationBody = `Next stop: ${String(stopName).trim()} | ${waitingCount} tapped waiting`;
+  }
+
+  return startDriverBackgroundTrackingWithNotification({
+    tripInstanceId,
+    apiBase,
+    token,
+    notificationTitle: DEFAULT_NOTIFICATION_TITLE,
+    notificationBody,
+  });
+};
+
 export { DRIVER_LOCATION_TASK };

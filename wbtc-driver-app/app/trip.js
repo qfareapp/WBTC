@@ -16,9 +16,13 @@ import * as Location from "expo-location";
 import {
   requestDriverBackgroundPermissions,
   stopDriverBackgroundTracking,
-  updateDriverBackgroundNotification,
+  syncDriverBackgroundNotification,
   writeDriverTrackingDebug,
 } from "../lib/driverBackgroundLocation";
+import {
+  cancelTripCloseReminderNotifications,
+  scheduleTripCloseReminderNotifications,
+} from "../utils/pushNotifications";
 
 const API_BASE_KEY = "wbtc_api_base";
 const TOKEN_KEY = "wbtc_driver_token";
@@ -49,6 +53,48 @@ const normalizeStopName = (value) => String(value || "").trim().toLowerCase();
 const orderRouteStopsByDirection = (routeStops = [], direction) => {
   const stops = [...routeStops];
   return direction === "DOWN" ? stops.reverse() : stops;
+};
+
+const getProgressStops = ({ routeStops = [], trip, hasStarted }) => {
+  if (!routeStops.length) {
+    return { lastStop: null, currentStop: null, upcomingStops: [] };
+  }
+
+  const passedSet = new Set((trip?.progress?.passedStops || []).map(normalizeStopName));
+  const approachingStop = String(trip?.progress?.approachingStop || "").trim();
+  const approachingIndex = routeStops.findIndex(
+    (stop) => normalizeStopName(stop.name) === normalizeStopName(approachingStop)
+  );
+  const lastPassedIndex = routeStops.reduce(
+    (latestIndex, stop, index) => (passedSet.has(normalizeStopName(stop.name)) ? index : latestIndex),
+    -1
+  );
+  const currentStopIndex =
+    approachingIndex >= 0
+      ? approachingIndex
+      : hasStarted
+      ? Math.min(lastPassedIndex + 1, routeStops.length - 1)
+      : -1;
+  const nextStop = currentStopIndex >= 0 ? routeStops[currentStopIndex + 1] || null : null;
+  const secondUpcomingStop = currentStopIndex >= 0 ? routeStops[currentStopIndex + 2] || null : null;
+
+  return {
+    lastStop: lastPassedIndex >= 0 ? routeStops[lastPassedIndex] : null,
+    currentStop: currentStopIndex >= 0 ? routeStops[currentStopIndex] : null,
+    upcomingStops: [nextStop, secondUpcomingStop].filter(Boolean),
+  };
+};
+
+const hasReachedFinalRouteStop = ({ routeStops = [], trip, hasStarted }) => {
+  if (!hasStarted || !routeStops.length) return false;
+
+  const finalStopName = normalizeStopName(routeStops[routeStops.length - 1]?.name);
+  if (!finalStopName) return false;
+
+  const passedSet = new Set((trip?.progress?.passedStops || []).map(normalizeStopName));
+  const approachingStopName = normalizeStopName(trip?.progress?.approachingStop);
+
+  return passedSet.has(finalStopName) || approachingStopName === finalStopName;
 };
 
 function SwipeConfirm({ label, onConfirm, disabled = false }) {
@@ -153,8 +199,9 @@ function SwipeConfirm({ label, onConfirm, disabled = false }) {
 
 export default function Trip() {
   const router = useRouter();
-  const { tripInstanceId } = useLocalSearchParams();
+  const { tripInstanceId, openEndTrip } = useLocalSearchParams();
   const tripId = Array.isArray(tripInstanceId) ? tripInstanceId[0] : tripInstanceId;
+  const shouldOpenEndTrip = Array.isArray(openEndTrip) ? openEndTrip[0] === "1" : openEndTrip === "1";
   const [trip, setTrip] = useState(null);
   const [notice, setNotice] = useState("");
   const [busy, setBusy] = useState(false);
@@ -174,34 +221,11 @@ export default function Trip() {
     [trip?.direction, trip?.routeStops]
   );
   const progressStops = useMemo(() => {
-    if (!routeStops.length) {
-      return { lastStop: null, currentStop: null, upcomingStops: [] };
-    }
-
-    const passedSet = new Set((trip?.progress?.passedStops || []).map(normalizeStopName));
-    const approachingStop = String(trip?.progress?.approachingStop || "").trim();
-    const approachingIndex = routeStops.findIndex(
-      (stop) => normalizeStopName(stop.name) === normalizeStopName(approachingStop)
-    );
-    const lastPassedIndex = routeStops.reduce(
-      (latestIndex, stop, index) => (passedSet.has(normalizeStopName(stop.name)) ? index : latestIndex),
-      -1
-    );
-    const currentStopIndex =
-      approachingIndex >= 0
-        ? approachingIndex
-        : hasStarted
-        ? Math.min(lastPassedIndex + 1, routeStops.length - 1)
-        : -1;
-    const nextStop = currentStopIndex >= 0 ? routeStops[currentStopIndex + 1] || null : null;
-    const secondUpcomingStop = currentStopIndex >= 0 ? routeStops[currentStopIndex + 2] || null : null;
-
-    return {
-      lastStop: lastPassedIndex >= 0 ? routeStops[lastPassedIndex] : null,
-      currentStop: currentStopIndex >= 0 ? routeStops[currentStopIndex] : null,
-      upcomingStops: [nextStop, secondUpcomingStop].filter(Boolean),
-    };
-  }, [hasStarted, routeStops, trip?.progress?.approachingStop, trip?.progress?.passedStops]);
+    return getProgressStops({ routeStops, trip, hasStarted });
+  }, [hasStarted, routeStops, trip]);
+  const hasReachedFinalStop = useMemo(() => {
+    return hasReachedFinalRouteStop({ routeStops, trip, hasStarted });
+  }, [hasStarted, routeStops, trip]);
   const upcomingStopsWithWaiting = useMemo(() => {
     return progressStops.upcomingStops.map((stop) => {
       const match = (trip?.waitingSummary?.stops || []).find(
@@ -282,12 +306,19 @@ export default function Trip() {
           AsyncStorage.getItem(TOKEN_KEY),
         ]);
         if (apiBase && token) {
-          await updateDriverBackgroundNotification({
+          const nextRouteStops = orderRouteStopsByDirection(nextTrip?.routeStops || [], nextTrip?.direction);
+          const nextHasStarted = Boolean(nextTrip?.timing?.actualStartTime);
+          await syncDriverBackgroundNotification({
             tripInstanceId: tripId,
             apiBase,
             token,
             stopName: nextTrip?.upcomingStopWaiting?.stopName || null,
             passengersWaiting: nextTrip?.upcomingStopWaiting?.passengersWaiting || 0,
+            isReachingFinalStop: hasReachedFinalRouteStop({
+              routeStops: nextRouteStops,
+              trip: nextTrip,
+              hasStarted: nextHasStarted,
+            }),
           });
         }
       }
@@ -406,12 +437,13 @@ export default function Trip() {
       const text = await response.text();
       const data = parseApiText(text);
       if (!response.ok) throw new Error(data.message || "Failed to start trip");
-      await updateDriverBackgroundNotification({
+      await syncDriverBackgroundNotification({
         tripInstanceId: tripId,
         apiBase,
         token,
         stopName: trip?.upcomingStopWaiting?.stopName || null,
         passengersWaiting: trip?.upcomingStopWaiting?.passengersWaiting || 0,
+        isReachingFinalStop: hasReachedFinalStop,
       });
       await sendLocationUpdate();
       await loadTrip();
@@ -443,6 +475,7 @@ export default function Trip() {
       const text = await response.text();
       const data = parseApiText(text);
       if (!response.ok) throw new Error(data.message || "Failed to complete trip");
+      await cancelTripCloseReminderNotifications(tripId);
       await stopDriverBackgroundTracking();
       router.replace({ pathname: "/trip-summary", params: { tripInstanceId: tripId } });
       return true;
@@ -489,6 +522,11 @@ export default function Trip() {
   }, [tripId]);
 
   useEffect(() => {
+    if (!trip || !hasStarted || isTripCompleted || !shouldOpenEndTrip) return;
+    setEndModalVisible(true);
+  }, [hasStarted, isTripCompleted, shouldOpenEndTrip, trip]);
+
+  useEffect(() => {
     if (!tripId) return undefined;
 
     let cancelled = false;
@@ -497,6 +535,7 @@ export default function Trip() {
       if (!trip) return;
 
       if (!isTracking) {
+        await cancelTripCloseReminderNotifications(tripId);
         if (trip.status === "Completed") {
           await stopDriverBackgroundTracking();
         }
@@ -526,12 +565,13 @@ export default function Trip() {
 
         if (!cancelled) setLocationNotice("");
 
-        await updateDriverBackgroundNotification({
+        await syncDriverBackgroundNotification({
           tripInstanceId: tripId,
           apiBase,
           token,
           stopName: trip?.upcomingStopWaiting?.stopName || null,
           passengersWaiting: trip?.upcomingStopWaiting?.passengersWaiting || 0,
+          isReachingFinalStop: hasReachedFinalStop,
         });
 
         await sendLocationUpdate();
@@ -553,7 +593,35 @@ export default function Trip() {
     trip?.status,
     trip?.upcomingStopWaiting?.stopName,
     trip?.upcomingStopWaiting?.passengersWaiting,
+    hasReachedFinalStop,
   ]);
+
+  useEffect(() => {
+    if (!tripId) return undefined;
+
+    let cancelled = false;
+
+    const syncCloseReminder = async () => {
+      if (!isTracking || !hasReachedFinalStop) {
+        await cancelTripCloseReminderNotifications(tripId);
+        return;
+      }
+
+      try {
+        await scheduleTripCloseReminderNotifications({ tripInstanceId: tripId });
+      } catch {
+        if (!cancelled) {
+          setNotice("Unable to schedule the end-trip reminder notification.");
+        }
+      }
+    };
+
+    void syncCloseReminder();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [hasReachedFinalStop, isTracking, tripId]);
 
   useEffect(() => {
     if (!tripId || !isTracking) return undefined;

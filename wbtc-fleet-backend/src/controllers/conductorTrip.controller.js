@@ -16,6 +16,7 @@ const { ensureConductorEligibleForBus } = require("../utils/crewPolicy");
 const { getOpsDayWindow, getOpsMonthWindow, getOpsPeriodWindow, getOpsDate, toOpsIsoDay } = require("../utils/opsTime");
 const { reverseGeocode } = require("../utils/nominatim");
 const { getTripWaitingSnapshot } = require("../utils/passengerWaiting");
+const { getStopFieldsForDirection, hasCoords } = require("../utils/routeStopDirection");
 
 const OPS_TIMEZONE = "Asia/Kolkata";
 
@@ -958,14 +959,24 @@ const haversineM = (lat1, lng1, lat2, lng2) => {
 
 const runGeofenceChecks = async (tripInstanceId, busLat, busLng) => {
   const trip = await TripInstance.findById(tripInstanceId)
-    .select("routeId passedStops notifiedStops approachingStop")
+    .select("routeId direction passedStops notifiedStops approachingStop")
     .lean();
   if (!trip) return;
 
-  const stops = await RouteStop.find({ routeId: trip.routeId, latitude: { $ne: null } })
+  const stops = await RouteStop.find({ routeId: trip.routeId })
     .sort({ index: 1 })
-    .select("name latitude longitude index")
-    .lean();
+    .select("name index latitude longitude upLatitude upLongitude downLatitude downLongitude")
+    .lean()
+    .then((rows) =>
+      rows
+        .map((stop) => {
+          const directional = getStopFieldsForDirection(stop, trip.direction);
+          return hasCoords(directional)
+            ? { name: stop.name, index: stop.index, latitude: directional.latitude, longitude: directional.longitude }
+            : null;
+        })
+        .filter(Boolean)
+    );
   if (!stops.length) return;
 
   const passedSet = new Set(trip.passedStops || []);

@@ -15,8 +15,32 @@ const initialRoute = {
   assignmentMode: "MANUAL",
 };
 
-const initialStop = { name: "", latitude: "", longitude: "", matchedStopName: "", landmarkImageUrl: "" };
+const initialStop = {
+  name: "",
+  stopMasterId: "",
+  latitude: "",
+  longitude: "",
+  upTowards: "",
+  downTowards: "",
+  upTowardsManual: false,
+  downTowardsManual: false,
+  upBoardingPointId: "",
+  downBoardingPointId: "",
+  upLatitude: "",
+  upLongitude: "",
+  downLatitude: "",
+  downLongitude: "",
+  matchedStopName: "",
+  landmarkImageUrl: "",
+  upLandmarkImageUrl: "",
+  downLandmarkImageUrl: "",
+};
 const initialSlab = { fromKm: "", toKm: "", fare: "" };
+
+const formatCoordPair = (latitude, longitude) => {
+  if (latitude == null || longitude == null || latitude === "" || longitude === "") return null;
+  return `${Number(latitude).toFixed(5)}, ${Number(longitude).toFixed(5)}`;
+};
 
 const fileToDataUrl = (file) =>
   new Promise((resolve, reject) => {
@@ -86,6 +110,7 @@ function RouteEntry({ apiBase, token, operatorScope, setOperatorScope }) {
   const [activeFareTable, setActiveFareTable] = useState(null);
   const [editingRouteId, setEditingRouteId] = useState(null);
   const [stopSuggestions, setStopSuggestions] = useState({});
+  const [boardingPointOptions, setBoardingPointOptions] = useState({});
   const [stopFocused, setStopFocused] = useState({});
   const stopTimers = useRef({});
   const stopRequestSeq = useRef({});
@@ -97,6 +122,63 @@ function RouteEntry({ apiBase, token, operatorScope, setOperatorScope }) {
       next[idx] = typeof updater === "function" ? updater(current) : { ...current, ...updater };
       return next;
     });
+  };
+
+  const fetchBoardingPoints = async (stopMasterId) => {
+    if (!stopMasterId) return [];
+    if (boardingPointOptions[stopMasterId]) return boardingPointOptions[stopMasterId];
+
+    const response = await fetch(`${apiBase}/api/routes/stops/${stopMasterId}/boarding-points`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    const text = await response.text();
+    const data = text ? JSON.parse(text) : {};
+    if (!response.ok) throw new Error(data.message || "Failed to load boarding points");
+    const points = data.boardingPoints || [];
+    setBoardingPointOptions((prev) => ({ ...prev, [stopMasterId]: points }));
+    return points;
+  };
+
+  const applyBoardingPointToStop = (idx, direction, point) => {
+    if (!point) return;
+      if (direction === "UP") {
+      updateStop(idx, {
+        upBoardingPointId: point.id || "",
+        upTowards: point.towards || "",
+        upTowardsManual: true,
+        upLatitude: point.latitude != null ? String(point.latitude) : "",
+        upLongitude: point.longitude != null ? String(point.longitude) : "",
+        upLandmarkImageUrl: point.landmarkImageUrl || "",
+      });
+      return;
+    }
+    updateStop(idx, {
+      downBoardingPointId: point.id || "",
+      downTowards: point.towards || "",
+      downTowardsManual: true,
+      downLatitude: point.latitude != null ? String(point.latitude) : "",
+      downLongitude: point.longitude != null ? String(point.longitude) : "",
+      downLandmarkImageUrl: point.landmarkImageUrl || "",
+    });
+  };
+
+  const syncTowardsSelection = async (idx, direction, typedValue, stopMasterId) => {
+    if (!stopMasterId) return;
+    try {
+      const points = await fetchBoardingPoints(stopMasterId);
+      const match = points.find(
+        (item) => String(item.towards || "").trim().toLowerCase() === String(typedValue || "").trim().toLowerCase()
+      );
+      if (match) {
+        applyBoardingPointToStop(idx, direction, match);
+      } else if (direction === "UP") {
+        updateStop(idx, { upBoardingPointId: "" });
+      } else {
+        updateStop(idx, { downBoardingPointId: "" });
+      }
+    } catch {
+      // ignore boarding-point suggestion failures while editing
+    }
   };
 
   const searchStops = (idx, query) => {
@@ -127,31 +209,71 @@ function RouteEntry({ apiBase, token, operatorScope, setOperatorScope }) {
     }, 250);
   };
 
-  const selectStopSuggestion = (idx, suggestion) => {
+  const selectStopSuggestion = async (idx, suggestion) => {
     updateStop(idx, (current) => ({
       ...current,
       name: suggestion.name,
-      latitude: suggestion.latitude != null ? String(suggestion.latitude) : "",
-      longitude: suggestion.longitude != null ? String(suggestion.longitude) : "",
+      stopMasterId: suggestion.stopMasterId || "",
+      latitude: suggestion.latitude != null ? String(suggestion.latitude) : current.latitude,
+      longitude: suggestion.longitude != null ? String(suggestion.longitude) : current.longitude,
+      upTowards: current.upTowards || "",
+      downTowards: current.downTowards || "",
+      upTowardsManual: false,
+      downTowardsManual: false,
+      upBoardingPointId: current.upBoardingPointId || "",
+      downBoardingPointId: current.downBoardingPointId || "",
+      upLatitude: current.upLatitude || "",
+      upLongitude: current.upLongitude || "",
+      downLatitude: current.downLatitude || "",
+      downLongitude: current.downLongitude || "",
       matchedStopName: suggestion.name,
       landmarkImageUrl: current.landmarkImageUrl || "",
+      upLandmarkImageUrl: current.upLandmarkImageUrl || "",
+      downLandmarkImageUrl: current.downLandmarkImageUrl || "",
     }));
+    if (suggestion.stopMasterId) {
+      try {
+        const points = await fetchBoardingPoints(suggestion.stopMasterId);
+        const currentStop = stops[idx] || {};
+        const maybeUp = points.find(
+          (item) => String(item.towards || "").trim().toLowerCase() === String(currentStop.upTowards || "").trim().toLowerCase()
+        );
+        const maybeDown = points.find(
+          (item) => String(item.towards || "").trim().toLowerCase() === String(currentStop.downTowards || "").trim().toLowerCase()
+        );
+        if (maybeUp) applyBoardingPointToStop(idx, "UP", maybeUp);
+        if (maybeDown) applyBoardingPointToStop(idx, "DOWN", maybeDown);
+      } catch {
+        // ignore here; suggestions remain usable without boarding options
+      }
+    }
     setStopSuggestions((p) => ({ ...p, [idx]: [] }));
     setStopFocused((p) => ({ ...p, [idx]: false }));
   };
 
   const keepTypedStop = (idx) => {
-    updateStop(idx, { matchedStopName: "" });
+    updateStop(idx, {
+      matchedStopName: "",
+      stopMasterId: "",
+      upTowardsManual: false,
+      downTowardsManual: false,
+      upBoardingPointId: "",
+      downBoardingPointId: "",
+    });
     setStopSuggestions((p) => ({ ...p, [idx]: [] }));
     setStopFocused((p) => ({ ...p, [idx]: false }));
   };
 
-  const handleStopImageSelected = async (idx, file) => {
+  const handleStopImageSelected = async (idx, direction, file) => {
     if (!file) return;
     try {
       setNotice({ type: "info", message: "Uploading bus stop image..." });
       const imageUrl = await uploadStopImageToCloudinary(file);
-      updateStop(idx, { landmarkImageUrl: imageUrl });
+      if (direction === "UP") {
+        updateStop(idx, { upLandmarkImageUrl: imageUrl, landmarkImageUrl: imageUrl });
+      } else {
+        updateStop(idx, { downLandmarkImageUrl: imageUrl, landmarkImageUrl: imageUrl });
+      }
       showNotice("success", "Bus stop image uploaded.");
     } catch (error) {
       showNotice("error", error.message || "Could not process the selected image.");
@@ -255,6 +377,19 @@ function RouteEntry({ apiBase, token, operatorScope, setOperatorScope }) {
   }, [fareSlabs]);
 
   const stopNames = stops.map((stop) => stop.name.trim()).filter(Boolean);
+  const upDirectionSummary = (() => {
+    const source = stops[0]?.name?.trim() || route.routeName?.trim() || route.routeNo?.trim() || route.routeName?.trim() || "";
+    const firstStop = stops[0]?.name?.trim() || "";
+    const lastStop = stops[stops.length - 1]?.name?.trim() || "";
+    if (firstStop && lastStop && firstStop !== lastStop) return `${firstStop} -> ${lastStop}`;
+    return source || "Set the first and last stop to define UP direction";
+  })();
+  const downDirectionSummary = (() => {
+    const firstStop = stops[0]?.name?.trim() || "";
+    const lastStop = stops[stops.length - 1]?.name?.trim() || "";
+    if (firstStop && lastStop && firstStop !== lastStop) return `${lastStop} -> ${firstStop}`;
+    return "Set the first and last stop to define DOWN direction";
+  })();
 
   const hasExactSuggestion = (idx) => {
     const typed = String(stops[idx]?.name || "").trim().toLowerCase();
@@ -339,9 +474,17 @@ function RouteEntry({ apiBase, token, operatorScope, setOperatorScope }) {
         stops: stops.map((stop, idx) => ({
           index: idx,
           name: stop.name.trim(),
-          latitude: stop.latitude !== "" && stop.latitude != null ? Number(stop.latitude) : null,
-          longitude: stop.longitude !== "" && stop.longitude != null ? Number(stop.longitude) : null,
-          landmarkImageUrl: stop.landmarkImageUrl || null,
+          stopMasterId: stop.stopMasterId || null,
+          upTowards: stop.upTowards.trim() || null,
+          downTowards: stop.downTowards.trim() || null,
+          upBoardingPointId: stop.upBoardingPointId || null,
+          downBoardingPointId: stop.downBoardingPointId || null,
+          upLatitude: stop.upLatitude !== "" && stop.upLatitude != null ? Number(stop.upLatitude) : null,
+          upLongitude: stop.upLongitude !== "" && stop.upLongitude != null ? Number(stop.upLongitude) : null,
+          downLatitude: stop.downLatitude !== "" && stop.downLatitude != null ? Number(stop.downLatitude) : null,
+          downLongitude: stop.downLongitude !== "" && stop.downLongitude != null ? Number(stop.downLongitude) : null,
+          upLandmarkImageUrl: stop.upLandmarkImageUrl || null,
+          downLandmarkImageUrl: stop.downLandmarkImageUrl || null,
         })),
         fareSlabs: fareSlabs.map((slab) => ({
           fromKm: Number(slab.fromKm),
@@ -407,11 +550,34 @@ function RouteEntry({ apiBase, token, operatorScope, setOperatorScope }) {
           .sort((a, b) => a.index - b.index)
           .map((stop) => ({
             name: stop.name,
+            stopMasterId: stop.stopMasterId || "",
             latitude: stop.latitude != null ? String(stop.latitude) : "",
             longitude: stop.longitude != null ? String(stop.longitude) : "",
+            upTowards: stop.upTowards || "",
+            downTowards: stop.downTowards || "",
+            upTowardsManual: true,
+            downTowardsManual: true,
+            upBoardingPointId: stop.upBoardingPointId || "",
+            downBoardingPointId: stop.downBoardingPointId || "",
+            upLatitude:
+              stop.upLatitude != null ? String(stop.upLatitude) : stop.latitude != null ? String(stop.latitude) : "",
+            upLongitude:
+              stop.upLongitude != null ? String(stop.upLongitude) : stop.longitude != null ? String(stop.longitude) : "",
+            downLatitude:
+              stop.downLatitude != null ? String(stop.downLatitude) : stop.latitude != null ? String(stop.latitude) : "",
+            downLongitude:
+              stop.downLongitude != null ? String(stop.downLongitude) : stop.longitude != null ? String(stop.longitude) : "",
             matchedStopName: "",
-            landmarkImageUrl: stop.landmarkImageUrl || "",
+            landmarkImageUrl: stop.landmarkImageUrl || stop.upLandmarkImageUrl || stop.downLandmarkImageUrl || "",
+            upLandmarkImageUrl: stop.upLandmarkImageUrl || stop.landmarkImageUrl || "",
+            downLandmarkImageUrl: stop.downLandmarkImageUrl || stop.landmarkImageUrl || "",
           }))
+      );
+      await Promise.all(
+        (data.stops || [])
+          .map((stop) => stop.stopMasterId)
+          .filter(Boolean)
+          .map((stopMasterId) => fetchBoardingPoints(stopMasterId).catch(() => []))
       );
       setFareSlabs(
         (data.fareSlabs || [])
@@ -429,6 +595,7 @@ function RouteEntry({ apiBase, token, operatorScope, setOperatorScope }) {
     setStops([{ ...initialStop }, { ...initialStop }]);
     setFareSlabs([{ ...initialSlab }]);
     setStopSuggestions({});
+    setBoardingPointOptions({});
     setStopFocused({});
   };
 
@@ -514,6 +681,7 @@ function RouteEntry({ apiBase, token, operatorScope, setOperatorScope }) {
     setRoute((prev) => ({ ...prev, depotId: "" }));
     setEditingRouteId(null);
     setStopSuggestions({});
+    setBoardingPointOptions({});
     setStopFocused({});
   }, [apiBase, token, operatorScope]);
 
@@ -522,6 +690,33 @@ function RouteEntry({ apiBase, token, operatorScope, setOperatorScope }) {
       Object.values(stopTimers.current).forEach((timer) => clearTimeout(timer));
     };
   }, []);
+
+  useEffect(() => {
+    setStops((prev) => {
+      const next = prev.map((stop, idx) => {
+        const suggestedUpTowards = prev[idx + 1]?.name?.trim() || "";
+        const suggestedDownTowards = prev[idx - 1]?.name?.trim() || "";
+        const shouldUpdateUp = !stop.upBoardingPointId && stop.upTowardsManual !== true;
+        const shouldUpdateDown = !stop.downBoardingPointId && stop.downTowardsManual !== true;
+
+        const nextUpTowards = shouldUpdateUp ? suggestedUpTowards : stop.upTowards;
+        const nextDownTowards = shouldUpdateDown ? suggestedDownTowards : stop.downTowards;
+
+        if (nextUpTowards === stop.upTowards && nextDownTowards === stop.downTowards) {
+          return stop;
+        }
+
+        return {
+          ...stop,
+          upTowards: nextUpTowards,
+          downTowards: nextDownTowards,
+        };
+      });
+
+      const changed = next.some((stop, idx) => stop !== prev[idx]);
+      return changed ? next : prev;
+    });
+  }, [stops.map((stop) => stop.name.trim()).join("|")]);
 
   return (
     <div className="app">
@@ -684,6 +879,19 @@ function RouteEntry({ apiBase, token, operatorScope, setOperatorScope }) {
                     <h3>Stops entry</h3>
                     <span className="pill">Ordered list</span>
                   </div>
+                  <div
+                    className="list-item"
+                    style={{ marginBottom: "12px", display: "grid", gap: "8px", background: "rgba(255,255,255,0.03)" }}
+                  >
+                    <div>
+                      <strong>UP direction</strong>
+                      <span>{upDirectionSummary}</span>
+                    </div>
+                    <div>
+                      <strong>DOWN direction</strong>
+                      <span>{downDirectionSummary}</span>
+                    </div>
+                  </div>
                   <div className="list">
                     {stops.map((stop, idx) => (
                       <div className="list-item stop-editor" key={`stop-${idx}`}>
@@ -698,14 +906,14 @@ function RouteEntry({ apiBase, token, operatorScope, setOperatorScope }) {
                                   const next = { ...current, name: nextName };
                                   const selectedName = String(current.matchedStopName || "").trim().toLowerCase();
                                   const typedName = nextName.trim().toLowerCase();
-                                  if (
-                                    typedName &&
-                                    selectedName &&
-                                    typedName !== selectedName &&
-                                    (current.latitude !== "" || current.longitude !== "")
-                                  ) {
-                                    next.latitude = "";
-                                    next.longitude = "";
+                                  if (typedName && selectedName && typedName !== selectedName) {
+                                    next.stopMasterId = "";
+                                    next.upTowards = "";
+                                    next.downTowards = "";
+                                    next.upTowardsManual = false;
+                                    next.downTowardsManual = false;
+                                    next.upBoardingPointId = "";
+                                    next.downBoardingPointId = "";
                                   }
                                   next.matchedStopName = typedName === selectedName ? current.matchedStopName : "";
                                   return next;
@@ -733,9 +941,14 @@ function RouteEntry({ apiBase, token, operatorScope, setOperatorScope }) {
                                   >
                                     <div style={{ fontWeight: 600, fontSize: "13px" }}>{s.name}</div>
                                     <div style={{ fontSize: "11px", color: "var(--text-muted)", marginTop: "2px" }}>
-                                      {s.latitude != null && s.longitude != null
-                                        ? `${Number(s.latitude).toFixed(5)}, ${Number(s.longitude).toFixed(5)}`
+                                      {formatCoordPair(s.upLatitude, s.upLongitude)
+                                        ? `UP ${formatCoordPair(s.upLatitude, s.upLongitude)}`
+                                        : formatCoordPair(s.latitude, s.longitude)
+                                        ? `General ${formatCoordPair(s.latitude, s.longitude)}`
                                         : "No coordinates saved"}
+                                      {formatCoordPair(s.downLatitude, s.downLongitude)
+                                        ? ` | DOWN ${formatCoordPair(s.downLatitude, s.downLongitude)}`
+                                        : ""}
                                       {s.routeCode ? ` | ${s.routeCode}` : ""}
                                       {s.routeName ? ` | ${s.routeName}` : ""}
                                     </div>
@@ -763,73 +976,186 @@ function RouteEntry({ apiBase, token, operatorScope, setOperatorScope }) {
                           </div>
                           <div className="stop-editor-paste">
                             <input
-                              placeholder="Paste coordinates  e.g. 22.6547, 88.4467"
+                              placeholder="Paste UP coordinates  e.g. 22.6547, 88.4467"
                               className="stop-editor-paste-input"
                               onPaste={(event) => {
                                 const text = event.clipboardData.getData("text");
                                 const parts = text.split(/[,\s]+/).map((p) => p.trim()).filter(Boolean);
                                 if (parts.length >= 2) {
                                   event.preventDefault();
-                                  updateStop(idx, { latitude: parts[0], longitude: parts[1] });
+                                  updateStop(idx, { upLatitude: parts[0], upLongitude: parts[1] });
+                                }
+                              }}
+                              value=""
+                              onChange={() => {}}
+                            />
+                            <input
+                              placeholder="Paste DOWN coordinates  e.g. 22.6547, 88.4467"
+                              className="stop-editor-paste-input"
+                              onPaste={(event) => {
+                                const text = event.clipboardData.getData("text");
+                                const parts = text.split(/[,\s]+/).map((p) => p.trim()).filter(Boolean);
+                                if (parts.length >= 2) {
+                                  event.preventDefault();
+                                  updateStop(idx, { downLatitude: parts[0], downLongitude: parts[1] });
                                 }
                               }}
                               value=""
                               onChange={() => {}}
                             />
                           </div>
+                          <div className="inline">
+                            <label className="field">
+                              UP towards
+                              <input
+                                list={`boarding-points-${idx}`}
+                                value={stop.upTowards}
+                                onChange={(event) =>
+                                  updateStop(idx, {
+                                    upTowards: event.target.value,
+                                    upTowardsManual: true,
+                                    upBoardingPointId: "",
+                                  })
+                                }
+                                onBlur={(event) =>
+                                  void syncTowardsSelection(idx, "UP", event.target.value, stop.stopMasterId)
+                                }
+                                placeholder="Towards Gariahat"
+                              />
+                            </label>
+                            <label className="field">
+                              DOWN towards
+                              <input
+                                list={`boarding-points-${idx}`}
+                                value={stop.downTowards}
+                                onChange={(event) =>
+                                  updateStop(idx, {
+                                    downTowards: event.target.value,
+                                    downTowardsManual: true,
+                                    downBoardingPointId: "",
+                                  })
+                                }
+                                onBlur={(event) =>
+                                  void syncTowardsSelection(idx, "DOWN", event.target.value, stop.stopMasterId)
+                                }
+                                placeholder="Towards Jadavpur"
+                              />
+                            </label>
+                          </div>
+                          {stop.stopMasterId ? (
+                            <>
+                              <datalist id={`boarding-points-${idx}`}>
+                                {(boardingPointOptions[stop.stopMasterId] || []).map((point) => (
+                                  <option key={point.id} value={point.towards} />
+                                ))}
+                              </datalist>
+                              {(boardingPointOptions[stop.stopMasterId] || []).length > 0 && (
+                                <div style={{ display: "flex", gap: "8px", flexWrap: "wrap", marginTop: "4px" }}>
+                                  {(boardingPointOptions[stop.stopMasterId] || []).map((point) => (
+                                    <span
+                                      key={`point-${idx}-${point.id}`}
+                                      style={{
+                                        fontSize: "11px",
+                                        padding: "4px 8px",
+                                        borderRadius: "999px",
+                                        border: "1px solid var(--line)",
+                                        color: "var(--text-muted)",
+                                      }}
+                                    >
+                                      {point.towards}
+                                    </span>
+                                  ))}
+                                </div>
+                              )}
+                            </>
+                          ) : (
+                            <span className="stop-editor-upload-hint">
+                              Select or create the stop first. Reusable boarding-point suggestions will appear after that.
+                            </span>
+                          )}
                           <div className="stop-editor-coords">
-                            <input
-                              type="number"
-                              value={stop.latitude}
-                              onChange={(event) => {
-                                updateStop(idx, { latitude: event.target.value });
-                              }}
-                              placeholder="Latitude"
-                              step="any"
-                              className="stop-editor-coord-input"
-                            />
-                            <input
-                              type="number"
-                              value={stop.longitude}
-                              onChange={(event) => {
-                                updateStop(idx, { longitude: event.target.value });
-                              }}
-                              placeholder="Longitude"
-                              step="any"
-                              className="stop-editor-coord-input"
-                            />
+                            <div style={{ display: "grid", gap: "6px" }}>
+                              <strong style={{ fontSize: "12px" }}>UP direction coordinates</strong>
+                              <div style={{ display: "grid", gap: "6px", gridTemplateColumns: "repeat(2, minmax(0, 1fr))" }}>
+                                <input
+                                  type="number"
+                                  value={stop.upLatitude}
+                                  onChange={(event) => {
+                                    updateStop(idx, { upLatitude: event.target.value });
+                                  }}
+                                  placeholder="UP latitude"
+                                  step="any"
+                                  className="stop-editor-coord-input"
+                                />
+                                <input
+                                  type="number"
+                                  value={stop.upLongitude}
+                                  onChange={(event) => {
+                                    updateStop(idx, { upLongitude: event.target.value });
+                                  }}
+                                  placeholder="UP longitude"
+                                  step="any"
+                                  className="stop-editor-coord-input"
+                                />
+                              </div>
+                            </div>
+                            <div style={{ display: "grid", gap: "6px" }}>
+                              <strong style={{ fontSize: "12px" }}>DOWN direction coordinates</strong>
+                              <div style={{ display: "grid", gap: "6px", gridTemplateColumns: "repeat(2, minmax(0, 1fr))" }}>
+                                <input
+                                  type="number"
+                                  value={stop.downLatitude}
+                                  onChange={(event) => {
+                                    updateStop(idx, { downLatitude: event.target.value });
+                                  }}
+                                  placeholder="DOWN latitude"
+                                  step="any"
+                                  className="stop-editor-coord-input"
+                                />
+                                <input
+                                  type="number"
+                                  value={stop.downLongitude}
+                                  onChange={(event) => {
+                                    updateStop(idx, { downLongitude: event.target.value });
+                                  }}
+                                  placeholder="DOWN longitude"
+                                  step="any"
+                                  className="stop-editor-coord-input"
+                                />
+                              </div>
+                            </div>
                           </div>
                           <div className="stop-editor-upload">
                             <label className="field stop-editor-upload-field">
-                              Bus stop image / landmark thumbnail
+                              UP direction stop image / landmark thumbnail
                               <input
                                 type="file"
                                 accept="image/*"
                                 onChange={(event) => {
                                   const file = event.target.files?.[0];
-                                  void handleStopImageSelected(idx, file);
+                                  void handleStopImageSelected(idx, "UP", file);
                                   event.target.value = "";
                                 }}
                               />
                             </label>
-                            {stop.landmarkImageUrl ? (
+                            {stop.upLandmarkImageUrl ? (
                               <div className="stop-editor-upload-preview">
                                 <img
-                                  src={stop.landmarkImageUrl}
-                                  alt={`${stop.name || "Stop"} landmark`}
+                                  src={stop.upLandmarkImageUrl}
+                                  alt={`${stop.name || "Stop"} UP landmark`}
                                   className="stop-editor-upload-image"
                                 />
                                 <button
                                   className="btn ghost"
                                   type="button"
-                                  onClick={() => updateStop(idx, { landmarkImageUrl: "" })}
+                                  onClick={() => updateStop(idx, { upLandmarkImageUrl: "" })}
                                 >
                                   Remove image
                                 </button>
                               </div>
                             ) : (
                               <span className="stop-editor-upload-hint">
-                                Upload a small landmark image that passengers can tap to confirm the exact bus stop.
+                                Upload the stop image for buses approaching this stop in the UP direction.
                               </span>
                             )}
                           </div>
@@ -843,6 +1169,62 @@ function RouteEntry({ apiBase, token, operatorScope, setOperatorScope }) {
                               ↗ Verify on map
                             </a>
                           )}
+                          <div className="stop-editor-upload">
+                            <label className="field stop-editor-upload-field">
+                              DOWN direction stop image / landmark thumbnail
+                              <input
+                                type="file"
+                                accept="image/*"
+                                onChange={(event) => {
+                                  const file = event.target.files?.[0];
+                                  void handleStopImageSelected(idx, "DOWN", file);
+                                  event.target.value = "";
+                                }}
+                              />
+                            </label>
+                            {stop.downLandmarkImageUrl ? (
+                              <div className="stop-editor-upload-preview">
+                                <img
+                                  src={stop.downLandmarkImageUrl}
+                                  alt={`${stop.name || "Stop"} DOWN landmark`}
+                                  className="stop-editor-upload-image"
+                                />
+                                <button
+                                  className="btn ghost"
+                                  type="button"
+                                  onClick={() => updateStop(idx, { downLandmarkImageUrl: "" })}
+                                >
+                                  Remove image
+                                </button>
+                              </div>
+                            ) : (
+                              <span className="stop-editor-upload-hint">
+                                Upload the stop image for buses approaching this stop in the DOWN direction.
+                              </span>
+                            )}
+                          </div>
+                          <div style={{ display: "flex", gap: "12px", flexWrap: "wrap" }}>
+                            {stop.upLatitude && stop.upLongitude && (
+                              <a
+                                href={`https://www.google.com/maps?q=${stop.upLatitude},${stop.upLongitude}`}
+                                target="_blank"
+                                rel="noreferrer"
+                                style={{ fontSize: "11px", color: "var(--accent)", marginTop: "4px", display: "inline-block" }}
+                              >
+                                Verify UP on map
+                              </a>
+                            )}
+                            {stop.downLatitude && stop.downLongitude && (
+                              <a
+                                href={`https://www.google.com/maps?q=${stop.downLatitude},${stop.downLongitude}`}
+                                target="_blank"
+                                rel="noreferrer"
+                                style={{ fontSize: "11px", color: "var(--accent)", marginTop: "4px", display: "inline-block" }}
+                              >
+                                Verify DOWN on map
+                              </a>
+                            )}
+                          </div>
                         </div>
                         <div className="stop-editor-actions">
                           <button className="btn ghost" type="button" onClick={() => moveStop(idx, -1)}>

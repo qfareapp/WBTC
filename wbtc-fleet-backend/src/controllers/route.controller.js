@@ -2,6 +2,8 @@ const mongoose = require("mongoose");
 const Route = require("../models/Route");
 const RouteStop = require("../models/RouteStop");
 const StopGeocode = require("../models/StopGeocode");
+const StopMaster = require("../models/StopMaster");
+const StopBoardingPoint = require("../models/StopBoardingPoint");
 const FareSlab = require("../models/FareSlab");
 const TripInstance = require("../models/TripInstance");
 const Bus = require("../models/Bus");
@@ -16,6 +18,12 @@ const BusCrewMapping = require("../models/BusCrewMapping");
 const ApiError = require("../utils/ApiError");
 const asyncHandler = require("../utils/asyncHandler");
 const { getOpsDate, getOpsMonth, toOpsIsoDay, getOpsPeriodWindow } = require("../utils/opsTime");
+const {
+  getPreferredStopFields,
+  serializeRouteStop,
+  toNumberOrNull,
+  toTrimmedOrNull,
+} = require("../utils/routeStopDirection");
 
 const validateSlabs = (slabs) => {
   const normalized = slabs
@@ -74,24 +82,194 @@ const toIsoDay = (value) => {
 const toPct = (num, den) => (den ? Number(((num / den) * 100).toFixed(1)) : 0);
 
 const normalizeLocation = (value) => String(value || "").trim().toLowerCase();
+const normalizeStopText = (value) =>
+  String(value || "")
+    .trim()
+    .replace(/\s+/g, " ")
+    .toLowerCase();
+
+const normalizeRouteStopInput = (stop = {}, idx = 0) => {
+  const upLatitude = toNumberOrNull(stop.upLatitude);
+  const upLongitude = toNumberOrNull(stop.upLongitude);
+  const downLatitude = toNumberOrNull(stop.downLatitude);
+  const downLongitude = toNumberOrNull(stop.downLongitude);
+  const preferredLatitude =
+    upLatitude != null ? upLatitude : downLatitude != null ? downLatitude : toNumberOrNull(stop.latitude);
+  const preferredLongitude =
+    upLongitude != null ? upLongitude : downLongitude != null ? downLongitude : toNumberOrNull(stop.longitude);
+  const upLandmarkImageUrl = toTrimmedOrNull(stop.upLandmarkImageUrl);
+  const downLandmarkImageUrl = toTrimmedOrNull(stop.downLandmarkImageUrl);
+  const preferredLandmarkImageUrl =
+    upLandmarkImageUrl || downLandmarkImageUrl || toTrimmedOrNull(stop.landmarkImageUrl);
+
+  return {
+    index: Number(stop.index ?? idx),
+    name: String(stop.name || "").trim(),
+    stopMasterId: stop.stopMasterId || null,
+    upBoardingPointId: stop.upBoardingPointId || null,
+    downBoardingPointId: stop.downBoardingPointId || null,
+    upTowards: toTrimmedOrNull(stop.upTowards),
+    downTowards: toTrimmedOrNull(stop.downTowards),
+    latitude: preferredLatitude,
+    longitude: preferredLongitude,
+    landmarkImageUrl: preferredLandmarkImageUrl,
+    upLatitude,
+    upLongitude,
+    upLandmarkImageUrl,
+    downLatitude,
+    downLongitude,
+    downLandmarkImageUrl,
+  };
+};
+
+const getOrCreateStopMaster = async (name) => {
+  const trimmedName = String(name || "").trim();
+  if (!trimmedName) return null;
+  const normalizedName = normalizeStopText(trimmedName);
+  return StopMaster.findOneAndUpdate(
+    { normalizedName },
+    {
+      $setOnInsert: {
+        name: trimmedName,
+        normalizedName,
+      },
+    },
+    { upsert: true, new: true, setDefaultsOnInsert: true }
+  );
+};
+
+const resolveBoardingPoint = async ({
+  stopMasterId,
+  boardingPointId,
+  towards,
+  latitude,
+  longitude,
+  landmarkImageUrl,
+}) => {
+  if (!stopMasterId) return null;
+
+  const normalizedStopMasterId = String(stopMasterId);
+  let point = null;
+
+  if (boardingPointId && mongoose.Types.ObjectId.isValid(boardingPointId)) {
+    point = await StopBoardingPoint.findById(boardingPointId);
+    if (point && String(point.stopMasterId) !== normalizedStopMasterId) {
+      point = null;
+    }
+  }
+
+  const trimmedTowards = toTrimmedOrNull(towards);
+  const normalizedTowards = normalizeStopText(trimmedTowards);
+
+  if (!point && trimmedTowards) {
+    point = await StopBoardingPoint.findOne({
+      stopMasterId,
+      normalizedTowards,
+    });
+  }
+
+  const nextLatitude = toNumberOrNull(latitude);
+  const nextLongitude = toNumberOrNull(longitude);
+  const nextImage = toTrimmedOrNull(landmarkImageUrl);
+
+  if (!point) {
+    if (!trimmedTowards) return null;
+    point = await StopBoardingPoint.create({
+      stopMasterId,
+      towards: trimmedTowards,
+      normalizedTowards,
+      latitude: nextLatitude,
+      longitude: nextLongitude,
+      landmarkImageUrl: nextImage,
+    });
+    return point;
+  }
+
+  let changed = false;
+  if (trimmedTowards && point.towards !== trimmedTowards) {
+    point.towards = trimmedTowards;
+    point.normalizedTowards = normalizedTowards;
+    changed = true;
+  }
+  if (nextLatitude != null && point.latitude !== nextLatitude) {
+    point.latitude = nextLatitude;
+    changed = true;
+  }
+  if (nextLongitude != null && point.longitude !== nextLongitude) {
+    point.longitude = nextLongitude;
+    changed = true;
+  }
+  if (nextImage && point.landmarkImageUrl !== nextImage) {
+    point.landmarkImageUrl = nextImage;
+    changed = true;
+  }
+  if (changed) await point.save();
+
+  return point;
+};
+
+const enrichStopsWithReusableBoardingPoints = async (sortedStops = []) => {
+  const result = [];
+  for (const stop of sortedStops) {
+    const stopMaster = await getOrCreateStopMaster(stop.name);
+    const upPoint = await resolveBoardingPoint({
+      stopMasterId: stopMaster?._id || null,
+      boardingPointId: stop.upBoardingPointId,
+      towards: stop.upTowards,
+      latitude: stop.upLatitude,
+      longitude: stop.upLongitude,
+      landmarkImageUrl: stop.upLandmarkImageUrl,
+    });
+    const downPoint = await resolveBoardingPoint({
+      stopMasterId: stopMaster?._id || null,
+      boardingPointId: stop.downBoardingPointId,
+      towards: stop.downTowards,
+      latitude: stop.downLatitude,
+      longitude: stop.downLongitude,
+      landmarkImageUrl: stop.downLandmarkImageUrl,
+    });
+
+    const upLatitude = toNumberOrNull(upPoint?.latitude) ?? stop.upLatitude ?? null;
+    const upLongitude = toNumberOrNull(upPoint?.longitude) ?? stop.upLongitude ?? null;
+    const downLatitude = toNumberOrNull(downPoint?.latitude) ?? stop.downLatitude ?? null;
+    const downLongitude = toNumberOrNull(downPoint?.longitude) ?? stop.downLongitude ?? null;
+    const upLandmarkImageUrl = toTrimmedOrNull(upPoint?.landmarkImageUrl) || stop.upLandmarkImageUrl || null;
+    const downLandmarkImageUrl = toTrimmedOrNull(downPoint?.landmarkImageUrl) || stop.downLandmarkImageUrl || null;
+
+    result.push({
+      ...stop,
+      stopMasterId: stopMaster?._id || null,
+      upBoardingPointId: upPoint?._id || null,
+      downBoardingPointId: downPoint?._id || null,
+      upTowards: upPoint?.towards || stop.upTowards || null,
+      downTowards: downPoint?.towards || stop.downTowards || null,
+      upLatitude,
+      upLongitude,
+      downLatitude,
+      downLongitude,
+      upLandmarkImageUrl,
+      downLandmarkImageUrl,
+      latitude:
+        upLatitude != null ? upLatitude : downLatitude != null ? downLatitude : stop.latitude ?? null,
+      longitude:
+        upLongitude != null ? upLongitude : downLongitude != null ? downLongitude : stop.longitude ?? null,
+      landmarkImageUrl: upLandmarkImageUrl || downLandmarkImageUrl || stop.landmarkImageUrl || null,
+    });
+  }
+  return result;
+};
 
 const upsertStopGeocodes = async (stops = []) => {
   const writes = stops
-    .filter(
-      (stop) =>
-        String(stop.name || "").trim() &&
-        stop.latitude != null &&
-        stop.longitude != null &&
-        !Number.isNaN(Number(stop.latitude)) &&
-        !Number.isNaN(Number(stop.longitude))
-    )
-    .map((stop) => ({
+    .map((stop) => ({ stop, preferred: getPreferredStopFields(stop) }))
+    .filter(({ stop, preferred }) => String(stop.name || "").trim() && preferred.latitude != null && preferred.longitude != null)
+    .map(({ stop, preferred }) => ({
       updateOne: {
         filter: { stopName: String(stop.name).trim() },
         update: {
           $set: {
-            latitude: Number(stop.latitude),
-            longitude: Number(stop.longitude),
+            latitude: Number(preferred.latitude),
+            longitude: Number(preferred.longitude),
           },
           $setOnInsert: {
             displayName: null,
@@ -164,17 +342,12 @@ exports.createRouteWithFare = asyncHandler(async (req, res) => {
   const existingRoute = await Route.findOne({ routeCode: routeNo, operatorType: finalOperatorType });
   if (existingRoute) throw new ApiError(409, "Route number already exists in this operator panel");
 
-  const sortedStops = stops
-    .map((stop, idx) => ({
-      index: Number(stop.index ?? idx),
-      name: stop.name,
-      latitude: stop.latitude != null && stop.latitude !== "" ? Number(stop.latitude) : null,
-      longitude: stop.longitude != null && stop.longitude !== "" ? Number(stop.longitude) : null,
-      landmarkImageUrl: stop.landmarkImageUrl ? String(stop.landmarkImageUrl).trim() : null,
-    }))
+  let sortedStops = stops
+    .map((stop, idx) => normalizeRouteStopInput(stop, idx))
     .sort((a, b) => a.index - b.index);
 
   if (sortedStops.some((stop) => !stop.name)) throw new ApiError(400, "Stop name required");
+  sortedStops = await enrichStopsWithReusableBoardingPoints(sortedStops);
 
   const normalizedSlabs = validateSlabs(fareSlabs);
 
@@ -204,9 +377,20 @@ exports.createRouteWithFare = asyncHandler(async (req, res) => {
       routeId: route._id,
       index: stop.index,
       name: stop.name,
+      stopMasterId: stop.stopMasterId ?? null,
+      upBoardingPointId: stop.upBoardingPointId ?? null,
+      downBoardingPointId: stop.downBoardingPointId ?? null,
+      upTowards: stop.upTowards ?? null,
+      downTowards: stop.downTowards ?? null,
       latitude: stop.latitude ?? null,
       longitude: stop.longitude ?? null,
       landmarkImageUrl: stop.landmarkImageUrl ?? null,
+      upLatitude: stop.upLatitude ?? null,
+      upLongitude: stop.upLongitude ?? null,
+      upLandmarkImageUrl: stop.upLandmarkImageUrl ?? null,
+      downLatitude: stop.downLatitude ?? null,
+      downLongitude: stop.downLongitude ?? null,
+      downLandmarkImageUrl: stop.downLandmarkImageUrl ?? null,
     }))
   );
 
@@ -229,11 +413,15 @@ exports.getRouteFare = asyncHandler(async (req, res) => {
   if (!route) throw new ApiError(404, "Route not found");
 
   const [stops, fareSlabs] = await Promise.all([
-    RouteStop.find({ routeId: route._id }).sort({ index: 1 }),
+    RouteStop.find({ routeId: route._id })
+      .sort({ index: 1 })
+      .populate("stopMasterId", "name")
+      .populate("upBoardingPointId", "towards latitude longitude landmarkImageUrl")
+      .populate("downBoardingPointId", "towards latitude longitude landmarkImageUrl"),
     FareSlab.find({ routeId: route._id }).sort({ fromKm: 1 }),
   ]);
 
-  res.json({ ok: true, route, stops, fareSlabs });
+  res.json({ ok: true, route, stops: stops.map((stop) => serializeRouteStop(stop.toObject ? stop.toObject() : stop)), fareSlabs });
 });
 
 exports.listRoutes = asyncHandler(async (req, res) => {
@@ -290,17 +478,12 @@ exports.updateRouteWithFare = asyncHandler(async (req, res) => {
   });
   if (conflict) throw new ApiError(409, "Route number already exists in this operator panel");
 
-  const sortedStops = stops
-    .map((stop, idx) => ({
-      index: Number(stop.index ?? idx),
-      name: stop.name,
-      latitude: stop.latitude != null && stop.latitude !== "" ? Number(stop.latitude) : null,
-      longitude: stop.longitude != null && stop.longitude !== "" ? Number(stop.longitude) : null,
-      landmarkImageUrl: stop.landmarkImageUrl ? String(stop.landmarkImageUrl).trim() : null,
-    }))
+  let sortedStops = stops
+    .map((stop, idx) => normalizeRouteStopInput(stop, idx))
     .sort((a, b) => a.index - b.index);
 
   if (sortedStops.some((stop) => !stop.name)) throw new ApiError(400, "Stop name required");
+  sortedStops = await enrichStopsWithReusableBoardingPoints(sortedStops);
 
   const normalizedSlabs = validateSlabs(fareSlabs);
 
@@ -334,9 +517,20 @@ exports.updateRouteWithFare = asyncHandler(async (req, res) => {
       routeId: route._id,
       index: stop.index,
       name: stop.name,
+      stopMasterId: stop.stopMasterId ?? null,
+      upBoardingPointId: stop.upBoardingPointId ?? null,
+      downBoardingPointId: stop.downBoardingPointId ?? null,
+      upTowards: stop.upTowards ?? null,
+      downTowards: stop.downTowards ?? null,
       latitude: stop.latitude ?? null,
       longitude: stop.longitude ?? null,
       landmarkImageUrl: stop.landmarkImageUrl ?? null,
+      upLatitude: stop.upLatitude ?? null,
+      upLongitude: stop.upLongitude ?? null,
+      upLandmarkImageUrl: stop.upLandmarkImageUrl ?? null,
+      downLatitude: stop.downLatitude ?? null,
+      downLongitude: stop.downLongitude ?? null,
+      downLandmarkImageUrl: stop.downLandmarkImageUrl ?? null,
     }))
   );
 
@@ -941,7 +1135,7 @@ exports.searchStops = asyncHandler(async (req, res) => {
   const routeQuery = {};
   if (excludeRouteId) routeQuery._id = { $ne: excludeRouteId };
 
-  const [matchingRoutes, cachedStops] = await Promise.all([
+  const [matchingRoutes, cachedStops, stopMasters] = await Promise.all([
     Route.find(routeQuery).select("_id routeCode routeName").lean(),
     StopGeocode.find({
       stopName: { $regex: q, $options: "i" },
@@ -961,6 +1155,13 @@ exports.searchStops = asyncHandler(async (req, res) => {
           source: "STOP_GEOCODE",
         }))
       ),
+    StopMaster.find({
+      name: { $regex: q, $options: "i" },
+    })
+      .select("_id name")
+      .sort({ name: 1 })
+      .limit(75)
+      .lean(),
   ]);
 
   const cachedStopByName = new Map(
@@ -978,18 +1179,24 @@ exports.searchStops = asyncHandler(async (req, res) => {
   }
 
   const routeStops = await RouteStop.find(routeStopQuery)
-    .select("routeId name latitude longitude")
-    .sort({ name: 1, latitude: -1, longitude: -1 })
+    .select("routeId name stopMasterId latitude longitude upLatitude upLongitude downLatitude downLongitude")
+    .sort({ name: 1, upLatitude: -1, downLatitude: -1, latitude: -1 })
     .limit(75)
     .lean()
     .then((rows) =>
       rows.map((row) => {
         const route = routeMetaById.get(String(row.routeId));
         const cached = cachedStopByName.get(String(row.name || "").trim().toLowerCase());
+        const preferred = getPreferredStopFields(row);
         return {
           name: row.name,
-          latitude: row.latitude ?? cached?.latitude ?? null,
-          longitude: row.longitude ?? cached?.longitude ?? null,
+          latitude: preferred.latitude ?? cached?.latitude ?? null,
+          longitude: preferred.longitude ?? cached?.longitude ?? null,
+          upLatitude: toNumberOrNull(row.upLatitude),
+          upLongitude: toNumberOrNull(row.upLongitude),
+          downLatitude: toNumberOrNull(row.downLatitude),
+          downLongitude: toNumberOrNull(row.downLongitude),
+          stopMasterId: row.stopMasterId ?? null,
           routeId: row.routeId ?? null,
           routeCode: route?.routeCode ?? null,
           routeName: route?.routeName ?? null,
@@ -998,7 +1205,22 @@ exports.searchStops = asyncHandler(async (req, res) => {
       })
     );
 
-  const stops = [...routeStops, ...cachedStops];
+  const masterStops = stopMasters.map((row) => ({
+    name: row.name,
+    latitude: null,
+    longitude: null,
+    upLatitude: null,
+    upLongitude: null,
+    downLatitude: null,
+    downLongitude: null,
+    stopMasterId: row._id,
+    routeId: null,
+    routeCode: null,
+    routeName: null,
+    source: "STOP_MASTER",
+  }));
+
+  const stops = [...routeStops, ...masterStops, ...cachedStops];
 
   // Deduplicate by name — prefer entries that have coordinates
   const map = new Map();
@@ -1033,9 +1255,44 @@ exports.searchStops = asyncHandler(async (req, res) => {
         name: s.name,
         latitude: s.latitude ?? null,
         longitude: s.longitude ?? null,
+        upLatitude: s.upLatitude ?? null,
+        upLongitude: s.upLongitude ?? null,
+        downLatitude: s.downLatitude ?? null,
+        downLongitude: s.downLongitude ?? null,
+        stopMasterId: s.stopMasterId ?? null,
         routeId: s.routeId ?? null,
         routeCode: s.routeCode ?? null,
         routeName: s.routeName ?? null,
       })),
+  });
+});
+
+exports.listStopBoardingPoints = asyncHandler(async (req, res) => {
+  const stopId = String(req.params.stopId || "").trim();
+  if (!mongoose.Types.ObjectId.isValid(stopId)) {
+    throw new ApiError(400, "Valid stopId required");
+  }
+
+  const stopMaster = await StopMaster.findById(stopId).select("name");
+  if (!stopMaster) throw new ApiError(404, "Stop not found");
+
+  const boardingPoints = await StopBoardingPoint.find({ stopMasterId: stopId })
+    .select("towards latitude longitude landmarkImageUrl")
+    .sort({ towards: 1 })
+    .lean();
+
+  res.json({
+    ok: true,
+    stop: {
+      id: stopMaster._id,
+      name: stopMaster.name,
+    },
+    boardingPoints: boardingPoints.map((point) => ({
+      id: point._id,
+      towards: point.towards,
+      latitude: point.latitude ?? null,
+      longitude: point.longitude ?? null,
+      landmarkImageUrl: point.landmarkImageUrl ?? null,
+    })),
   });
 });

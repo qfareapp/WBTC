@@ -263,6 +263,59 @@ const getTripNearestRouteStop = (trip: LiveTrip, stops: RouteStop[]) => {
   };
 };
 
+const getTripProgressState = (
+  trip: LiveTrip,
+  routeStops: RouteStop[],
+  selectedStopName: string,
+  direction: 'UP' | 'DOWN'
+) => {
+  const selectedNorm = normalizeStopName(selectedStopName);
+  if (!selectedNorm || !routeStops.length) {
+    return {
+      selectedStop: null,
+      crossedSelectedStop: false,
+      crossedBeyondAllowance: false,
+      currentStop: null as RouteStop | null,
+    };
+  }
+
+  const selectedStop =
+    routeStops.find(stop => normalizeStopName(stop.name) === selectedNorm) ?? null;
+  if (!selectedStop) {
+    return {
+      selectedStop: null,
+      crossedSelectedStop: false,
+      crossedBeyondAllowance: false,
+      currentStop: null as RouteStop | null,
+    };
+  }
+
+  const orderedStops = direction === 'UP' ? [...routeStops] : [...routeStops].reverse();
+  const selectedOrderedIndex = orderedStops.findIndex(
+    stop => normalizeStopName(stop.name) === selectedNorm
+  );
+  const currentNearest = getTripNearestRouteStop(trip, routeStops)?.routeStop ?? null;
+  const currentOrderedIndex = currentNearest
+    ? orderedStops.findIndex(
+        stop => normalizeStopName(stop.name) === normalizeStopName(currentNearest.name)
+      )
+    : -1;
+  const passedSet = new Set(trip.passedStops.map(stop => normalizeStopName(stop)));
+  const crossedSelectedStop = passedSet.has(selectedNorm);
+  const crossedBeyondAllowance =
+    crossedSelectedStop &&
+    currentOrderedIndex >= 0 &&
+    selectedOrderedIndex >= 0 &&
+    currentOrderedIndex > selectedOrderedIndex + 2;
+
+  return {
+    selectedStop,
+    crossedSelectedStop,
+    crossedBeyondAllowance,
+    currentStop: currentNearest,
+  };
+};
+
 const getWaitingDisclaimerStorageKey = (userId: string) =>
   `${WAITING_DISCLAIMER_ACK_KEY}:${userId}`;
 
@@ -461,8 +514,14 @@ const HomeScreen: React.FC<Props> = ({ navigation }) => {
         return false;
       }
 
-      const passedSelectedStop = trip.passedStops.some(stop => normalizeStopName(stop) === fromNorm);
-      const nearestStop = getTripNearestRouteStop(trip, liveRoute.stops);
+      const progress = getTripProgressState(trip, liveRoute.stops, from, wantedDirection);
+      const passedSelectedStop = progress.crossedSelectedStop;
+      const nearestStop = progress.currentStop
+        ? {
+            routeStop: progress.currentStop,
+            status: getTripNearestRouteStop(trip, liveRoute.stops)?.status ?? 'near',
+          }
+        : null;
       const approachingSelectedStop = normalizeStopName(trip.approachingStop ?? '') === fromNorm;
 
       if (nearestStop) {
@@ -474,7 +533,7 @@ const HomeScreen: React.FC<Props> = ({ navigation }) => {
         }
 
         if (passedSelectedStop) {
-          return false;
+          return progress.crossedBeyondAllowance !== true;
         }
 
         if (wantedDirection === 'UP') {
@@ -485,7 +544,7 @@ const HomeScreen: React.FC<Props> = ({ navigation }) => {
       }
 
       if (passedSelectedStop) {
-        return false;
+        return progress.crossedBeyondAllowance !== true;
       }
 
       return true;
@@ -1453,7 +1512,7 @@ const HomeScreen: React.FC<Props> = ({ navigation }) => {
               <Ionicons name="swap-horizontal-outline" size={28} color={palette.textFaint} />
               <Text style={styles.emptyTitle}>No buses in this direction</Text>
               <Text style={styles.emptyText}>
-                No active buses heading {from.trim()} -> {to.trim()} right now.
+                No active buses heading {from.trim()} {'->'} {to.trim()} right now.
               </Text>
             </View>
           )}
@@ -1463,8 +1522,13 @@ const HomeScreen: React.FC<Props> = ({ navigation }) => {
             const load = tripLoads[tripId] ?? null;
             const hasLocation = typeof trip.lastLatitude === 'number' && typeof trip.lastLongitude === 'number';
             const stops = liveRoute?.stops ?? [];
-            const currentStop = hasLocation
-              ? resolveCurrentStop(trip.lastLatitude as number, trip.lastLongitude as number, stops, trip.direction)
+            const nearestStopInfo = hasLocation ? getTripNearestRouteStop(trip, stops) : null;
+            const currentStop = nearestStopInfo
+              ? {
+                  name: nearestStopInfo.routeStop.name,
+                  distanceKm: resolveCurrentStop(trip.lastLatitude as number, trip.lastLongitude as number, stops, trip.direction)?.distanceKm ?? 0,
+                  status: nearestStopInfo.status,
+                }
               : null;
             const dirLabel = trip.direction === 'UP'
               ? `${liveRoute?.source ?? ''}  ->  ${liveRoute?.destination ?? ''}`
@@ -1476,10 +1540,13 @@ const HomeScreen: React.FC<Props> = ({ navigation }) => {
             const selectedRouteStop = liveRoute?.stops?.find(
               stop => normalizeStopName(stop.name) === normalizeStopName(selectedStop)
             ) ?? null;
+            const progress = getTripProgressState(trip, stops, selectedStop, trip.direction);
+            const crossedBoardingStop = progress.crossedSelectedStop;
             const stopLandmarkImageUrl = selectedRouteStop?.landmarkImageUrl?.trim() || '';
             const alreadyNotifiedSelectedStop =
               Boolean(waitingStatus?.stopName) &&
               String(waitingStatus?.stopName).trim().toLowerCase() === selectedStop.toLowerCase();
+            const waitingActionDisabled = waitingBusy || crossedBoardingStop;
             const toggleExpanded = () => {
               if (!isExpanded && token && waitingStatusByTrip[tripId] === undefined) {
                 void fetchWaitingStatusForTrip(tripId);
@@ -1649,6 +1716,15 @@ lb.style.left=W/2+'px';lb.style.top=H/2+'px';map.appendChild(lb);
                       </View>
                     )}
 
+                    {crossedBoardingStop && (
+                      <View style={styles.approachingBanner}>
+                        <Ionicons name="alert-circle-outline" size={14} color={palette.gold} />
+                        <Text style={styles.approachingText}>
+                          Bus has crossed your boarding stop
+                        </Text>
+                      </View>
+                    )}
+
                     {/* Full ETA banner */}
                     {from.trim() && hasLocation && (
                       <View style={eta ? styles.etaBanner : styles.etaBannerPending}>
@@ -1690,7 +1766,9 @@ lb.style.left=W/2+'px';lb.style.top=H/2+'px';map.appendChild(lb);
                           <View style={styles.waitingCopy}>
                             <Text style={styles.waitingTitle}>Waiting at {selectedStop}</Text>
                             <Text style={styles.waitingText}>
-                              {alreadyNotifiedSelectedStop
+                              {crossedBoardingStop
+                                ? `Currently near ${currentStop?.name || 'the next stop'}`
+                                : alreadyNotifiedSelectedStop
                                 ? 'Driver and conductor have your stop.'
                                 : waitingStatus?.stopName
                                   ? `Current alert: ${waitingStatus.stopName}`
@@ -1700,19 +1778,23 @@ lb.style.left=W/2+'px';lb.style.top=H/2+'px';map.appendChild(lb);
                           <TouchableOpacity
                             style={[
                               styles.waitingButton,
+                              crossedBoardingStop && styles.waitingButtonDisabled,
                               alreadyNotifiedSelectedStop && styles.waitingButtonActive,
-                              waitingBusy && styles.waitingButtonDisabled,
+                              waitingActionDisabled && styles.waitingButtonDisabled,
                             ]}
                             onPress={() => { void handleWaitingAction(tripId, selectedStop); }}
-                            disabled={waitingBusy}
+                            disabled={waitingActionDisabled}
                           >
                             <Text
                               style={[
                                 styles.waitingButtonText,
+                                crossedBoardingStop && styles.waitingButtonTextDisabled,
                                 alreadyNotifiedSelectedStop && styles.waitingButtonTextActive,
                               ]}
                             >
-                              {waitingBusy
+                              {crossedBoardingStop
+                                ? 'Stop crossed'
+                                : waitingBusy
                                 ? 'Sending...'
                                 : alreadyNotifiedSelectedStop
                                   ? 'Notified'
@@ -2261,6 +2343,7 @@ const styles = StyleSheet.create({
   },
   waitingButtonDisabled: { opacity: 0.7 },
   waitingButtonText: { color: palette.blue, fontSize: 12, fontWeight: '800' },
+  waitingButtonTextDisabled: { color: palette.textFaint },
   waitingButtonTextActive: { color: '#fff' },
   stopLandmarkFullImage: {
     width: '100%',

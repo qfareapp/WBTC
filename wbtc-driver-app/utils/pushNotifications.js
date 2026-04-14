@@ -9,6 +9,9 @@ const USER_ROLE_KEY = "wbtc_user_role";
 const PUSH_TOKEN_KEY = "wbtc_expo_push_token";
 const PUSH_REGISTRATION_ERROR_KEY = "wbtc_push_registration_error";
 const OFFER_CHANNEL_ID = "trip-offers";
+const TRIP_CLOSE_REMINDER_CHANNEL_ID = "trip-close-reminders";
+const TRIP_CLOSE_REMINDER_ID_KEY = "wbtc_trip_close_reminder_notification_id";
+const TRIP_CLOSE_REMINDER_TRIP_KEY = "wbtc_trip_close_reminder_trip_id";
 
 Notifications.setNotificationHandler({
   handleNotification: async () => ({
@@ -32,14 +35,24 @@ const getProjectId = () =>
 const ensureAndroidOfferChannel = async () => {
   if (Platform.OS !== "android") return;
   if (!channelReadyPromise) {
-    channelReadyPromise = Notifications.setNotificationChannelAsync(OFFER_CHANNEL_ID, {
-      name: "Trip offers",
-      importance: Notifications.AndroidImportance.MAX,
-      vibrationPattern: [0, 250, 120, 250],
-      lightColor: "#00C87A",
-      sound: "qfare_bus_jingle.wav",
-      lockscreenVisibility: Notifications.AndroidNotificationVisibility.PUBLIC,
-    }).catch(() => {});
+    channelReadyPromise = Promise.all([
+      Notifications.setNotificationChannelAsync(OFFER_CHANNEL_ID, {
+        name: "Trip offers",
+        importance: Notifications.AndroidImportance.MAX,
+        vibrationPattern: [0, 250, 120, 250],
+        lightColor: "#00C87A",
+        sound: "qfare_bus_jingle.wav",
+        lockscreenVisibility: Notifications.AndroidNotificationVisibility.PUBLIC,
+      }),
+      Notifications.setNotificationChannelAsync(TRIP_CLOSE_REMINDER_CHANNEL_ID, {
+        name: "Trip close reminders",
+        importance: Notifications.AndroidImportance.MAX,
+        vibrationPattern: [0, 350, 150, 350],
+        lightColor: "#FF8A00",
+        sound: "qfare_bus_jingle.wav",
+        lockscreenVisibility: Notifications.AndroidNotificationVisibility.PUBLIC,
+      }),
+    ]).catch(() => {});
   }
   await channelReadyPromise;
 };
@@ -155,3 +168,66 @@ export const unregisterStoredDriverPushToken = async (overrides = {}) => {
 
 export const getOfferNotificationChannelId = () => OFFER_CHANNEL_ID;
 export const getStoredPushRegistrationError = async () => AsyncStorage.getItem(PUSH_REGISTRATION_ERROR_KEY);
+export const getTripCloseReminderChannelId = () => TRIP_CLOSE_REMINDER_CHANNEL_ID;
+
+export const cancelTripCloseReminderNotifications = async (tripInstanceId = null) => {
+  const [storedNotificationId, storedTripId] = await Promise.all([
+    AsyncStorage.getItem(TRIP_CLOSE_REMINDER_ID_KEY),
+    AsyncStorage.getItem(TRIP_CLOSE_REMINDER_TRIP_KEY),
+  ]);
+
+  if (tripInstanceId && storedTripId && String(storedTripId) !== String(tripInstanceId)) {
+    return;
+  }
+
+  if (storedNotificationId) {
+    await Notifications.cancelScheduledNotificationAsync(storedNotificationId).catch(() => {});
+  }
+
+  await Promise.all([
+    AsyncStorage.removeItem(TRIP_CLOSE_REMINDER_ID_KEY),
+    AsyncStorage.removeItem(TRIP_CLOSE_REMINDER_TRIP_KEY),
+  ]);
+};
+
+export const scheduleTripCloseReminderNotifications = async ({ tripInstanceId }) => {
+  if (Platform.OS === "web" || !tripInstanceId) return null;
+
+  await ensureAndroidOfferChannel();
+
+  const existingTripId = await AsyncStorage.getItem(TRIP_CLOSE_REMINDER_TRIP_KEY);
+  const existingNotificationId = await AsyncStorage.getItem(TRIP_CLOSE_REMINDER_ID_KEY);
+  if (
+    existingTripId &&
+    existingNotificationId &&
+    String(existingTripId) === String(tripInstanceId)
+  ) {
+    return existingNotificationId;
+  }
+
+  await cancelTripCloseReminderNotifications();
+
+  const notificationId = await Notifications.scheduleNotificationAsync({
+    content: {
+      title: "Trip not closed",
+      body: "You have reached the final stop. Please enter closing KM and end the trip.",
+      sound: "qfare_bus_jingle.wav",
+      data: {
+        tripInstanceId: String(tripInstanceId),
+        action: "open_end_trip",
+      },
+    },
+    trigger: {
+      seconds: 300,
+      repeats: true,
+      channelId: TRIP_CLOSE_REMINDER_CHANNEL_ID,
+    },
+  });
+
+  await Promise.all([
+    AsyncStorage.setItem(TRIP_CLOSE_REMINDER_ID_KEY, notificationId),
+    AsyncStorage.setItem(TRIP_CLOSE_REMINDER_TRIP_KEY, String(tripInstanceId)),
+  ]);
+
+  return notificationId;
+};

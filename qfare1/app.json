@@ -28,7 +28,11 @@
         "ACCESS_COARSE_LOCATION",
         "RECEIVE_BOOT_COMPLETED",
         "VIBRATE",
-        "POST_NOTIFICATIONS"
+        "POST_NOTIFICATIONS",
+        "android.permission.CAMERA",
+        "android.permission.RECORD_AUDIO",
+        "android.permission.ACCESS_COARSE_LOCATION",
+        "android.permission.ACCESS_FINE_LOCATION"
       ]
     },
     "web": {
@@ -37,17 +41,23 @@
     "plugins": [
       "expo-font",
       "expo-camera",
-      ["expo-location", {
-        "locationWhenInUsePermission": "qfare uses your location to confirm you are at a bus stop before sending a wait notification."
-      }],
-      ["expo-notifications", {
-        "icon": "./assets/icon.png",
-        "color": "#00c896"
-      }]
+      [
+        "expo-location",
+        {
+          "locationWhenInUsePermission": "qfare uses your location to confirm you are at a bus stop before sending a wait notification."
+        }
+      ],
+      [
+        "expo-notifications",
+        {
+          "icon": "./assets/icon.png",
+          "color": "#00c896"
+        }
+      ]
     ],
     "extra": {
       "eas": {
-        "projectId": "5030a49b-3842-4784-8b83-855e271e9521"
+        "projectId": "5f8f05b1-2527-459c-8ab8-a9045bebc396"
       }
     }
   }

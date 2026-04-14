@@ -12,7 +12,19 @@ export default function PushNotificationBridge() {
 
     syncDriverPushTokenRegistration().catch(() => {});
 
-    const responseSubscription = Notifications.addNotificationResponseReceivedListener(() => {
+    const responseSubscription = Notifications.addNotificationResponseReceivedListener((response) => {
+      const data = response?.notification?.request?.content?.data || {};
+      const tripInstanceId =
+        typeof data.tripInstanceId === "string" ? data.tripInstanceId : null;
+
+      if (data.action === "open_end_trip" && tripInstanceId) {
+        router.replace({
+          pathname: "/trip",
+          params: { tripInstanceId, openEndTrip: "1" },
+        });
+        return;
+      }
+
       router.replace("/(tabs)/active");
     });
 

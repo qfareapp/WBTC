@@ -23,6 +23,8 @@ const API_BASE_KEY = "wbtc_api_base";
 const PRINTER_KEY = "wbtc_conductor_printer";
 const MUST_CHANGE_PASSWORD_KEY = "wbtc_must_change_password";
 const PRIVACY_POLICY_URL = "https://wbtc-rose.vercel.app/privacy-policy";
+const FAQS_URL = "https://wbtc-rose.vercel.app/faqs";
+const HELP_WHATSAPP_NUMBER = "919831003953";
 
 let bluetoothClassicCache = null;
 let bluetoothManagerChecked = false;
@@ -92,6 +94,9 @@ const SignalBars = ({ strength }) => {
     </View>
   );
 };
+
+const buildWhatsAppUrl = (message) =>
+  `https://wa.me/${HELP_WHATSAPP_NUMBER}?text=${encodeURIComponent(message)}`;
 
 const InfoRow = ({ icon, label, value, mono = false, muted = false, accent }) => (
   <View style={styles.infoRow}>
@@ -219,6 +224,11 @@ export default function ConductorProfile() {
   const handleLogout = async () => {
     await AsyncStorage.multiRemove([TOKEN_KEY, USER_ROLE_KEY, CONDUCTOR_KEY, API_BASE_KEY, PRINTER_KEY, MUST_CHANGE_PASSWORD_KEY]);
     router.replace("/login");
+  };
+
+  const handleHelp = () => {
+    const message = `Hello Admin, I need help.\nRole: Conductor\nName: ${conductor?.name || "--"}\nEmp ID: ${conductor?.empId || "--"}`;
+    Linking.openURL(buildWhatsAppUrl(message)).catch(() => setNotice("Unable to open WhatsApp."));
   };
 
   const initials = (conductor?.name || "C").trim().charAt(0).toUpperCase();
@@ -367,6 +377,16 @@ export default function ConductorProfile() {
         <TouchableOpacity style={styles.privacyButton} onPress={() => Linking.openURL(PRIVACY_POLICY_URL).catch(() => setNotice("Unable to open privacy policy."))}>
           <Ionicons name="document-text-outline" size={16} color="#9CCBFF" />
           <Text style={styles.privacyButtonText}>Privacy Policy</Text>
+        </TouchableOpacity>
+
+        <TouchableOpacity style={styles.privacyButton} onPress={() => Linking.openURL(FAQS_URL).catch(() => setNotice("Unable to open FAQs."))}>
+          <Ionicons name="help-circle-outline" size={16} color="#9CCBFF" />
+          <Text style={styles.privacyButtonText}>FAQs</Text>
+        </TouchableOpacity>
+
+        <TouchableOpacity style={styles.privacyButton} onPress={handleHelp}>
+          <Ionicons name="logo-whatsapp" size={16} color="#9CCBFF" />
+          <Text style={styles.privacyButtonText}>Help</Text>
         </TouchableOpacity>
 
         <TouchableOpacity style={styles.logout} onPress={handleLogout}>

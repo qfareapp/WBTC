@@ -17,6 +17,11 @@ const {
   getTripWaitingSnapshot,
   normalizeStopName,
 } = require("../utils/passengerWaiting");
+const {
+  getStopFieldsForDirection,
+  hasCoords,
+  serializeRouteStop,
+} = require("../utils/routeStopDirection");
 
 const normalizeBusNumber = (value) => String(value || "").trim();
 
@@ -118,8 +123,9 @@ exports.getBusRouteByQr = asyncHandler(async (req, res) => {
       routeName: route.routeName,
       source: route.source,
       destination: route.destination,
+      direction: liveTrip.direction || null,
     },
-    stops,
+    stops: stops.map((stop) => serializeRouteStop(stop.toObject ? stop.toObject() : stop, liveTrip.direction || null)),
     fareSlabs,
   });
 });
@@ -174,7 +180,7 @@ exports.getRouteLiveStatus = asyncHandler(async (req, res) => {
       .sort({ startTime: 1 }),
     RouteStop.find({ routeId: route._id })
       .sort({ index: 1 })
-      .select("index name latitude longitude landmarkImageUrl"),
+      .select("index name latitude longitude landmarkImageUrl upLatitude upLongitude upLandmarkImageUrl downLatitude downLongitude downLandmarkImageUrl"),
   ]);
 
   const payload = trips.map((trip) => {
@@ -208,13 +214,7 @@ exports.getRouteLiveStatus = asyncHandler(async (req, res) => {
       destination: route.destination,
       standardTripTimeMin: route.standardTripTimeMin || 0,
     },
-    stops: stops.map((s) => ({
-      index: s.index,
-      name: s.name,
-      latitude: s.latitude ?? null,
-      longitude: s.longitude ?? null,
-      landmarkImageUrl: s.landmarkImageUrl ?? null,
-    })),
+    stops: stops.map((s) => serializeRouteStop(s.toObject ? s.toObject() : s)),
     trips: payload,
   });
 });
@@ -264,7 +264,7 @@ exports.getTripEta = asyncHandler(async (req, res) => {
   if (!userStop) throw new ApiError(400, "userStop query param required");
 
   const trip = await TripInstance.findById(tripId).select(
-    "lastLatitude lastLongitude lastLocationAt lastLocationName driverLastLatitude driverLastLongitude driverLastLocationAt status"
+    "routeId direction lastLatitude lastLongitude lastLocationAt lastLocationName driverLastLatitude driverLastLongitude driverLastLocationAt status"
   );
   if (!trip) throw new ApiError(404, "Trip not found");
 
@@ -284,13 +284,19 @@ exports.getTripEta = asyncHandler(async (req, res) => {
   //   3. Live Nominatim forward geocode (slowest, last resort)
   let stopCoords = null;
   const routeStop = await RouteStop.findOne({
+    routeId: trip.routeId,
     name: { $regex: new RegExp(`^${userStop.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`, "i") },
-    latitude: { $ne: null },
-    longitude: { $ne: null },
-  }).select("latitude longitude");
+  }).select("latitude longitude upLatitude upLongitude downLatitude downLongitude");
   if (routeStop) {
-    stopCoords = { lat: routeStop.latitude, lng: routeStop.longitude };
+    const directionalCoords = getStopFieldsForDirection(routeStop.toObject ? routeStop.toObject() : routeStop, trip.direction || "UP");
+    if (hasCoords(directionalCoords)) {
+      stopCoords = { lat: directionalCoords.latitude, lng: directionalCoords.longitude };
+    }
   } else {
+    stopCoords = await getOrCacheStopCoords(userStop);
+  }
+
+  if (!stopCoords) {
     stopCoords = await getOrCacheStopCoords(userStop);
   }
 
@@ -531,10 +537,20 @@ exports.getTripLoad = asyncHandler(async (req, res) => {
 
   // Load all stops for this route (need both geocoded + non-geocoded for name→index map)
   const [geocodedStops, allStops] = await Promise.all([
-    RouteStop.find({ routeId: trip.routeId, latitude: { $ne: null }, longitude: { $ne: null } })
+    RouteStop.find({ routeId: trip.routeId })
       .sort({ index: 1 })
-      .select("index name latitude longitude")
-      .lean(),
+      .select("index name latitude longitude upLatitude upLongitude downLatitude downLongitude")
+      .lean()
+      .then((rows) =>
+        rows
+          .map((stop) => {
+            const directional = getStopFieldsForDirection(stop, trip.direction);
+            return hasCoords(directional)
+              ? { index: stop.index, name: stop.name, latitude: directional.latitude, longitude: directional.longitude }
+              : null;
+          })
+          .filter(Boolean)
+      ),
     RouteStop.find({ routeId: trip.routeId })
       .sort({ index: 1 })
       .select("index name")

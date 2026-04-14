@@ -15,6 +15,8 @@ const CONDUCTOR_KEY = "wbtc_conductor_profile";
 const USER_ROLE_KEY = "wbtc_user_role";
 const MUST_CHANGE_PASSWORD_KEY = "wbtc_must_change_password";
 const PRIVACY_POLICY_URL = "https://wbtc-rose.vercel.app/privacy-policy";
+const FAQS_URL = "https://wbtc-rose.vercel.app/faqs";
+const HELP_WHATSAPP_NUMBER = "919831003953";
 const today = () => getOpsDate();
 const monthStart = () => {
   const now = new Date();
@@ -45,6 +47,9 @@ const toDateString = (date) => {
   const day = String(date.getDate()).padStart(2, "0");
   return `${year}-${month}-${day}`;
 };
+
+const buildWhatsAppUrl = (message) =>
+  `https://wa.me/${HELP_WHATSAPP_NUMBER}?text=${encodeURIComponent(message)}`;
 
 const formatDepot = (depot) => {
   if (!depot) return "--";
@@ -174,6 +179,11 @@ export default function DriverProfile() {
     await unregisterStoredDriverPushToken({ role: "DRIVER" });
     await AsyncStorage.multiRemove([TOKEN_KEY, USER_ROLE_KEY, DRIVER_KEY, CONDUCTOR_KEY, API_BASE_KEY, MUST_CHANGE_PASSWORD_KEY]);
     router.replace("/login");
+  };
+
+  const handleHelp = () => {
+    const message = `Hello Admin, I need help.\nRole: Driver\nName: ${driver?.name || "--"}\nEmp ID: ${driver?.empId || "--"}`;
+    Linking.openURL(buildWhatsAppUrl(message)).catch(() => setNotice("Unable to open WhatsApp."));
   };
 
   return (
@@ -383,6 +393,14 @@ export default function DriverProfile() {
 
         <TouchableOpacity style={styles.secondaryAction} onPress={() => Linking.openURL(PRIVACY_POLICY_URL).catch(() => setNotice("Unable to open privacy policy."))}>
           <Text style={styles.secondaryActionText}>Privacy Policy</Text>
+        </TouchableOpacity>
+
+        <TouchableOpacity style={styles.secondaryAction} onPress={() => Linking.openURL(FAQS_URL).catch(() => setNotice("Unable to open FAQs."))}>
+          <Text style={styles.secondaryActionText}>FAQs</Text>
+        </TouchableOpacity>
+
+        <TouchableOpacity style={styles.secondaryAction} onPress={handleHelp}>
+          <Text style={styles.secondaryActionText}>Help</Text>
         </TouchableOpacity>
 
         <TouchableOpacity style={styles.logout} onPress={handleLogout}>
