@@ -1,9 +1,14 @@
 const crypto = require("crypto");
+const path = require("path");
+const fs = require("fs");
 const nodemailer = require("nodemailer");
 const jwt = require("jsonwebtoken");
 const PassengerUser = require("../models/PassengerUser");
 const OtpRecord = require("../models/OtpRecord");
 const ApiError = require("../utils/ApiError");
+
+const QFARE_LOGO_PATH = path.resolve(__dirname, "../../../qfare1/assets/qfare-logo.png");
+const QFARE_LOGO_CID = "qfare-logo";
 
 function getTransport() {
   return nodemailer.createTransport({
@@ -34,6 +39,78 @@ const signPassengerToken = (passenger) =>
     process.env.JWT_SECRET,
     { expiresIn: process.env.JWT_EXPIRES_IN || "30d" }
   );
+
+function getOtpEmailText(otp) {
+  return `Your qfare OTP is: ${otp}\n\nThis code expires in 10 minutes. Do not share it with anyone.`;
+}
+
+function getOtpEmailHtml(otp, includeLogo) {
+  const logoBlock = includeLogo
+    ? `
+      <div style="margin-bottom: 28px;">
+        <img
+          src="cid:${QFARE_LOGO_CID}"
+          alt="qfare"
+          style="display:block;width:140px;max-width:100%;height:auto;border:0;"
+        />
+      </div>
+    `
+    : `
+      <div style="margin-bottom: 28px;font-size:32px;font-weight:800;letter-spacing:-0.03em;color:#1f2937;">
+        qfare
+      </div>
+    `;
+
+  return `
+    <!DOCTYPE html>
+    <html lang="en">
+      <head>
+        <meta charset="UTF-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+        <title>Your qfare login code</title>
+      </head>
+      <body style="margin:0;padding:0;background-color:#f8fafc;font-family:Arial,Helvetica,sans-serif;color:#111827;">
+        <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="background-color:#f8fafc;">
+          <tr>
+            <td align="center" style="padding:40px 20px;">
+              <table
+                role="presentation"
+                cellpadding="0"
+                cellspacing="0"
+                border="0"
+                width="100%"
+                style="max-width:760px;background-color:#ffffff;border-radius:20px;padding:42px 48px;"
+              >
+                <tr>
+                  <td>
+                    ${logoBlock}
+                    <div style="font-size:28px;line-height:1.25;font-weight:700;color:#1f2937;margin-bottom:22px;">
+                      Verify your session
+                    </div>
+                    <div style="font-size:18px;line-height:1.6;color:#374151;max-width:560px;margin-bottom:48px;">
+                      Your qfare OTP is: ${otp}<br /><br />
+                      This code expires in 10 minutes. Do not share it with anyone.
+                    </div>
+                    <div style="text-align:center;margin-bottom:12px;">
+                      <span
+                        style="display:inline-block;font-size:72px;line-height:1;font-weight:800;letter-spacing:0.12em;color:#111827;"
+                      >
+                        ${otp}
+                      </span>
+                    </div>
+                    <div style="text-align:center;font-size:16px;line-height:1.5;color:#6b7280;">
+                      This code expires in 10 minutes
+                    </div>
+                  </td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+        </table>
+      </body>
+    </html>
+  `;
+}
 
 exports.directLogin = async (req, res, next) => {
   try {
@@ -71,11 +148,22 @@ exports.sendOtp = async (req, res, next) => {
     await OtpRecord.create({ email, otp, expiresAt });
 
     const transport = getTransport();
+    const hasEmbeddedLogo = fs.existsSync(QFARE_LOGO_PATH);
     await transport.sendMail({
       from: process.env.SMTP_FROM || `"qfare" <${process.env.SMTP_USER}>`,
       to: email,
       subject: "Your qfare login code",
-      text: `Your qfare OTP is: ${otp}\n\nThis code expires in 10 minutes. Do not share it with anyone.`,
+      text: getOtpEmailText(otp),
+      html: getOtpEmailHtml(otp, hasEmbeddedLogo),
+      attachments: hasEmbeddedLogo
+        ? [
+            {
+              filename: "qfare-logo.png",
+              path: QFARE_LOGO_PATH,
+              cid: QFARE_LOGO_CID,
+            },
+          ]
+        : [],
     });
 
     res.json({ ok: true, message: "OTP sent to your email" });
