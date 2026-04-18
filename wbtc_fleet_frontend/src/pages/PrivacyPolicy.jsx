@@ -250,7 +250,7 @@ export default function PrivacyPolicy() {
         <section style={styles.hero}>
           <div style={styles.heroTop}>
             <h1 style={styles.title}>Privacy Policy for Qfare</h1>
-            <span style={styles.pill}>Effective Date: [Insert Date]</span>
+            <span style={styles.pill}>Effective Date: 18.04.2026</span>
           </div>
           <p style={styles.text}>
             Qfare ("we", "our", "us") provides digital tools for transport operations, including owner, driver, and
