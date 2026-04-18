@@ -161,9 +161,9 @@ const policySections = [
     paragraphs: [
       "If you have questions, requests, or concerns about this Privacy Policy or data handling practices, contact:",
       "Qfare",
-      "Email: [Insert Contact Email]",
-      "Address: [Insert Business Address]",
-      "Phone: [Insert Contact Number]",
+      "Email: qfare.india@gmail.com",
+      "Address: 9/J Raipur Road East, Kolkata, 700032 (WB)",
+      "Phone: +919800162412",
     ],
   },
 ];
