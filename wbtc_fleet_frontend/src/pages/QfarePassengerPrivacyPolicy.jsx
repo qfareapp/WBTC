@@ -142,6 +142,16 @@ const styles = {
     lineHeight: 1.75,
     fontSize: "0.98rem",
   },
+  footerLinkWrap: {
+    marginTop: "18px",
+    textAlign: "center",
+  },
+  footerLink: {
+    color: "#0f6c78",
+    fontSize: "0.88rem",
+    textDecoration: "none",
+    fontWeight: 700,
+  },
 };
 
 export default function QfarePassengerPrivacyPolicy() {
@@ -167,6 +177,12 @@ export default function QfarePassengerPrivacyPolicy() {
             {section.footer ? <p style={styles.paragraph}>{section.footer}</p> : null}
           </section>
         ))}
+
+        <div style={styles.footerLinkWrap}>
+          <a href="/qfare-delete-account" style={styles.footerLink}>
+            Request account deletion
+          </a>
+        </div>
       </div>
     </div>
   );

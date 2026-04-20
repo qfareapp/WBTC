@@ -241,6 +241,16 @@ const styles = {
     lineHeight: 1.7,
     fontSize: "0.98rem",
   },
+  footerLinkWrap: {
+    marginTop: "18px",
+    textAlign: "center",
+  },
+  footerLink: {
+    color: "#0f6c78",
+    fontSize: "0.88rem",
+    textDecoration: "none",
+    fontWeight: 700,
+  },
 };
 
 export default function PrivacyPolicy() {
@@ -298,6 +308,12 @@ export default function PrivacyPolicy() {
             tracking, route operations, and transport monitoring for assigned duty services.”
           </p>
         </section>
+
+        <div style={styles.footerLinkWrap}>
+          <a href="/qfare-delete-account" style={styles.footerLink}>
+            Need account deletion for the passenger app? Open the QFare account deletion page.
+          </a>
+        </div>
       </div>
     </div>
   );
