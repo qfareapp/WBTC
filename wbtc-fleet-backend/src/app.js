@@ -9,7 +9,15 @@ const app = express();
 
 app.use(cors());
 app.use(helmet());
-app.use(express.json());
+app.use(
+  express.json({
+    verify: (req, _res, buf) => {
+      if (req.originalUrl.includes("/api/public/payments/razorpay/webhook")) {
+        req.rawBody = buf.toString();
+      }
+    },
+  })
+);
 app.use(morgan("dev"));
 
 app.get("/", (req, res) => {

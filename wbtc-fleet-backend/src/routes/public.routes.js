@@ -11,6 +11,9 @@ const {
   notifyTripWaiting,
   getTripWaitingStatus,
   createDemoBooking,
+  createPassengerPaymentOrder,
+  verifyPassengerPaymentAndCreateBooking,
+  handleRazorpayWebhook,
   getBookingStatus,
   getBookingAnalytics
 } = require("../controllers/public.controller");
@@ -22,6 +25,9 @@ router.get("/trips/:tripId/eta", getTripEta);
 router.get("/trips/:tripId/load", getTripLoad);
 router.post("/trips/:tripId/waiting", passengerAuth, notifyTripWaiting);
 router.get("/trips/:tripId/waiting", passengerAuth, getTripWaitingStatus);
+router.post("/payments/razorpay/order", passengerAuth, createPassengerPaymentOrder);
+router.post("/payments/razorpay/verify", passengerAuth, verifyPassengerPaymentAndCreateBooking);
+router.post("/payments/razorpay/webhook", handleRazorpayWebhook);
 router.post("/bookings/demo", createDemoBooking);
 router.get("/bookings/:bookingId/status", getBookingStatus);
 router.get("/bookings/analytics", auth, requireRole("ADMIN", "DEPOT_MANAGER", "SCHEDULER", "VIEWER"), getBookingAnalytics);

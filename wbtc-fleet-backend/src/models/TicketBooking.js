@@ -16,6 +16,11 @@ const TicketBookingSchema = new mongoose.Schema(
     issuedById: { type: mongoose.Schema.Types.ObjectId, default: null, index: true },
     passengerCount: { type: Number, default: 1 },
     passengerPushToken: { type: String, default: null },
+    razorpayOrderId: { type: String, default: null, index: true },
+    razorpayPaymentId: { type: String, default: null, index: true },
+    razorpaySignature: { type: String, default: null },
+    paymentStatus: { type: String, enum: ["CREATED", "AUTHORIZED", "CAPTURED", "FAILED"], default: "CAPTURED", index: true },
+    paymentCapturedAt: { type: Date, default: null },
     bookedAt: { type: Date, default: Date.now, index: true },
   },
   { timestamps: true }

@@ -1,3 +1,5 @@
+const crypto = require("crypto");
+const Razorpay = require("razorpay");
 const Bus = require("../models/Bus");
 const TripInstance = require("../models/TripInstance");
 const Route = require("../models/Route");
@@ -24,6 +26,159 @@ const {
 } = require("../utils/routeStopDirection");
 
 const normalizeBusNumber = (value) => String(value || "").trim();
+const RAZORPAY_CURRENCY = "INR";
+
+const getRazorpayClient = () => {
+  const keyId = String(process.env.RAZORPAY_KEY_ID || "").trim();
+  const keySecret = String(process.env.RAZORPAY_KEY_SECRET || "").trim();
+  if (!keyId || !keySecret) {
+    throw new ApiError(500, "Razorpay is not configured on the server.");
+  }
+  return new Razorpay({
+    key_id: keyId,
+    key_secret: keySecret,
+  });
+};
+
+const getRazorpaySecret = () => {
+  const keySecret = String(process.env.RAZORPAY_KEY_SECRET || "").trim();
+  if (!keySecret) {
+    throw new ApiError(500, "Razorpay is not configured on the server.");
+  }
+  return keySecret;
+};
+
+const createRazorpaySignature = ({ orderId, paymentId, secret }) =>
+  crypto.createHmac("sha256", secret).update(`${orderId}|${paymentId}`).digest("hex");
+
+const createBookingId = () => `QF-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
+
+const resolvePassengerBookingContext = async ({
+  busNumber,
+  routeId,
+  source,
+  destination,
+  passengerCount,
+}) => {
+  const normalizedBusNumber = normalizeBusNumber(busNumber);
+  const normalizedSource = String(source || "").trim();
+  const normalizedDestination = String(destination || "").trim();
+  const count = Number(passengerCount) || 1;
+
+  if (!normalizedBusNumber) throw new ApiError(400, "busNumber required");
+  if (!routeId) throw new ApiError(400, "routeId required");
+  if (!normalizedSource || !normalizedDestination) {
+    throw new ApiError(400, "source and destination required");
+  }
+  if (normalizedSource === normalizedDestination) {
+    throw new ApiError(400, "Source and destination cannot be the same.");
+  }
+  if (count < 1 || count > 5) {
+    throw new ApiError(400, "Maximum 5 passengers allowed per ticket.");
+  }
+
+  const bus = await Bus.findOne({ busNumber: normalizedBusNumber }).select("_id depotId status");
+  if (!bus) throw new ApiError(404, "Bus not found");
+  if (bus.status !== "Active") {
+    throw new ApiError(409, "This bus is not active right now.");
+  }
+
+  const liveTrip = await findLiveTripForBus(bus._id, null);
+  if (!liveTrip || String(liveTrip.routeId?._id || liveTrip.routeId) !== String(routeId)) {
+    throw new ApiError(409, "This bus is not active right now.");
+  }
+
+  const [routeStops, fareSlabs] = await Promise.all([
+    RouteStop.find({ routeId: String(routeId) }).sort({ index: 1 }),
+    FareSlab.find({ routeId: String(routeId) }).sort({ fromKm: 1 }),
+  ]);
+
+  if (!routeStops.length) {
+    throw new ApiError(409, "No route stops configured for this route.");
+  }
+
+  const serializedStops = routeStops.map((stop) =>
+    serializeRouteStop(stop.toObject ? stop.toObject() : stop, liveTrip.direction || null)
+  );
+  const sourceIndex = serializedStops.findIndex(
+    (stop) => normalizeStopName(stop.name) === normalizeStopName(normalizedSource)
+  );
+  const destinationIndex = serializedStops.findIndex(
+    (stop) => normalizeStopName(stop.name) === normalizeStopName(normalizedDestination)
+  );
+
+  if (sourceIndex === -1 || destinationIndex === -1) {
+    throw new ApiError(400, "Selected stops are not valid for this route.");
+  }
+
+  const distanceKm = Math.abs(destinationIndex - sourceIndex);
+  const fareSlab = fareSlabs.find((item) => distanceKm >= item.fromKm && distanceKm <= item.toKm);
+  if (!fareSlab) {
+    throw new ApiError(409, "Fare is not configured for the selected stops.");
+  }
+
+  const farePerPassenger = Number(fareSlab.fare) || 0;
+  const totalFare = Number((farePerPassenger * count).toFixed(2));
+  if (totalFare <= 0) {
+    throw new ApiError(409, "Calculated fare is invalid.");
+  }
+
+  return {
+    bus,
+    liveTrip,
+    normalizedBusNumber,
+    normalizedSource,
+    normalizedDestination,
+    passengerCount: count,
+    farePerPassenger,
+    totalFare,
+  };
+};
+
+const issuePassengerTicketBooking = async ({
+  passengerId,
+  passengerPushToken,
+  razorpayOrderId,
+  razorpayPaymentId,
+  razorpaySignature,
+  paymentStatus,
+  bookedAt,
+  bus,
+  liveTrip,
+  normalizedBusNumber,
+  normalizedSource,
+  normalizedDestination,
+  passengerCount,
+  totalFare,
+}) => {
+  if (razorpayPaymentId) {
+    const existing = await TicketBooking.findOne({ razorpayPaymentId });
+    if (existing) return existing;
+  }
+
+  return TicketBooking.create({
+    bookingId: createBookingId(),
+    busNumber: normalizedBusNumber,
+    routeId: String(liveTrip.routeId?._id || liveTrip.routeId),
+    depotId: bus?.depotId || null,
+    tripInstanceId: liveTrip._id,
+    source: normalizedSource,
+    destination: normalizedDestination,
+    fare: totalFare,
+    status: "PAID",
+    paymentMode: "ONLINE",
+    issuedByRole: "PASSENGER_APP",
+    issuedById: passengerId || null,
+    passengerCount,
+    passengerPushToken: passengerPushToken || null,
+    razorpayOrderId: razorpayOrderId || null,
+    razorpayPaymentId: razorpayPaymentId || null,
+    razorpaySignature: razorpaySignature || null,
+    paymentStatus: paymentStatus || "CAPTURED",
+    paymentCapturedAt: bookedAt || new Date(),
+    bookedAt: bookedAt || new Date(),
+  });
+};
 
 /**
  * Returns the best available bus location for a trip.
@@ -436,6 +591,181 @@ exports.createDemoBooking = asyncHandler(async (req, res) => {
       tripInstanceId: liveTrip._id,
     },
   });
+});
+
+exports.createPassengerPaymentOrder = asyncHandler(async (req, res) => {
+  const { passengerPushToken } = req.body;
+  const context = await resolvePassengerBookingContext(req.body);
+  const razorpay = getRazorpayClient();
+  const receipt = `qfare_${Date.now()}`;
+  const amountPaise = Math.round(context.totalFare * 100);
+
+  const order = await razorpay.orders.create({
+    amount: amountPaise,
+    currency: RAZORPAY_CURRENCY,
+    receipt,
+    notes: {
+      passengerId: String(req.passenger?.passengerId || ""),
+      busNumber: context.normalizedBusNumber,
+      routeId: String(req.body.routeId),
+      source: context.normalizedSource,
+      destination: context.normalizedDestination,
+      passengerCount: String(context.passengerCount),
+      passengerPushToken: String(passengerPushToken || ""),
+    },
+  });
+
+  res.status(201).json({
+    ok: true,
+    order: {
+      id: order.id,
+      amount: order.amount,
+      currency: order.currency,
+      receipt: order.receipt,
+      keyId: process.env.RAZORPAY_KEY_ID,
+      description: `${context.normalizedSource} -> ${context.normalizedDestination}`,
+      bookingPreview: {
+        busNumber: context.normalizedBusNumber,
+        routeId: String(req.body.routeId),
+        source: context.normalizedSource,
+        destination: context.normalizedDestination,
+        passengerCount: context.passengerCount,
+        fare: context.totalFare,
+      },
+    },
+  });
+});
+
+exports.verifyPassengerPaymentAndCreateBooking = asyncHandler(async (req, res) => {
+  const {
+    razorpay_payment_id: razorpayPaymentId,
+    razorpay_order_id: razorpayOrderId,
+    razorpay_signature: razorpaySignature,
+    busNumber,
+    routeId,
+    source,
+    destination,
+    passengerCount,
+    passengerPushToken,
+  } = req.body;
+
+  if (!razorpayPaymentId || !razorpayOrderId || !razorpaySignature) {
+    throw new ApiError(400, "Missing Razorpay payment details.");
+  }
+
+  const expectedSignature = createRazorpaySignature({
+    orderId: razorpayOrderId,
+    paymentId: razorpayPaymentId,
+    secret: getRazorpaySecret(),
+  });
+
+  if (expectedSignature !== razorpaySignature) {
+    throw new ApiError(400, "Invalid payment signature.");
+  }
+
+  const context = await resolvePassengerBookingContext({
+    busNumber,
+    routeId,
+    source,
+    destination,
+    passengerCount,
+  });
+
+  const razorpay = getRazorpayClient();
+  const payment = await razorpay.payments.fetch(razorpayPaymentId);
+  if (!payment || String(payment.order_id) !== String(razorpayOrderId)) {
+    throw new ApiError(400, "Payment does not belong to this order.");
+  }
+
+  const expectedAmountPaise = Math.round(context.totalFare * 100);
+  if (Number(payment.amount) !== expectedAmountPaise) {
+    throw new ApiError(400, "Payment amount does not match the calculated fare.");
+  }
+
+  let paymentStatus = String(payment.status || "").toUpperCase();
+  if (paymentStatus === "AUTHORIZED") {
+    const captured = await razorpay.payments.capture(
+      razorpayPaymentId,
+      expectedAmountPaise,
+      RAZORPAY_CURRENCY
+    );
+    paymentStatus = String(captured.status || paymentStatus).toUpperCase();
+  }
+
+  if (paymentStatus !== "CAPTURED") {
+    throw new ApiError(409, `Payment is not captured yet. Current status: ${payment.status}`);
+  }
+
+  const booking = await issuePassengerTicketBooking({
+    passengerId: req.passenger?.passengerId || null,
+    passengerPushToken,
+    razorpayOrderId,
+    razorpayPaymentId,
+    razorpaySignature,
+    paymentStatus,
+    bookedAt: payment.captured_at ? new Date(Number(payment.captured_at) * 1000) : new Date(),
+    ...context,
+  });
+
+  res.status(201).json({
+    ok: true,
+    booking: {
+      ...booking.toObject(),
+      tripInstanceId: context.liveTrip._id,
+    },
+  });
+});
+
+exports.handleRazorpayWebhook = asyncHandler(async (req, res) => {
+  const webhookSecret = String(process.env.RAZORPAY_WEBHOOK_SECRET || "").trim();
+  if (!webhookSecret) {
+    throw new ApiError(500, "Razorpay webhook secret is not configured.");
+  }
+
+  const signature = req.headers["x-razorpay-signature"];
+  const rawBody = req.rawBody || "";
+  const expected = crypto.createHmac("sha256", webhookSecret).update(rawBody).digest("hex");
+  if (!signature || signature !== expected) {
+    throw new ApiError(400, "Invalid webhook signature.");
+  }
+
+  const event = req.body?.event;
+  const paymentEntity = req.body?.payload?.payment?.entity || null;
+  const orderEntity = req.body?.payload?.order?.entity || null;
+
+  if (!paymentEntity || !orderEntity) {
+    return res.json({ ok: true, ignored: true });
+  }
+
+  if (!["payment.captured", "order.paid"].includes(String(event))) {
+    return res.json({ ok: true, ignored: true });
+  }
+
+  const existing = await TicketBooking.findOne({ razorpayPaymentId: String(paymentEntity.id) });
+  if (existing) {
+    return res.json({ ok: true, bookingId: existing.bookingId, duplicate: true });
+  }
+
+  const context = await resolvePassengerBookingContext({
+    busNumber: orderEntity.notes?.busNumber,
+    routeId: orderEntity.notes?.routeId,
+    source: orderEntity.notes?.source,
+    destination: orderEntity.notes?.destination,
+    passengerCount: orderEntity.notes?.passengerCount,
+  });
+
+  const booking = await issuePassengerTicketBooking({
+    passengerId: orderEntity.notes?.passengerId || null,
+    passengerPushToken: orderEntity.notes?.passengerPushToken || null,
+    razorpayOrderId: orderEntity.id,
+    razorpayPaymentId: paymentEntity.id,
+    razorpaySignature: null,
+    paymentStatus: String(paymentEntity.status || "captured").toUpperCase(),
+    bookedAt: paymentEntity.captured_at ? new Date(Number(paymentEntity.captured_at) * 1000) : new Date(),
+    ...context,
+  });
+
+  res.json({ ok: true, bookingId: booking.bookingId });
 });
 
 /**
