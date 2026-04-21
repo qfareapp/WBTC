@@ -19,6 +19,9 @@ import Register from "./pages/Register.jsx";
 import PrivacyPolicy from "./pages/PrivacyPolicy.jsx";
 import QfarePassengerPrivacyPolicy from "./pages/QfarePassengerPrivacyPolicy.jsx";
 import QfareDeleteAccount from "./pages/QfareDeleteAccount.jsx";
+import QfareLandingPage from "./pages/QfareLandingPage.jsx";
+import QfareTerms from "./pages/QfareTerms.jsx";
+import QfareRefundPolicy from "./pages/QfareRefundPolicy.jsx";
 import FaqsPage from "./pages/FaqsPage.jsx";
 
 const storedApiBase = localStorage.getItem("wbtc_api_base");
@@ -117,12 +120,24 @@ function App() {
           element={<PrivacyPolicy />}
         />
         <Route
+          path="/qfare"
+          element={<QfareLandingPage />}
+        />
+        <Route
           path="/qfare-privacy-policy"
           element={<QfarePassengerPrivacyPolicy />}
         />
         <Route
           path="/qfare-delete-account"
           element={<QfareDeleteAccount />}
+        />
+        <Route
+          path="/qfare-terms"
+          element={<QfareTerms />}
+        />
+        <Route
+          path="/qfare-refund-policy"
+          element={<QfareRefundPolicy />}
         />
         <Route
           path="/faqs"
