@@ -165,9 +165,9 @@ const policySections = [
     paragraphs: [
       "If you have questions, requests, or concerns about this Privacy Policy or data handling practices, contact:",
       "Qfare",
-      "Email: [Insert Contact Email]",
-      "Address: [Insert Business Address]",
-      "Phone: [Insert Contact Number]",
+      "Email: qfare.india@gmail.com",
+      "Address: 9/J Raipur Road East, Jadavpur, Kolkata - 700032 (WB)",
+      "Phone: 9147369654",
     ],
   },
 ];
@@ -183,7 +183,7 @@ export default function PrivacyPolicyScreen() {
           <Text style={styles.backText}>Back</Text>
         </TouchableOpacity>
         <Text style={styles.title}>Privacy Policy for Qfare</Text>
-        <Text style={styles.subtitle}>Effective Date: [Insert Date]</Text>
+        <Text style={styles.subtitle}>Effective Date: 18.04.2026</Text>
       </View>
 
       <View style={styles.card}>

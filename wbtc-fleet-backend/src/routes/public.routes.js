@@ -4,6 +4,8 @@ const passengerAuth = require("../middleware/passengerAuth");
 const requireRole = require("../middleware/requireRole");
 const {
   getBusRouteByQr,
+  getNearestStop,
+  getNearbyLiveTrips,
   listPublicRoutes,
   getRouteLiveStatus,
   getTripEta,
@@ -19,6 +21,8 @@ const {
 } = require("../controllers/public.controller");
 
 router.get("/scan", getBusRouteByQr);
+router.get("/stops/nearest", getNearestStop);
+router.get("/trips/nearby", getNearbyLiveTrips);
 router.get("/routes", listPublicRoutes);
 router.get("/routes/:routeId/live", getRouteLiveStatus);
 router.get("/trips/:tripId/eta", getTripEta);

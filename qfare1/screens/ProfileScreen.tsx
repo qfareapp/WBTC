@@ -2,7 +2,7 @@ import React, { useCallback, useState } from 'react';
 import { ActivityIndicator, Alert, Linking, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
 import { CompositeNavigationProp } from '@react-navigation/native';
-import { BottomTabNavigationProp } from '@react-navigation/bottom-tabs';
+import { BottomTabNavigationProp, useBottomTabBarHeight } from '@react-navigation/bottom-tabs';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { Ionicons } from '@expo/vector-icons';
 import { apiGet } from '../lib/api';
@@ -22,6 +22,7 @@ const PRIVACY_POLICY_URL = 'https://wbtc-rose.vercel.app/qfare-privacy-policy';
 
 const ProfileScreen: React.FC<Props> = ({ navigation }) => {
   const { user, logout } = useAuth();
+  const tabBarHeight = useBottomTabBarHeight();
   const [tickets, setTickets] = useState<StoredTicket[]>([]);
   const [validating, setValidating] = useState(false);
 
@@ -188,7 +189,10 @@ const ProfileScreen: React.FC<Props> = ({ navigation }) => {
   };
 
   return (
-    <ScrollView style={styles.container} contentContainerStyle={styles.content}>
+    <ScrollView
+      style={styles.container}
+      contentContainerStyle={[styles.content, { paddingBottom: tabBarHeight + 28 }]}
+    >
       {/* Top bar */}
       <View style={styles.topBar}>
         <View style={styles.brandPill}>

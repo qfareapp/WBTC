@@ -26,7 +26,6 @@ const roleMeta = {
 
 export default function Login() {
   const router = useRouter();
-  const [apiBase, setApiBase] = useState(PRODUCTION_API_BASE);
   const [empId, setEmpId] = useState("");
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
@@ -39,7 +38,6 @@ export default function Login() {
       const token = await AsyncStorage.getItem(TOKEN_KEY);
       const savedRole = await AsyncStorage.getItem(USER_ROLE_KEY);
       const mustChangePassword = await AsyncStorage.getItem(MUST_CHANGE_PASSWORD_KEY);
-      setApiBase(PRODUCTION_API_BASE);
       await AsyncStorage.setItem(API_BASE_KEY, PRODUCTION_API_BASE);
       if (savedRole === "CONDUCTOR") setRole("CONDUCTOR");
       if (savedRole === "OWNER") setRole("OWNER");
@@ -175,18 +173,6 @@ export default function Login() {
 
         <View style={styles.card}>
           <View style={styles.cardBar} />
-
-          <View style={styles.serverPill}>
-            <View style={styles.serverIconWrap}>
-              <Ionicons name="globe-outline" size={16} color="#60A5FA" />
-            </View>
-            <View style={styles.serverCopy}>
-              <Text style={styles.serverLabel}>Server</Text>
-              <Text style={styles.serverValue}>{apiBase}</Text>
-              <Text style={styles.serverHint}>Secure production endpoint</Text>
-            </View>
-            <View style={styles.serverStatusDot} />
-          </View>
 
           {role === "OWNER" ? (
             <>
@@ -387,54 +373,6 @@ const styles = StyleSheet.create({
     fontSize: 15,
     color: "#FFFFFF",
     backgroundColor: "rgba(255,255,255,0.06)",
-  },
-  serverPill: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 12,
-    backgroundColor: "rgba(255,255,255,0.03)",
-    borderWidth: 1,
-    borderColor: "rgba(255,255,255,0.07)",
-    borderRadius: 12,
-    paddingHorizontal: 12,
-    paddingVertical: 12,
-  },
-  serverIconWrap: {
-    width: 30,
-    height: 30,
-    borderRadius: 9,
-    alignItems: "center",
-    justifyContent: "center",
-    backgroundColor: "rgba(0,144,224,0.12)",
-    borderWidth: 1,
-    borderColor: "rgba(0,144,224,0.18)",
-  },
-  serverCopy: {
-    flex: 1,
-  },
-  serverLabel: {
-    fontSize: 10,
-    textTransform: "uppercase",
-    letterSpacing: 1,
-    color: "rgba(255,255,255,0.3)",
-    fontWeight: "700",
-  },
-  serverValue: {
-    marginTop: 3,
-    color: "rgba(255,255,255,0.62)",
-    fontSize: 12.5,
-    fontWeight: "600",
-  },
-  serverHint: {
-    marginTop: 6,
-    color: "rgba(255,255,255,0.22)",
-    fontSize: 11.2,
-  },
-  serverStatusDot: {
-    width: 8,
-    height: 8,
-    borderRadius: 999,
-    backgroundColor: "#00C87A",
   },
   button: {
     marginTop: 22,

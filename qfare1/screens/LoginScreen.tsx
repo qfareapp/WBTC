@@ -14,6 +14,7 @@ import {
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { NativeStackScreenProps } from '@react-navigation/native-stack';
+import QfareLogo from '../components/QfareLogo';
 import { useAuth } from '../lib/auth';
 import { palette } from '../lib/theme';
 import { RootStackParamList } from '../navigation/AppNavigator';
@@ -56,8 +57,7 @@ const LoginScreen: React.FC<Props> = ({ navigation }) => {
       >
         {/* Brand */}
         <View style={styles.brandRow}>
-          <Text style={styles.brandQ}>q</Text>
-          <Text style={styles.brandFare}>fare</Text>
+          <QfareLogo width={180} height={42} />
         </View>
         <Text style={styles.tagline}>Smart bus ticketing for everyone</Text>
 
@@ -119,9 +119,7 @@ const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: palette.bg },
   content: { flexGrow: 1, padding: 24, justifyContent: 'center', paddingTop: 80 },
 
-  brandRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 6 },
-  brandQ: { color: palette.accent, fontSize: 40, fontWeight: '900' },
-  brandFare: { color: palette.text, fontSize: 40, fontWeight: '900' },
+  brandRow: { flexDirection: 'row', alignItems: 'center', marginLeft: -36, marginBottom: 6 },
   tagline: { color: palette.textFaint, fontSize: 14, marginBottom: 40 },
 
   card: {

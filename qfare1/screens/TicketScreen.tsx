@@ -267,9 +267,9 @@ const styles = StyleSheet.create({
   stubExpired: { backgroundColor: palette.surfaceStrong },
   brandRow: { flexDirection: 'row', alignItems: 'center' },
   brandQ: { color: palette.accent, fontSize: 22, fontWeight: '900' },
-  brandFare: { color: '#fff', fontSize: 22, fontWeight: '900' },
+  brandFare: { color: '#f8fffc', fontSize: 22, fontWeight: '900' },
   brandFareExpired: { color: palette.textMuted },
-  brandType: { color: 'rgba(255,255,255,0.45)', fontSize: 12, fontWeight: '600', marginTop: 4 },
+  brandType: { color: 'rgba(248,255,252,0.62)', fontSize: 12, fontWeight: '600', marginTop: 4 },
   activePill: {
     flexDirection: 'row', alignItems: 'center', gap: 6,
     backgroundColor: 'rgba(0, 200, 150, 0.18)',
@@ -324,7 +324,7 @@ const styles = StyleSheet.create({
   },
   perfDash: {
     flex: 1, height: 1.5,
-    backgroundColor: 'rgba(237, 245, 255, 0.12)', borderRadius: 1,
+    backgroundColor: 'rgba(16, 36, 60, 0.12)', borderRadius: 1,
   },
 
   // Journey section

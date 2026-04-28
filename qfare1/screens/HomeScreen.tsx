@@ -2,8 +2,6 @@
 import {
   Alert,
   Animated,
-  Dimensions,
-  FlatList,
   Image,
   ImageBackground,
   Keyboard,
@@ -14,6 +12,7 @@ import {
   Pressable,
   RefreshControl,
   ScrollView,
+  StatusBar,
   StyleSheet,
   Text,
   TextInput,
@@ -22,7 +21,7 @@ import {
 } from 'react-native';
 import { CompositeNavigationProp } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
-import { BottomTabNavigationProp } from '@react-navigation/bottom-tabs';
+import { BottomTabNavigationProp, useBottomTabBarHeight } from '@react-navigation/bottom-tabs';
 import { Ionicons } from '@expo/vector-icons';
 import * as Location from 'expo-location';
 import { WebView } from 'react-native-webview';
@@ -31,8 +30,10 @@ import { BottomTabParamList, RootStackParamList } from '../navigation/AppNavigat
 import { apiGet, apiPost } from '../lib/api';
 import { useAuth } from '../lib/auth';
 import { palette } from '../lib/theme';
+import QfareLogo from '../components/QfareLogo';
 
 const WAITING_DISCLAIMER_ACK_KEY = 'passenger_waiting_disclaimer_ack';
+const heroTopInset = Platform.OS === 'android' ? (StatusBar.currentHeight ?? 0) + 18 : 56;
 const today = (() => {
   const now = new Date();
   const year = now.getFullYear();
@@ -40,34 +41,6 @@ const today = (() => {
   const day = String(now.getDate()).padStart(2, '0');
   return `${year}-${month}-${day}`;
 })();
-const SLIDER_WIDTH = Dimensions.get('window').width - 40;
-
-const BANNER_SLIDES = [
-  {
-    key: 'hero',
-    eyebrow: 'Unreserved made easy',
-    title: 'Scan. Pay.\nRide.',
-    subtitle: 'Board any bus, scan its QR and get a digital ticket instantly - no queue.',
-    accentKey: 'accent' as const,
-    cta: null,
-  },
-  {
-    key: 'scan',
-    eyebrow: 'Unreserved Bus Ticketing',
-    title: 'Board any bus\ninstantly.',
-    subtitle: 'Open the QR scanner, hop on any supported qfare bus and pay in seconds.',
-    accentKey: 'blue' as const,
-    cta: { label: 'Open QR Scanner', icon: 'qr-code-outline', screen: 'Scan' },
-  },
-  {
-    key: 'live',
-    eyebrow: 'Real-time tracking',
-    title: 'Track your\nbus live.',
-    subtitle: 'See exactly where your bus is right now - position updated every 5 seconds.',
-    accentKey: 'gold' as const,
-    cta: null,
-  },
-];
 
 type Props = {
   navigation: CompositeNavigationProp<
@@ -169,6 +142,29 @@ type StopLandmarkPreview = {
   imageUrl: string;
   latitude: number | null;
   longitude: number | null;
+};
+
+type NearbyLiveTrip = {
+  tripId: string;
+  routeId: string;
+  routeCode: string;
+  routeName: string;
+  source: string;
+  destination: string;
+  direction: 'UP' | 'DOWN';
+  busNumber: string;
+  distanceKm: number;
+  minutesAway: number;
+  lastLatitude: number;
+  lastLongitude: number;
+  lastLocationAt: string | null;
+  lastLocationName: string | null;
+};
+
+type NearbyLiveTripsResponse = {
+  ok: boolean;
+  radiusKm: number;
+  trips: NearbyLiveTrip[];
 };
 
 const normalizeStopName = (value: string) => value.trim().toLowerCase();
@@ -321,6 +317,7 @@ const getWaitingDisclaimerStorageKey = (userId: string) =>
 
 const HomeScreen: React.FC<Props> = ({ navigation }) => {
   const { token, user } = useAuth();
+  const tabBarHeight = useBottomTabBarHeight();
   const maxFavoriteStops = 6;
   const favoritePickerPreviewCount = 8;
   const [from, setFrom] = useState('');
@@ -334,7 +331,6 @@ const HomeScreen: React.FC<Props> = ({ navigation }) => {
   const [stopNavigationPrompt, setStopNavigationPrompt] = useState<StopNavigationPrompt | null>(null);
   const [waitingDisclaimerPrompt, setWaitingDisclaimerPrompt] = useState<WaitingDisclaimerPrompt | null>(null);
   const [stopLandmarkPreview, setStopLandmarkPreview] = useState<StopLandmarkPreview | null>(null);
-  const [showHowItWorks, setShowHowItWorks] = useState(false);
   const [routes, setRoutes] = useState<PublicRoute[]>([]);
   const [loadingRoutes, setLoadingRoutes] = useState(false);
   const [routesError, setRoutesError] = useState<string | null>(null);
@@ -350,10 +346,14 @@ const HomeScreen: React.FC<Props> = ({ navigation }) => {
   const [tripLoads, setTripLoads] = useState<Record<string, TripLoad | null>>({});
   const [waitingStatusByTrip, setWaitingStatusByTrip] = useState<Record<string, WaitingStatus | undefined>>({});
   const [waitingBusyByTrip, setWaitingBusyByTrip] = useState<Record<string, boolean>>({});
-  const [activeSlide, setActiveSlide] = useState(0);
   const [selectorRowHeight, setSelectorRowHeight] = useState(0);
-  const sliderRef = useRef<FlatList>(null);
+  const [userCoords, setUserCoords] = useState<{ latitude: number; longitude: number } | null>(null);
+  const [locationBootState, setLocationBootState] = useState<'pending' | 'ready' | 'unavailable'>('pending');
+  const [nearbyLiveTrips, setNearbyLiveTrips] = useState<NearbyLiveTrip[]>([]);
+  const [nearbyLiveLoading, setNearbyLiveLoading] = useState(false);
+  const [nearbyLiveError, setNearbyLiveError] = useState<string | null>(null);
   const liveButtonPulse = useRef(new Animated.Value(0)).current;
+  const hasResolvedStartupLocation = useRef(false);
 
   const loadRoutes = async () => {
     setLoadingRoutes(true);
@@ -374,14 +374,35 @@ const HomeScreen: React.FC<Props> = ({ navigation }) => {
   }, []);
 
   useEffect(() => {
-    const timer = setInterval(() => {
-      setActiveSlide(prev => {
-        const next = (prev + 1) % BANNER_SLIDES.length;
-        sliderRef.current?.scrollToIndex({ index: next, animated: true });
-        return next;
-      });
-    }, 4000);
-    return () => clearInterval(timer);
+    if (hasResolvedStartupLocation.current) {
+      return;
+    }
+
+    hasResolvedStartupLocation.current = true;
+
+    const primeCurrentLocation = async () => {
+      try {
+        const permission = await Location.requestForegroundPermissionsAsync();
+        if (permission.status !== 'granted') {
+          setLocationBootState('unavailable');
+          return;
+        }
+
+        const position = await Location.getCurrentPositionAsync({
+          accuracy: Location.Accuracy.High,
+        });
+        setUserCoords({
+          latitude: position.coords.latitude,
+          longitude: position.coords.longitude,
+        });
+        setLocationBootState('ready');
+      } catch {
+        // Startup location is best-effort only.
+        setLocationBootState('unavailable');
+      }
+    };
+
+    void primeCurrentLocation();
   }, []);
 
   useEffect(() => {
@@ -485,6 +506,10 @@ const HomeScreen: React.FC<Props> = ({ navigation }) => {
     if (allStops.some(s => s.toLowerCase() === activeText)) return [];
     return allStops.filter(s => s.toLowerCase().includes(activeText)).slice(0, 7);
   }, [from, to, activeStopField, allStops]);
+
+  const shouldShowRouteResultsCard =
+    loadingRoutes || Boolean(routesError) || matchingRoutePreviews.length > 0 || hasRouteSearch;
+  const shouldShowNearbyLiveTrips = !hasRouteSearch;
 
   const liveTripsWithCoords = useMemo(
     () =>
@@ -590,6 +615,25 @@ const HomeScreen: React.FC<Props> = ({ navigation }) => {
     }
   };
 
+  const loadNearbyLiveTrips = async (
+    coords: { latitude: number; longitude: number },
+    showLoading = true
+  ) => {
+    if (showLoading) setNearbyLiveLoading(true);
+    setNearbyLiveError(null);
+    try {
+      const data = await apiGet<NearbyLiveTripsResponse>(
+        `/api/public/trips/nearby?latitude=${coords.latitude}&longitude=${coords.longitude}&radiusKm=5&date=${today}`
+      );
+      setNearbyLiveTrips(data.trips || []);
+    } catch (error) {
+      setNearbyLiveTrips([]);
+      setNearbyLiveError(error instanceof Error ? error.message : 'Failed to load nearby buses');
+    } finally {
+      if (showLoading) setNearbyLiveLoading(false);
+    }
+  };
+
   const fetchEtaForTrip = async (tripId: string, userStop: string) => {
     try {
       const data = await apiGet<{ ok: boolean; eta: TripEta | null }>(
@@ -659,6 +703,19 @@ const HomeScreen: React.FC<Props> = ({ navigation }) => {
     }, 5000);
     return () => clearInterval(interval);
   }, [activeRouteId]);
+
+  useEffect(() => {
+    if (!userCoords) return;
+    void loadNearbyLiveTrips(userCoords);
+  }, [userCoords]);
+
+  useEffect(() => {
+    if (!userCoords || hasRouteSearch) return;
+    const interval = setInterval(() => {
+      void loadNearbyLiveTrips(userCoords, false);
+    }, 10000);
+    return () => clearInterval(interval);
+  }, [userCoords, hasRouteSearch]);
 
   // Fetch ETAs whenever live trips update and user has a "from" stop set
   useEffect(() => {
@@ -788,12 +845,12 @@ const HomeScreen: React.FC<Props> = ({ navigation }) => {
 
   const handleAddFavorite = (stop: string) => {
     if (favoriteStops.length >= maxFavoriteStops) {
-      setShowFavoritePicker(false);
       return;
     }
     setFavoriteStops(current => [...current, stop]);
     setFavoriteSearch('');
     setShowFavoritePicker(false);
+    setFavoriteRemoveMode(false);
   };
 
   const handleRemoveFavorite = (stop: string) => {
@@ -812,6 +869,9 @@ const HomeScreen: React.FC<Props> = ({ navigation }) => {
     setRefreshing(true);
     try {
       await loadRoutes();
+      if (userCoords) {
+        await loadNearbyLiveTrips(userCoords, false);
+      }
       if (activeRouteId) {
         await loadLiveStatus(activeRouteId, false);
       }
@@ -842,7 +902,7 @@ const HomeScreen: React.FC<Props> = ({ navigation }) => {
     >
     <ScrollView
       style={styles.container}
-      contentContainerStyle={styles.content}
+      contentContainerStyle={[styles.content, { paddingBottom: tabBarHeight + 28 }]}
       keyboardShouldPersistTaps="handled"
       refreshControl={
         <RefreshControl
@@ -858,426 +918,468 @@ const HomeScreen: React.FC<Props> = ({ navigation }) => {
       <View style={styles.bgRingLarge} pointerEvents="none" />
       <View style={styles.bgRingMedium} pointerEvents="none" />
       <View style={styles.bgGlow} pointerEvents="none" />
-
-      {/* Top bar */}
-      <View style={styles.topBar}>
-        <View style={styles.brandPill}>
-          <Text style={styles.brandQ}>q</Text>
-          <Text style={styles.brandFare}>fare</Text>
-        </View>
-        <View style={styles.topBarRight}>
-          <TouchableOpacity style={styles.iconPill}>
-            <Ionicons name="notifications-outline" size={18} color={palette.textMuted} />
-          </TouchableOpacity>
-          <View style={styles.avatarPill}>
-            <Text style={styles.avatarText}>P</Text>
-          </View>
-        </View>
-      </View>
-
-      {/* Banner slider */}
-      <View style={styles.sliderWrapper}>
-        <FlatList
-          ref={sliderRef}
-          data={BANNER_SLIDES}
-          horizontal
-          pagingEnabled
-          showsHorizontalScrollIndicator={false}
-          keyExtractor={item => item.key}
-          getItemLayout={(_, index) => ({ length: SLIDER_WIDTH, offset: SLIDER_WIDTH * index, index })}
-          onMomentumScrollEnd={e => {
-            const index = Math.round(e.nativeEvent.contentOffset.x / SLIDER_WIDTH);
-            setActiveSlide(index);
-          }}
-          renderItem={({ item }) => {
-            const accent = palette[item.accentKey];
-            return (
-              <ImageBackground
-                source={require('../assets/splash-icon.png')}
-                imageStyle={styles.slideImage}
-                style={[styles.slideItem, { width: SLIDER_WIDTH }]}
-              >
-                <View style={styles.heroOverlay} />
-                <View style={styles.slideContent}>
-                  <View style={styles.eyebrowRow}>
-                    <View style={[styles.eyebrowDot, { backgroundColor: accent }]} />
-                    <Text style={[styles.eyebrow, { color: accent }]}>{item.eyebrow}</Text>
-                  </View>
-                  <Text style={styles.slideTitle}>{item.title}</Text>
-                  <Text style={styles.slideSubtitle}>{item.subtitle}</Text>
-                  {item.cta && (
-                    <TouchableOpacity
-                      style={[styles.slideCta, { borderColor: accent }]}
-                      onPress={() => navigation.navigate(item.cta!.screen as any)}
-                    >
-                      <Ionicons name={item.cta.icon as any} size={16} color={accent} />
-                      <Text style={[styles.slideCtaText, { color: accent }]}>{item.cta.label}</Text>
-                      <Ionicons name="arrow-forward" size={14} color={accent} />
-                    </TouchableOpacity>
-                  )}
-                </View>
-              </ImageBackground>
-            );
-          }}
-        />
-        <View style={styles.sliderDots}>
-          {BANNER_SLIDES.map((s, i) => (
-            <View
-              key={s.key}
-              style={[styles.sliderDot, i === activeSlide && styles.sliderDotActive]}
-            />
-          ))}
-        </View>
-      </View>
-
-      {/* Plan your trip */}
-      <Pressable
-        style={styles.card}
-        onPress={() => {
-          if (favoriteRemoveMode) setFavoriteRemoveMode(false);
-        }}
+      {/* Hero */}
+      <View
+        style={[
+          styles.heroBleed,
+          suggestions.length > 0 && selectorRowHeight > 0 && styles.heroBleedWithSuggestions,
+        ]}
       >
-        <View style={styles.sectionTitleRow}>
-          <View style={styles.sectionBar} />
-          <Text style={styles.sectionTitle}>Plan your trip</Text>
-        </View>
-        {routesError && (
-          <View style={styles.errorBanner}>
-            <Ionicons name="alert-circle-outline" size={14} color={palette.danger} />
-            <Text style={styles.errorText}>{routesError}</Text>
-          </View>
-        )}
-        {loadingRoutes && !routesError && (
-          <View style={styles.hintRow}>
-            <Ionicons name="time-outline" size={13} color={palette.textFaint} />
-            <Text style={styles.hint}>Loading routes...</Text>
-          </View>
-        )}
-
-        {/* Stop selectors + absolute suggestions dropdown */}
-        <View style={styles.stopSelectorWrapper}>
-          <View
-            style={styles.selectorRow}
-            onLayout={e => setSelectorRowHeight(e.nativeEvent.layout.height)}
-          >
-            <View
-              style={[
-                styles.stopSelectorCard,
-                styles.inputFrom,
-                activeStopField === 'from' && styles.stopSelectorCardActiveFrom
-              ]}
-            >
-              <Text style={styles.stopSelectorLabelFrom}>From</Text>
-              <View style={styles.stopInputRow}>
-                <Ionicons name="navigate" size={12} color={palette.accent} style={styles.stopInputIcon} />
-                <TextInput
-                  value={from}
-                  onChangeText={value => { setFrom(value); setActiveStopField('from'); }}
-                  onFocus={() => setActiveStopField('from')}
-                  style={[styles.stopSelectorInput, styles.stopSelectorValueFrom]}
-                  placeholder="Origin"
-                  placeholderTextColor={palette.textFaint}
-                />
-              </View>
-            </View>
-
-            <TouchableOpacity style={styles.swapButton} onPress={handleSwapStops}>
-              <Ionicons name="swap-horizontal" size={18} color={palette.accent} />
-            </TouchableOpacity>
-
-            <View
-              style={[
-                styles.stopSelectorCard,
-                styles.inputTo,
-                activeStopField === 'to' && styles.stopSelectorCardActiveTo
-              ]}
-            >
-              <Text style={styles.stopSelectorLabelTo}>To</Text>
-              <View style={styles.stopInputRow}>
-                <Ionicons name="location" size={12} color={palette.blue} style={styles.stopInputIcon} />
-                <TextInput
-                  value={to}
-                  onChangeText={value => { setTo(value); setActiveStopField('to'); }}
-                  onFocus={() => setActiveStopField('to')}
-                  style={[styles.stopSelectorInput, styles.stopSelectorValueTo]}
-                  placeholder="Destination"
-                  placeholderTextColor={palette.textFaint}
-                />
+        <ImageBackground
+          source={require('../assets/qfare-hero.png')}
+          imageStyle={styles.heroImage}
+          style={styles.heroCard}
+        >
+          <View style={styles.heroOverlay} />
+          <View style={[styles.topBarOnHero, { paddingTop: heroTopInset }]}>
+            <QfareLogo
+              width={120}
+              height={28}
+              imageStyle={{ marginLeft: -18 }}
+              containerStyle={{ marginLeft: 0 }}
+            />
+            <View style={styles.topBarRight}>
+              <TouchableOpacity style={styles.iconPill}>
+                <Ionicons name="notifications-outline" size={18} color="#10243c" />
+              </TouchableOpacity>
+              <View style={styles.avatarPill}>
+                <Text style={styles.avatarText}>
+                  {user?.name?.trim()?.[0]?.toUpperCase() || 'P'}
+                </Text>
               </View>
             </View>
           </View>
+          <View style={styles.heroCopy}>
+            <Text style={styles.heroTitle}>Hello, {user?.name?.trim() || 'Passenger'}</Text>
+            <Text style={styles.heroSubtitle}>Where would you like to go?</Text>
+          </View>
 
-          {/* Autocomplete suggestions — absolute dropdown, floats above keyboard */}
-          {suggestions.length > 0 && selectorRowHeight > 0 && (
-            <View style={[styles.suggestionsCard, { top: selectorRowHeight + 6 }]}>
-              <ScrollView
-                keyboardShouldPersistTaps="handled"
-                bounces={false}
-                showsVerticalScrollIndicator={false}
+          <View style={[styles.favoriteOverlayWrap, showFavoritePicker && styles.favoriteOverlayWrapOpen]}>
+            <View style={styles.favoriteStrip}>
+              <TouchableOpacity
+                style={styles.compactAddFavoriteButton}
+                onPress={() => {
+                  setFavoriteSearch('');
+                  setShowFavoritePicker(current => {
+                    const nextOpen = !current;
+                    setFavoriteRemoveMode(nextOpen);
+                    return nextOpen;
+                  });
+                }}
               >
-                {suggestions.map((stop, idx) => {
-                  const query = (activeStopField === 'from' ? from : to).trim().toLowerCase();
-                  const matchIdx = stop.toLowerCase().indexOf(query);
-                  const before = stop.slice(0, matchIdx);
-                  const match = stop.slice(matchIdx, matchIdx + query.length);
-                  const after = stop.slice(matchIdx + query.length);
-                  const isFrom = activeStopField === 'from';
-                  const hasCoords = liveRoute?.stops?.some(s => s.name.toLowerCase() === stop.toLowerCase() && s.latitude && s.longitude);
+                <Ionicons
+                  name={showFavoritePicker ? 'close-outline' : 'add-outline'}
+                  size={14}
+                  color={palette.ctaText}
+                />
+                <Text style={styles.compactAddFavoriteButtonText}>
+                  {showFavoritePicker ? 'Close' : 'Favourites'}
+                </Text>
+              </TouchableOpacity>
+              <ScrollView
+                horizontal
+                showsHorizontalScrollIndicator={false}
+                contentContainerStyle={styles.favoriteStripContent}
+              >
+                {favoriteStops.map(stop => {
+                  const isFrom = from === stop;
+                  const isTo = to === stop;
                   return (
-                    <View
-                      key={stop}
-                      style={[
-                        styles.suggestionItem,
-                        idx < suggestions.length - 1 && styles.suggestionItemBorder,
-                      ]}
-                    >
+                    <View key={stop} style={styles.favoriteChipWrap}>
                       <TouchableOpacity
-                        style={{ flex: 1, flexDirection: 'row', alignItems: 'center', gap: 8 }}
-                        onPress={() => handleStopSelect(stop)}
-                        activeOpacity={0.65}
+                        style={[
+                          styles.favoriteChip,
+                          isFrom && styles.favoriteChipFrom,
+                          isTo && styles.favoriteChipTo
+                        ]}
+                        onPress={() => {
+                          if (favoriteRemoveMode) {
+                            handleRemoveFavorite(stop);
+                            return;
+                          }
+                          handleStopSelect(stop);
+                        }}
+                        onLongPress={() => setFavoriteRemoveMode(true)}
+                        delayLongPress={250}
                       >
-                        <Ionicons
-                          name="location-outline"
-                          size={13}
-                          color={isFrom ? palette.accent : palette.blue}
-                          style={{ marginTop: 1 }}
-                        />
-                        <Text style={styles.suggestionText} numberOfLines={1}>
-                          {before}
-                          <Text style={[styles.suggestionMatch, { color: isFrom ? palette.accent : palette.blue }]}>
-                            {match}
-                          </Text>
-                          {after}
+                        {isFrom && <Ionicons name="navigate" size={9} color={palette.accent} style={{ marginRight: 3 }} />}
+                        {isTo && <Ionicons name="location" size={9} color={palette.blue} style={{ marginRight: 3 }} />}
+                        <Text
+                          numberOfLines={1}
+                          style={[
+                            styles.favoriteChipText,
+                            isFrom && styles.favoriteChipTextFrom,
+                            isTo && styles.favoriteChipTextTo
+                          ]}
+                        >
+                          {stop}
                         </Text>
                       </TouchableOpacity>
-                      {hasCoords && (
-                        <TouchableOpacity
-                          onPress={() => navigateToStop(stop)}
-                          hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-                          style={styles.navigateBtn}
+                      {favoriteRemoveMode && (
+                        <Pressable
+                          style={styles.removeFavoriteButton}
+                          hitSlop={8}
+                          onPress={() => handleRemoveFavorite(stop)}
                         >
-                          <Ionicons name="navigate-outline" size={14} color={palette.accent} />
-                        </TouchableOpacity>
+                          <Text style={styles.removeFavoriteButtonText}>-</Text>
+                        </Pressable>
                       )}
                     </View>
                   );
                 })}
               </ScrollView>
             </View>
+
+            {showFavoritePicker && (
+              <View style={styles.favoritePickerCard}>
+                <Text style={styles.favoritePickerTitle}>Add favourite stops</Text>
+                <Text style={styles.favoritePickerHint}>
+                  From all available routes · max {maxFavoriteStops}
+                </Text>
+                {favoriteStops.length < maxFavoriteStops ? (
+                  <>
+                    <View style={styles.favoriteSearchRow}>
+                      <Ionicons name="search-outline" size={14} color={palette.textFaint} />
+                      <TextInput
+                        value={favoriteSearch}
+                        onChangeText={setFavoriteSearch}
+                        placeholder="Search stops"
+                        placeholderTextColor={palette.textFaint}
+                        style={styles.favoriteSearchInput}
+                        autoCorrect={false}
+                        autoCapitalize="words"
+                      />
+                      {favoriteSearch.trim() ? (
+                        <TouchableOpacity onPress={() => setFavoriteSearch('')}>
+                          <Ionicons name="close-circle" size={16} color={palette.textFaint} />
+                        </TouchableOpacity>
+                      ) : null}
+                    </View>
+                    <Text style={styles.favoritePickerSubhint}>
+                      {favoriteSearch.trim()
+                        ? 'Matching stops'
+                        : `Showing ${Math.min(favoritePickerStops.length, favoritePickerPreviewCount)} suggested stops`}
+                    </Text>
+                    <ScrollView
+                      style={styles.favoritePickerScroll}
+                      contentContainerStyle={styles.favoritePickerScrollContent}
+                      nestedScrollEnabled
+                      showsVerticalScrollIndicator={false}
+                    >
+                      <View style={styles.favoriteChipsRow}>
+                        {favoritePickerStops.length ? (
+                          favoritePickerStops.map(stop => (
+                            <TouchableOpacity
+                              key={stop}
+                              style={styles.favoritePickerChip}
+                              onPress={event => {
+                                event.stopPropagation();
+                                handleAddFavorite(stop);
+                              }}
+                            >
+                              <Ionicons name="add-outline" size={13} color={palette.accent} />
+                              <Text style={styles.favoritePickerChipText}>{stop}</Text>
+                            </TouchableOpacity>
+                          ))
+                        ) : (
+                          <Text style={styles.hint}>
+                            No stop names match "{favoriteSearch.trim()}".
+                          </Text>
+                        )}
+                      </View>
+                    </ScrollView>
+                  </>
+                ) : null}
+                {favoriteStops.length >= maxFavoriteStops ? (
+                  <Text style={styles.hint}>
+                    {`You already have ${maxFavoriteStops} favourite stops. Remove one to add another.`}
+                  </Text>
+                ) : null}
+              </View>
+            )}
+          </View>
+
+          <View style={styles.heroSearchWrap}>
+            <View style={styles.stopSelectorWrapper}>
+              <View
+                style={styles.searchCard}
+                onLayout={e => setSelectorRowHeight(e.nativeEvent.layout.height)}
+              >
+                <View style={styles.routesContainer}>
+                  <View style={styles.routeLine}>
+                    <View style={styles.lineColumn}>
+                      <View style={styles.fromDot} />
+                      <View style={styles.dashedLine} />
+                    </View>
+                    <View
+                      style={[
+                        styles.inputBox,
+                        activeStopField === 'from' && styles.inputBoxActiveFrom,
+                      ]}
+                    >
+                      <Text style={styles.inputLabel}>From</Text>
+                      <TextInput
+                        value={from}
+                        onChangeText={value => {
+                          setFrom(value);
+                          setActiveStopField('from');
+                        }}
+                        onFocus={() => setActiveStopField('from')}
+                        style={styles.input}
+                        placeholder="Current Location"
+                        placeholderTextColor={palette.textFaint}
+                      />
+                    </View>
+                  </View>
+
+                  <View style={styles.routeLine}>
+                    <View style={styles.lineColumn}>
+                      <View style={styles.toDotOuter}>
+                        <View style={styles.toDotInner} />
+                      </View>
+                    </View>
+                    <View
+                      style={[
+                        styles.inputBox,
+                        styles.inputBoxTo,
+                        activeStopField === 'to' && styles.inputBoxActiveTo,
+                      ]}
+                    >
+                      <Text style={styles.inputLabel}>To</Text>
+                      <TextInput
+                        value={to}
+                        onChangeText={value => { setTo(value); setActiveStopField('to'); }}
+                        onFocus={() => setActiveStopField('to')}
+                        style={styles.input}
+                        placeholder="Select Destination"
+                        placeholderTextColor={palette.textFaint}
+                      />
+                    </View>
+                  </View>
+
+                  <TouchableOpacity style={styles.swapButtonModern} onPress={handleSwapStops}>
+                    <Ionicons name="swap-vertical" size={18} color={palette.text} />
+                  </TouchableOpacity>
+                </View>
+              </View>
+
+              {suggestions.length > 0 && selectorRowHeight > 0 && (
+                <View style={[styles.suggestionsCard, { top: selectorRowHeight + 6 }]}>
+                  <ScrollView
+                    keyboardShouldPersistTaps="handled"
+                    bounces={false}
+                    showsVerticalScrollIndicator={false}
+                  >
+                    {suggestions.map((stop, idx) => {
+                      const query = (activeStopField === 'from' ? from : to).trim().toLowerCase();
+                      const matchIdx = stop.toLowerCase().indexOf(query);
+                      const before = stop.slice(0, matchIdx);
+                      const match = stop.slice(matchIdx, matchIdx + query.length);
+                      const after = stop.slice(matchIdx + query.length);
+                      const isFrom = activeStopField === 'from';
+                      const hasCoords = liveRoute?.stops?.some(s => s.name.toLowerCase() === stop.toLowerCase() && s.latitude && s.longitude);
+                      return (
+                        <View
+                          key={stop}
+                          style={[
+                            styles.suggestionItem,
+                            idx < suggestions.length - 1 && styles.suggestionItemBorder,
+                          ]}
+                        >
+                          <TouchableOpacity
+                            style={{ flex: 1, flexDirection: 'row', alignItems: 'center', gap: 8 }}
+                            onPress={() => handleStopSelect(stop)}
+                            activeOpacity={0.65}
+                          >
+                            <Ionicons
+                              name="location-outline"
+                              size={13}
+                              color={isFrom ? palette.accent : palette.blue}
+                              style={{ marginTop: 1 }}
+                            />
+                            <Text style={styles.suggestionText} numberOfLines={1}>
+                              {before}
+                              <Text style={[styles.suggestionMatch, { color: isFrom ? palette.accent : palette.blue }]}>
+                                {match}
+                              </Text>
+                              {after}
+                            </Text>
+                          </TouchableOpacity>
+                          {hasCoords && (
+                            <TouchableOpacity
+                              onPress={() => navigateToStop(stop)}
+                              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                              style={styles.navigateBtn}
+                            >
+                              <Ionicons name="navigate-outline" size={14} color={palette.accent} />
+                            </TouchableOpacity>
+                          )}
+                        </View>
+                      );
+                    })}
+                  </ScrollView>
+                </View>
+              )}
+            </View>
+          </View>
+        </ImageBackground>
+      </View>
+
+      {shouldShowRouteResultsCard ? (
+        <Pressable
+          style={styles.card}
+          onPress={() => {
+            if (favoriteRemoveMode) setFavoriteRemoveMode(false);
+          }}
+        >
+          {routesError && (
+            <View style={styles.errorBanner}>
+              <Ionicons name="alert-circle-outline" size={14} color={palette.danger} />
+              <Text style={styles.errorText}>{routesError}</Text>
+            </View>
+          )}
+          {loadingRoutes && !routesError && (
+            <View style={styles.hintRow}>
+              <Ionicons name="time-outline" size={13} color={palette.textFaint} />
+              <Text style={styles.hint}>Loading routes...</Text>
+            </View>
+          )}
+
+          {/* Matching routes */}
+          {matchingRoutePreviews.length > 0 ? (
+            <View style={styles.routeList}>
+              {matchingRoutePreviews.map(({ route, stops }) => (
+                <Pressable
+                  key={route.id}
+                  style={styles.routeCard}
+                  onPress={() => setSelectedRoutePreview({ route, stops })}
+                >
+                  <View style={styles.routeCardAccent} />
+                  <View style={styles.routeCardBody}>
+                    <View style={styles.routeTop}>
+                      <View style={styles.routeTopLeft}>
+                        <View style={styles.routeCodeBadge}>
+                          <Text style={styles.routeCodeBadgeText}>{route.routeCode}</Text>
+                        </View>
+                        <Text style={styles.routePath}>
+                          {route.source}{'  ->  '}{route.destination}
+                        </Text>
+                      </View>
+                      <Animated.View
+                        style={[
+                          styles.liveButtonWrap,
+                          {
+                            opacity: liveButtonGlowOpacity,
+                            transform: [{ scale: liveButtonScale }],
+                          },
+                        ]}
+                      />
+                      <TouchableOpacity
+                        style={styles.liveButton}
+                        onPress={() => {
+                          setActiveRouteId(route.id);
+                          void loadLiveStatus(route.id);
+                        }}
+                      >
+                        <Animated.View style={[styles.liveDotSmall, { transform: [{ scale: liveDotScale }] }]} />
+                        <Text style={styles.liveButtonText}>Live</Text>
+                      </TouchableOpacity>
+                    </View>
+                    <Text style={styles.routeName}>{route.routeName}</Text>
+                    <Text style={styles.routeStops} numberOfLines={2}>
+                      {stops.join('  ·  ')}
+                    </Text>
+                  </View>
+                </Pressable>
+              ))}
+            </View>
+          ) : hasRouteSearch && !loadingRoutes && !routesError ? (
+            <View style={[styles.emptyState, styles.routeEmptyState]}>
+              <Ionicons name="search-outline" size={24} color={palette.textFaint} />
+              <Text style={styles.emptyTitle}>No routes found</Text>
+              <Text style={styles.emptyText}>
+                No routes match the selected source and destination.
+              </Text>
+            </View>
+          ) : null}
+        </Pressable>
+      ) : null}
+
+      {shouldShowNearbyLiveTrips ? (
+        <View style={[styles.card, styles.bottomCard]}>
+          <View style={styles.sectionTitleRow}>
+            <View style={styles.sectionBar} />
+            <Text style={styles.sectionTitle}>Live buses near you</Text>
+            <Text style={styles.sectionMeta}>Within 5 km</Text>
+          </View>
+
+          {locationBootState === 'pending' || nearbyLiveLoading ? (
+            <View style={styles.hintRow}>
+              <Ionicons name="radio-outline" size={13} color={palette.textFaint} />
+              <Text style={styles.hint}>
+                {locationBootState === 'pending' ? 'Getting your current location...' : 'Finding nearby live buses...'}
+              </Text>
+            </View>
+          ) : locationBootState === 'unavailable' ? (
+            <View style={styles.emptyState}>
+              <Ionicons name="location-outline" size={24} color={palette.textFaint} />
+              <Text style={styles.emptyTitle}>Location unavailable</Text>
+              <Text style={styles.emptyText}>Turn on location access to see live buses within 5 km of you.</Text>
+            </View>
+          ) : nearbyLiveError ? (
+            <View style={styles.emptyState}>
+              <Ionicons name="bus-outline" size={24} color={palette.textFaint} />
+              <Text style={styles.emptyTitle}>Nearby live buses unavailable</Text>
+              <Text style={styles.emptyText}>Live buses near your location could not be loaded right now.</Text>
+            </View>
+          ) : nearbyLiveTrips.length ? (
+            <View style={styles.nearbyTripsList}>
+              {nearbyLiveTrips.map(trip => (
+                <TouchableOpacity
+                  key={trip.tripId}
+                  style={styles.nearbyTripCard}
+                  activeOpacity={0.85}
+                  onPress={() => {
+                    setActiveRouteId(trip.routeId);
+                    void loadLiveStatus(trip.routeId);
+                  }}
+                >
+                  <View style={styles.nearbyTripIconWrap}>
+                    <Ionicons name="bus" size={28} color="#203d7a" />
+                  </View>
+                  <View style={styles.nearbyTripContent}>
+                    <View style={styles.nearbyTripTopRow}>
+                      <Text style={styles.nearbyTripBusNumber}>{trip.busNumber}</Text>
+                      <View style={styles.nearbyTripEtaWrap}>
+                        <Text style={styles.nearbyTripEtaValue}>{trip.minutesAway} min</Text>
+                        <Text style={styles.nearbyTripEtaLabel}>Away</Text>
+                      </View>
+                    </View>
+                    <Text style={styles.nearbyTripRoute} numberOfLines={1}>
+                      {trip.source} {'->'} {trip.destination}
+                    </Text>
+                    <View style={styles.nearbyTripProgressRow}>
+                      <View style={[styles.nearbyTripDot, styles.nearbyTripDotActive]} />
+                      <View style={[styles.nearbyTripLine, styles.nearbyTripLineActive]} />
+                      <View style={[styles.nearbyTripDot, styles.nearbyTripDotActive]} />
+                      <View style={styles.nearbyTripLine} />
+                      <View style={styles.nearbyTripDot} />
+                      <View style={styles.nearbyTripLine} />
+                      <View style={styles.nearbyTripDot} />
+                    </View>
+                  </View>
+                </TouchableOpacity>
+              ))}
+            </View>
+          ) : (
+            <View style={styles.emptyState}>
+              <Ionicons name="bus-outline" size={24} color={palette.textFaint} />
+              <Text style={styles.emptyTitle}>No live buses nearby</Text>
+              <Text style={styles.emptyText}>No active buses are currently within 5 km of your location.</Text>
+            </View>
           )}
         </View>
-
-        {/* Favourites header */}
-        <View style={styles.favoritesHeader}>
-          <Text style={styles.favoriteHint}>
-            Tap a stop to set {activeStopField === 'from' ? 'origin' : 'destination'}
-          </Text>
-          <TouchableOpacity
-            style={[
-              styles.addFavoriteButton,
-              favoriteStops.length >= maxFavoriteStops && styles.addFavoriteButtonDisabled
-            ]}
-            onPress={() => {
-              setFavoriteSearch('');
-              setShowFavoritePicker(current => !current);
-            }}
-            disabled={favoriteStops.length >= maxFavoriteStops}
-          >
-            <Ionicons
-              name={showFavoritePicker ? 'close-outline' : 'add-outline'}
-              size={15}
-              color={palette.ctaText}
-            />
-            <Text style={styles.addFavoriteButtonText}>
-              {favoriteStops.length >= maxFavoriteStops
-                ? `Max ${maxFavoriteStops}`
-                : showFavoritePicker
-                  ? 'Close'
-                  : 'Add stop'}
-            </Text>
-          </TouchableOpacity>
-        </View>
-
-        {/* Favourite chips */}
-        <View style={styles.favoriteChipsRow}>
-          {favoriteStops.map(stop => {
-            const isFrom = from === stop;
-            const isTo = to === stop;
-            return (
-              <TouchableOpacity
-                key={stop}
-                style={[
-                  styles.favoriteChip,
-                  isFrom && styles.favoriteChipFrom,
-                  isTo && styles.favoriteChipTo
-                ]}
-                onPress={() => handleStopSelect(stop)}
-                onLongPress={() => setFavoriteRemoveMode(true)}
-                delayLongPress={250}
-              >
-                {favoriteRemoveMode && (
-                  <TouchableOpacity
-                    style={styles.removeFavoriteButton}
-                    onPress={event => {
-                      event.stopPropagation();
-                      handleRemoveFavorite(stop);
-                    }}
-                  >
-                    <Text style={styles.removeFavoriteButtonText}>-</Text>
-                  </TouchableOpacity>
-                )}
-                {isFrom && <Ionicons name="navigate" size={10} color={palette.accent} style={{ marginRight: 4 }} />}
-                {isTo && <Ionicons name="location" size={10} color={palette.blue} style={{ marginRight: 4 }} />}
-                <Text
-                  style={[
-                    styles.favoriteChipText,
-                    isFrom && styles.favoriteChipTextFrom,
-                    isTo && styles.favoriteChipTextTo
-                  ]}
-                >
-                  {stop}
-                </Text>
-                {liveRoute?.stops?.some(s => s.name.toLowerCase() === stop.toLowerCase() && s.latitude && s.longitude) && (
-                  <TouchableOpacity
-                    onPress={event => { event.stopPropagation(); navigateToStop(stop); }}
-                    hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
-                    style={{ marginLeft: 4 }}
-                  >
-                    <Ionicons name="navigate-outline" size={11} color={isFrom ? palette.accent : isTo ? palette.blue : palette.textMuted} />
-                  </TouchableOpacity>
-                )}
-              </TouchableOpacity>
-            );
-          })}
-        </View>
-
-        {/* Favourite picker */}
-        {showFavoritePicker && (
-          <View style={styles.favoritePickerCard}>
-            <Text style={styles.favoritePickerTitle}>Add favourite stops</Text>
-            <Text style={styles.favoritePickerHint}>
-              From all available routes · max {maxFavoriteStops}
-            </Text>
-            {favoriteStops.length < maxFavoriteStops ? (
-              <>
-                <View style={styles.favoriteSearchRow}>
-                  <Ionicons name="search-outline" size={14} color={palette.textFaint} />
-                  <TextInput
-                    value={favoriteSearch}
-                    onChangeText={setFavoriteSearch}
-                    placeholder="Search stops"
-                    placeholderTextColor={palette.textFaint}
-                    style={styles.favoriteSearchInput}
-                    autoCorrect={false}
-                    autoCapitalize="words"
-                  />
-                  {favoriteSearch.trim() ? (
-                    <TouchableOpacity onPress={() => setFavoriteSearch('')}>
-                      <Ionicons name="close-circle" size={16} color={palette.textFaint} />
-                    </TouchableOpacity>
-                  ) : null}
-                </View>
-                <Text style={styles.favoritePickerSubhint}>
-                  {favoriteSearch.trim()
-                    ? 'Matching stops'
-                    : `Showing ${Math.min(favoritePickerStops.length, favoritePickerPreviewCount)} suggested stops`}
-                </Text>
-                <ScrollView
-                  style={styles.favoritePickerScroll}
-                  contentContainerStyle={styles.favoritePickerScrollContent}
-                  nestedScrollEnabled
-                  showsVerticalScrollIndicator={false}
-                >
-                  <View style={styles.favoriteChipsRow}>
-                    {favoritePickerStops.length ? (
-                      favoritePickerStops.map(stop => (
-                        <TouchableOpacity
-                          key={stop}
-                          style={styles.favoritePickerChip}
-                          onPress={event => {
-                            event.stopPropagation();
-                            handleAddFavorite(stop);
-                          }}
-                        >
-                          <Ionicons name="add-outline" size={13} color={palette.accent} />
-                          <Text style={styles.favoritePickerChipText}>{stop}</Text>
-                        </TouchableOpacity>
-                      ))
-                    ) : (
-                      <Text style={styles.hint}>
-                        No stop names match "{favoriteSearch.trim()}".
-                      </Text>
-                    )}
-                  </View>
-                </ScrollView>
-              </>
-            ) : null}
-            {favoriteStops.length >= maxFavoriteStops ? (
-              <Text style={styles.hint}>
-                {`You already have ${maxFavoriteStops} favourite stops.`}
-              </Text>
-            ) : null}
-          </View>
-        )}
-
-        {/* Matching routes */}
-        {matchingRoutePreviews.length > 0 ? (
-          <View style={styles.routeList}>
-            {matchingRoutePreviews.map(({ route, stops }) => (
-              <Pressable
-                key={route.id}
-                style={styles.routeCard}
-                onPress={() => setSelectedRoutePreview({ route, stops })}
-              >
-                <View style={styles.routeCardAccent} />
-                <View style={styles.routeCardBody}>
-                  <View style={styles.routeTop}>
-                    <View style={styles.routeTopLeft}>
-                      <View style={styles.routeCodeBadge}>
-                        <Text style={styles.routeCodeBadgeText}>{route.routeCode}</Text>
-                      </View>
-                      <Text style={styles.routePath}>
-                        {route.source}{'  ->  '}{route.destination}
-                      </Text>
-                    </View>
-                    <Animated.View
-                      style={[
-                        styles.liveButtonWrap,
-                        {
-                          opacity: liveButtonGlowOpacity,
-                          transform: [{ scale: liveButtonScale }],
-                        },
-                      ]}
-                    />
-                    <TouchableOpacity
-                      style={styles.liveButton}
-                      onPress={() => {
-                        setActiveRouteId(route.id);
-                        void loadLiveStatus(route.id);
-                      }}
-                    >
-                      <Animated.View style={[styles.liveDotSmall, { transform: [{ scale: liveDotScale }] }]} />
-                      <Text style={styles.liveButtonText}>Live</Text>
-                    </TouchableOpacity>
-                  </View>
-                  <Text style={styles.routeName}>{route.routeName}</Text>
-                  <Text style={styles.routeStops} numberOfLines={2}>
-                    {stops.join('  ·  ')}
-                  </Text>
-                </View>
-              </Pressable>
-            ))}
-          </View>
-        ) : hasRouteSearch && !loadingRoutes && !routesError ? (
-          <View style={[styles.emptyState, styles.routeEmptyState]}>
-            <Ionicons name="search-outline" size={24} color={palette.textFaint} />
-            <Text style={styles.emptyTitle}>No routes found</Text>
-            <Text style={styles.emptyText}>
-              No routes match the selected source and destination.
-            </Text>
-          </View>
-        ) : null}
-      </Pressable>
+      ) : null}
 
       <Modal
         visible={Boolean(selectedRoutePreview)}
@@ -1864,40 +1966,6 @@ lb.style.left=W/2+'px';lb.style.top=H/2+'px';map.appendChild(lb);
         </View>
       )}
 
-      {/* How it works */}
-      <View style={[styles.card, styles.bottomCard]}>
-        <TouchableOpacity
-          style={styles.collapseHeader}
-          onPress={() => setShowHowItWorks(current => !current)}
-        >
-          <View style={styles.sectionTitleRow}>
-            <View style={styles.sectionBarBlue} />
-            <Text style={styles.sectionTitle}>How it works</Text>
-          </View>
-          <Ionicons
-            name={showHowItWorks ? 'chevron-up-outline' : 'chevron-down-outline'}
-            size={18}
-            color={palette.textMuted}
-          />
-        </TouchableOpacity>
-        {showHowItWorks &&
-          [
-            { icon: 'bus-outline' as const, text: 'Get on any supported qfare bus on your route.' },
-            { icon: 'qr-code-outline' as const, text: 'Scan the QR displayed on the bus using the app.' },
-            { icon: 'map-outline' as const, text: 'Select your boarding and alighting stops.' },
-            { icon: 'card-outline' as const, text: 'Pay instantly and receive your digital ticket.' }
-          ].map((item, index) => (
-            <View key={item.text} style={styles.howRow}>
-              <View style={styles.howIcon}>
-                <Ionicons name={item.icon} size={16} color={palette.accent} />
-              </View>
-              <View style={styles.howContent}>
-                <Text style={styles.howStep}>Step {index + 1}</Text>
-                <Text style={styles.howText}>{item.text}</Text>
-              </View>
-            </View>
-          ))}
-      </View>
     </ScrollView>
     </KeyboardAvoidingView>
   );
@@ -1906,7 +1974,7 @@ lb.style.left=W/2+'px';lb.style.top=H/2+'px';map.appendChild(lb);
 const styles = StyleSheet.create({
   flex: { flex: 1, backgroundColor: palette.bg },
   container: { flex: 1, backgroundColor: palette.bg },
-  content: { padding: 20, paddingBottom: 32 },
+  content: { paddingHorizontal: 20, paddingTop: 0, paddingBottom: 32 },
 
   // Background decorations
   bgRingLarge: {
@@ -1921,74 +1989,88 @@ const styles = StyleSheet.create({
     position: 'absolute', top: -100, left: -70, width: 340, height: 340, borderRadius: 170,
     backgroundColor: 'rgba(0, 200, 150, 0.05)'
   },
-
-  // Top bar
-  topBar: {
+  // Header on hero
+  topBarOnHero: {
     flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
-    marginBottom: 22, paddingTop: 8
+    paddingHorizontal: 24
   },
   brandPill: {
-    backgroundColor: palette.surfaceMuted, borderWidth: 1, borderColor: palette.border,
+    backgroundColor: 'rgba(255,255,255,0.28)', borderWidth: 1, borderColor: 'rgba(16,36,60,0.10)',
     borderRadius: 14, paddingHorizontal: 16, paddingVertical: 8,
     flexDirection: 'row', alignItems: 'center', gap: 1
   },
   brandQ: { color: palette.accent, fontSize: 20, fontWeight: '900' },
-  brandFare: { color: palette.text, fontSize: 20, fontWeight: '900' },
+  brandFare: { color: '#10243c', fontSize: 20, fontWeight: '900' },
   topBarRight: { flexDirection: 'row', alignItems: 'center', gap: 10 },
   iconPill: {
-    width: 38, height: 38, borderRadius: 12, backgroundColor: palette.surfaceMuted,
-    borderWidth: 1, borderColor: palette.border, alignItems: 'center', justifyContent: 'center'
+    width: 38, height: 38, borderRadius: 12, backgroundColor: 'rgba(255,255,255,0.28)',
+    borderWidth: 1, borderColor: 'rgba(16,36,60,0.10)', alignItems: 'center', justifyContent: 'center'
   },
   avatarPill: {
-    width: 38, height: 38, borderRadius: 12, backgroundColor: palette.accentDeep,
-    alignItems: 'center', justifyContent: 'center', borderWidth: 1, borderColor: palette.accent
+    width: 38, height: 38, borderRadius: 12, backgroundColor: 'rgba(0, 200, 150, 0.88)',
+    alignItems: 'center', justifyContent: 'center', borderWidth: 1, borderColor: 'rgba(255,255,255,0.28)'
   },
   avatarText: { color: '#fff', fontWeight: '800', fontSize: 15 },
 
-  // Banner slider
-  sliderWrapper: {
-    borderRadius: 24, overflow: 'hidden', borderWidth: 1, borderColor: palette.border,
-    backgroundColor: palette.surface, marginBottom: 14
+  // Hero
+  heroBleed: {
+    marginLeft: -20,
+    marginRight: -20,
+    marginBottom: 18,
+    zIndex: 20,
   },
-  slideItem: { minHeight: 220 },
-  slideImage: { resizeMode: 'cover', opacity: 0.14 },
-  heroOverlay: { ...StyleSheet.absoluteFillObject, backgroundColor: palette.overlay },
-  slideContent: { padding: 26, justifyContent: 'center' },
-  eyebrowRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 10 },
-  eyebrowDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: palette.accent },
-  eyebrow: {
-    fontSize: 11, fontWeight: '700', textTransform: 'uppercase', letterSpacing: 1.2
+  heroBleedWithSuggestions: {
+    marginBottom: 220,
   },
-  slideTitle: {
-    color: palette.text, fontSize: 34, fontWeight: '900', lineHeight: 38, letterSpacing: -0.5
+  heroCard: {
+    minHeight: 356,
+    borderRadius: 0,
+    overflow: 'visible',
+    justifyContent: 'space-between',
   },
-  slideSubtitle: {
-    color: palette.textMuted, marginTop: 10, fontSize: 13, lineHeight: 21, maxWidth: '88%'
+  heroImage: {
+    resizeMode: 'cover',
   },
-  slideCta: {
-    marginTop: 16, borderWidth: 1, borderRadius: 14, paddingVertical: 11, paddingHorizontal: 16,
-    flexDirection: 'row', alignItems: 'center', gap: 8, alignSelf: 'flex-start',
-    backgroundColor: 'rgba(0,0,0,0.28)'
+  heroOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'transparent',
   },
-  slideCtaText: { fontSize: 14, fontWeight: '800' },
-  sliderDots: {
-    flexDirection: 'row', justifyContent: 'center', alignItems: 'center',
-    gap: 6, paddingVertical: 12
+  heroCopy: { paddingHorizontal: 24, paddingTop: 28, paddingBottom: 12 },
+  heroTitle: {
+    color: '#10243c',
+    fontSize: 30,
+    fontWeight: '900',
+    lineHeight: 34,
+    letterSpacing: -0.4,
   },
-  sliderDot: {
-    width: 6, height: 6, borderRadius: 3, backgroundColor: palette.border
+  heroSubtitle: {
+    color: 'rgba(16,36,60,0.78)',
+    marginTop: 8,
+    fontSize: 14,
+    lineHeight: 20,
+    maxWidth: '82%',
+    fontWeight: '600',
   },
-  sliderDotActive: { width: 18, backgroundColor: palette.accent },
+  heroSearchWrap: {
+    paddingHorizontal: 20,
+    paddingBottom: 20,
+    zIndex: 25,
+  },
 
   // Card base
   card: {
     backgroundColor: palette.surface, borderWidth: 1, borderColor: palette.border,
-    borderRadius: 24, padding: 18, marginBottom: 14
+    borderRadius: 24, padding: 18, marginBottom: 16,
+    shadowColor: '#a9c0d8',
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.12,
+    shadowRadius: 20,
+    elevation: 6,
   },
   bottomCard: { marginBottom: 0 },
 
   // Section headers
-  sectionTitleRow: { flexDirection: 'row', alignItems: 'center', gap: 10, marginBottom: 14 },
+  sectionTitleRow: { flexDirection: 'row', alignItems: 'center', gap: 10, marginBottom: 16 },
   sectionBar: { width: 3, height: 18, borderRadius: 2, backgroundColor: palette.accent },
   sectionBarBlue: { width: 3, height: 18, borderRadius: 2, backgroundColor: palette.blue },
   sectionTitle: { color: palette.text, fontSize: 15, fontWeight: '800' },
@@ -1996,30 +2078,119 @@ const styles = StyleSheet.create({
 
   // Stop selectors
   stopSelectorWrapper: { position: 'relative', zIndex: 10 },
-  selectorRow: { flexDirection: 'row', gap: 10, marginBottom: 2 },
-  stopSelectorCard: {
-    flex: 1, backgroundColor: palette.surfaceStrong, borderRadius: 18,
-    paddingHorizontal: 14, paddingVertical: 14, borderWidth: 1.5
+  searchCard: {
+    backgroundColor: '#ffffff',
+    borderRadius: 22,
+    borderWidth: 1,
+    borderColor: 'rgba(16,36,60,0.12)',
+    padding: 14,
+    marginBottom: 2,
+    shadowColor: '#8eb4d7',
+    shadowOffset: { width: 0, height: 10 },
+    shadowOpacity: 0.18,
+    shadowRadius: 22,
+    elevation: 6,
   },
-  stopSelectorCardActiveFrom: { borderColor: 'rgba(0, 200, 150, 0.40)', backgroundColor: 'rgba(0, 200, 150, 0.06)' },
-  stopSelectorCardActiveTo: { borderColor: 'rgba(68, 153, 255, 0.40)', backgroundColor: 'rgba(68, 153, 255, 0.06)' },
-  stopSelectorLabelFrom: {
-    color: palette.accent, fontSize: 11, fontWeight: '800', textTransform: 'uppercase', letterSpacing: 1, marginBottom: 6
+  routesContainer: {
+    position: 'relative',
+    paddingRight: 48,
+    gap: 10,
   },
-  stopSelectorLabelTo: {
-    color: palette.blue, fontSize: 11, fontWeight: '800', textTransform: 'uppercase', letterSpacing: 1, marginBottom: 6
+  routeLine: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
   },
-  stopInputRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
-  stopInputIcon: { opacity: 0.8 },
-  stopSelectorInput: { flex: 1, paddingVertical: 0, paddingHorizontal: 0, fontSize: 15, fontWeight: '800' },
-  stopSelectorValueFrom: { color: palette.accent },
-  stopSelectorValueTo: { color: palette.blue },
-  inputFrom: { borderColor: 'rgba(0, 200, 150, 0.22)' },
-  inputTo: { borderColor: 'rgba(68, 153, 255, 0.22)' },
-  swapButton: {
-    alignSelf: 'center', width: 42, height: 42, borderRadius: 21,
-    backgroundColor: palette.surfaceStrong, borderWidth: 1, borderColor: palette.border,
-    alignItems: 'center', justifyContent: 'center'
+  lineColumn: {
+    width: 16,
+    alignItems: 'center',
+    alignSelf: 'stretch',
+  },
+  fromDot: {
+    width: 12,
+    height: 12,
+    borderRadius: 6,
+    backgroundColor: palette.accent,
+    marginTop: 18,
+  },
+  dashedLine: {
+    width: 2,
+    flex: 1,
+    marginTop: 4,
+    marginBottom: -8,
+    backgroundColor: 'rgba(167, 182, 200, 0.7)',
+  },
+  toDotOuter: {
+    width: 12,
+    height: 12,
+    borderRadius: 6,
+    borderWidth: 2.5,
+    borderColor: palette.accent,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginTop: 18,
+  },
+  toDotInner: {
+    width: 4,
+    height: 4,
+    borderRadius: 2,
+    backgroundColor: palette.accent,
+  },
+  inputBox: {
+    flex: 1,
+    backgroundColor: '#fbfdff',
+    borderWidth: 1,
+    borderColor: 'rgba(16,36,60,0.16)',
+    borderRadius: 14,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    minHeight: 60,
+  },
+  inputBoxTo: {
+    backgroundColor: '#fbfdff',
+    borderColor: 'rgba(16,36,60,0.16)',
+  },
+  inputBoxActiveFrom: {
+    borderColor: 'rgba(0, 200, 150, 0.40)',
+    backgroundColor: 'rgba(0, 200, 150, 0.06)',
+  },
+  inputBoxActiveTo: {
+    borderColor: 'rgba(68, 153, 255, 0.40)',
+    backgroundColor: 'rgba(68, 153, 255, 0.06)',
+  },
+  inputLabel: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: palette.textFaint,
+    marginBottom: 4,
+  },
+  input: {
+    flex: 1,
+    paddingVertical: 0,
+    paddingHorizontal: 0,
+    fontSize: 15,
+    fontWeight: '800',
+    color: palette.text,
+    minHeight: 22,
+  },
+  swapButtonModern: {
+    position: 'absolute',
+    right: 0,
+    top: '50%',
+    marginTop: -18,
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: '#ffffff',
+    borderWidth: 1,
+    borderColor: palette.border,
+    alignItems: 'center',
+    justifyContent: 'center',
+    shadowColor: '#9cb8d6',
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.18,
+    shadowRadius: 14,
+    elevation: 5,
   },
 
   // Autocomplete suggestions — absolute dropdown
@@ -2031,13 +2202,13 @@ const styles = StyleSheet.create({
     borderRadius: 16,
     borderWidth: 1,
     borderColor: palette.border,
-    backgroundColor: palette.surfaceStrong,
+    backgroundColor: palette.surface,
     zIndex: 50,
-    elevation: 8,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.18,
-    shadowRadius: 10,
+    elevation: 12,
+    shadowColor: '#8faecc',
+    shadowOffset: { width: 0, height: 10 },
+    shadowOpacity: 0.22,
+    shadowRadius: 20,
     overflow: 'hidden',
   },
   suggestionItem: {
@@ -2054,6 +2225,51 @@ const styles = StyleSheet.create({
   },
 
   // Favourites
+  favoriteOverlayWrap: {
+    position: 'relative',
+    zIndex: 30,
+    marginBottom: 16,
+  },
+  favoriteOverlayWrapOpen: {
+    paddingBottom: 290,
+  },
+  favoriteStrip: {
+    marginTop: -4,
+    marginBottom: 0,
+    marginLeft: -20,
+    marginRight: -20,
+    paddingLeft: 20,
+    paddingTop: 8,
+    paddingBottom: 4,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    zIndex: 10,
+  },
+  favoriteStripContent: {
+    paddingRight: 20,
+    paddingTop: 8,
+    paddingBottom: 2,
+    gap: 6,
+    alignItems: 'center',
+  },
+  compactAddFavoriteButton: {
+    backgroundColor: '#ffffff',
+    borderWidth: 1,
+    borderColor: palette.ctaSoft,
+    borderRadius: 999,
+    paddingHorizontal: 10,
+    paddingVertical: 7,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    shadowColor: '#a8bfd7',
+    shadowOffset: { width: 0, height: 5 },
+    shadowOpacity: 0.16,
+    shadowRadius: 12,
+    elevation: 4,
+  },
+  compactAddFavoriteButtonText: { color: palette.ctaText, fontSize: 11.5, fontWeight: '700' },
   favoritesHeader: {
     marginTop: 16, marginBottom: 12, flexDirection: 'row',
     justifyContent: 'space-between', alignItems: 'center', gap: 10
@@ -2067,25 +2283,42 @@ const styles = StyleSheet.create({
   addFavoriteButtonDisabled: { opacity: 0.5 },
   addFavoriteButtonText: { color: palette.ctaText, fontSize: 12, fontWeight: '700' },
   favoriteChipsRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
-  favoriteChip: {
-    backgroundColor: palette.surfaceStrong, borderWidth: 1, borderColor: palette.border,
-    borderRadius: 999, paddingLeft: 14, paddingRight: 14, paddingVertical: 10,
-    position: 'relative', flexDirection: 'row', alignItems: 'center'
+  favoriteChipWrap: {
+    position: 'relative',
+    paddingTop: 4,
+    paddingRight: 6,
   },
-  favoriteChipFrom: { backgroundColor: palette.accentSoft, borderColor: 'rgba(0, 200, 150, 0.32)' },
-  favoriteChipTo: { backgroundColor: palette.blueSoft, borderColor: 'rgba(68, 153, 255, 0.30)' },
-  favoriteChipText: { color: palette.textMuted, fontSize: 13, fontWeight: '700' },
-  favoriteChipTextFrom: { color: palette.accent },
-  favoriteChipTextTo: { color: palette.blue },
+  favoriteChip: {
+    backgroundColor: 'rgba(255,255,255,0.96)', borderWidth: 1, borderColor: palette.border,
+    borderRadius: 999, paddingLeft: 10, paddingRight: 10, paddingVertical: 6,
+    position: 'relative', flexDirection: 'row', alignItems: 'center',
+  },
+  favoriteChipFrom: { backgroundColor: palette.accent, borderColor: palette.accent },
+  favoriteChipTo: { backgroundColor: palette.blue, borderColor: palette.blue },
+  favoriteChipText: { color: palette.textMuted, fontSize: 11.5, fontWeight: '700' },
+  favoriteChipTextFrom: { color: '#ffffff' },
+  favoriteChipTextTo: { color: '#ffffff' },
   removeFavoriteButton: {
-    position: 'absolute', top: -7, right: -5, width: 20, height: 20, borderRadius: 10,
+    position: 'absolute', top: 0, right: 0, width: 20, height: 20, borderRadius: 10,
     backgroundColor: '#c53b4a', alignItems: 'center', justifyContent: 'center',
-    borderWidth: 1, borderColor: 'rgba(255,255,255,0.18)'
+    borderWidth: 1, borderColor: 'rgba(255,255,255,0.18)',
+    zIndex: 2,
   },
   removeFavoriteButtonText: { color: '#ffffff', fontSize: 16, lineHeight: 17, fontWeight: '800' },
   favoritePickerCard: {
-    marginTop: 14, backgroundColor: palette.surfaceStrong, borderWidth: 1,
-    borderColor: palette.border, borderRadius: 18, padding: 14
+    position: 'absolute',
+    top: 48,
+    left: 0,
+    right: 0,
+    marginTop: 10,
+    marginBottom: 0,
+    backgroundColor: palette.surfaceStrong, borderWidth: 1,
+    borderColor: palette.border, borderRadius: 18, padding: 14,
+    zIndex: 40, elevation: 12,
+    shadowColor: '#8faecc',
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.22,
+    shadowRadius: 22,
   },
   favoritePickerTitle: { color: palette.text, fontSize: 14, fontWeight: '800' },
   favoritePickerHint: { color: palette.textMuted, fontSize: 12, marginTop: 3, marginBottom: 12 },
@@ -2108,7 +2341,7 @@ const styles = StyleSheet.create({
   favoritePickerChipText: { color: palette.text, fontSize: 12.5, fontWeight: '600' },
 
   routeModalBackdrop: {
-    flex: 1, backgroundColor: 'rgba(6, 17, 30, 0.78)', padding: 20, justifyContent: 'center'
+    flex: 1, backgroundColor: 'rgba(15, 23, 42, 0.18)', padding: 20, justifyContent: 'center'
   },
   routeModalCard: {
     maxHeight: '72%', backgroundColor: palette.surface, borderWidth: 1, borderColor: palette.border,
@@ -2143,13 +2376,18 @@ const styles = StyleSheet.create({
   navigatePromptButtonDisabled: { opacity: 0.5 },
 
   // Route list
-  routeList: { marginTop: 14, gap: 10 },
+  routeList: { marginTop: 14, gap: 12 },
   routeCard: {
     backgroundColor: palette.surfaceStrong, borderRadius: 18, borderWidth: 1,
-    borderColor: palette.border, overflow: 'hidden'
+    borderColor: palette.border, overflow: 'hidden',
+    shadowColor: '#a8bfd7',
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.12,
+    shadowRadius: 18,
+    elevation: 5,
   },
   routeCardAccent: { height: 2, backgroundColor: palette.blue },
-  routeCardBody: { padding: 14 },
+  routeCardBody: { padding: 16 },
   routeTop: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', gap: 10 },
   routeTopLeft: { flex: 1, gap: 6 },
   routeCodeBadge: {
@@ -2173,6 +2411,85 @@ const styles = StyleSheet.create({
   liveDotSmall: { width: 6, height: 6, borderRadius: 3, backgroundColor: palette.accent },
   liveButtonText: { color: palette.accent, fontSize: 12, fontWeight: '700' },
   routeStops: { color: palette.textFaint, marginTop: 6, lineHeight: 18, fontSize: 12 },
+  nearbyTripsList: { gap: 12 },
+  nearbyTripCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    backgroundColor: '#ffffff',
+    borderWidth: 1,
+    borderColor: 'rgba(16, 36, 60, 0.10)',
+    borderRadius: 18,
+    paddingHorizontal: 14,
+    paddingVertical: 14,
+    shadowColor: '#a7bdd5',
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.10,
+    shadowRadius: 16,
+    elevation: 4,
+  },
+  nearbyTripIconWrap: {
+    width: 42,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  nearbyTripContent: { flex: 1 },
+  nearbyTripTopRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    justifyContent: 'space-between',
+    gap: 12,
+  },
+  nearbyTripBusNumber: {
+    color: '#10243c',
+    fontSize: 23,
+    fontWeight: '800',
+  },
+  nearbyTripEtaWrap: {
+    alignItems: 'flex-end',
+    minWidth: 62,
+  },
+  nearbyTripEtaValue: {
+    color: '#1ca36c',
+    fontSize: 16,
+    fontWeight: '800',
+  },
+  nearbyTripEtaLabel: {
+    color: '#203d7a',
+    fontSize: 13,
+    fontWeight: '700',
+    marginTop: 2,
+  },
+  nearbyTripRoute: {
+    color: '#364a67',
+    fontSize: 16,
+    fontWeight: '600',
+    marginTop: 2,
+  },
+  nearbyTripProgressRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginTop: 12,
+  },
+  nearbyTripDot: {
+    width: 9,
+    height: 9,
+    borderRadius: 999,
+    backgroundColor: '#aab5c4',
+  },
+  nearbyTripDotActive: {
+    backgroundColor: '#15955f',
+  },
+  nearbyTripLine: {
+    flex: 1,
+    height: 3,
+    borderRadius: 999,
+    backgroundColor: '#cbd4df',
+    marginHorizontal: 4,
+  },
+  nearbyTripLineActive: {
+    backgroundColor: '#15955f',
+  },
 
   // Live section
   livePulse: { width: 8, height: 8, borderRadius: 4, backgroundColor: palette.textFaint },
@@ -2180,7 +2497,12 @@ const styles = StyleSheet.create({
   liveRouteName: { color: palette.textMuted, marginBottom: 12, fontSize: 13 },
   emptyState: {
     backgroundColor: palette.surfaceStrong, borderWidth: 1, borderColor: palette.border,
-    borderRadius: 16, padding: 20, alignItems: 'center', gap: 8
+    borderRadius: 16, padding: 20, alignItems: 'center', gap: 8,
+    shadowColor: '#b1c7dc',
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.10,
+    shadowRadius: 16,
+    elevation: 4,
   },
   routeEmptyState: { marginTop: 14 },
   emptyTitle: { color: palette.textMuted, fontSize: 14, fontWeight: '700' },
@@ -2190,8 +2512,13 @@ const styles = StyleSheet.create({
     borderWidth: 1, borderColor: palette.border, marginBottom: 10
   },
   liveTripCard: {
-    backgroundColor: palette.surfaceStrong, borderRadius: 14, padding: 14, marginTop: 8,
-    borderWidth: 1, borderColor: palette.border
+    backgroundColor: palette.surfaceStrong, borderRadius: 18, padding: 16, marginTop: 10,
+    borderWidth: 1, borderColor: palette.border,
+    shadowColor: '#a8bfd7',
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.12,
+    shadowRadius: 18,
+    elevation: 5,
   },
   liveTripHeader: { flexDirection: 'row', alignItems: 'center', gap: 10 },
   liveBusBadge: { flexDirection: 'row', alignItems: 'center', gap: 6 },
@@ -2269,7 +2596,7 @@ const styles = StyleSheet.create({
     padding: 10,
     borderWidth: 1,
     borderColor: 'rgba(68, 153, 255, 0.28)',
-    backgroundColor: 'rgba(68, 153, 255, 0.08)',
+    backgroundColor: 'rgba(41, 125, 224, 0.10)',
   },
   waitingBannerTop: {
     flexDirection: 'row',
@@ -2284,7 +2611,7 @@ const styles = StyleSheet.create({
     borderRadius: 14,
     borderWidth: 1,
     borderColor: 'rgba(68, 153, 255, 0.24)',
-    backgroundColor: 'rgba(10, 18, 34, 0.42)',
+    backgroundColor: 'rgba(41, 125, 224, 0.08)',
     padding: 10,
     flexDirection: 'row',
     alignItems: 'center',
@@ -2305,7 +2632,7 @@ const styles = StyleSheet.create({
     paddingVertical: 9,
     borderWidth: 1,
     borderColor: 'rgba(68, 153, 255, 0.32)',
-    backgroundColor: 'rgba(10, 18, 34, 0.5)',
+    backgroundColor: 'rgba(41, 125, 224, 0.08)',
   },
   waitingButtonActive: {
     backgroundColor: palette.blue,
@@ -2326,33 +2653,19 @@ const styles = StyleSheet.create({
     opacity: 1,
   },
 
-  // How it works
-  collapseHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
-  howRow: {
-    flexDirection: 'row', alignItems: 'flex-start', gap: 14, paddingVertical: 12,
-    borderTopWidth: 1, borderTopColor: palette.border
-  },
-  howIcon: {
-    width: 38, height: 38, borderRadius: 12, backgroundColor: palette.accentSoft,
-    borderWidth: 1, borderColor: 'rgba(0, 200, 150, 0.20)', alignItems: 'center', justifyContent: 'center'
-  },
-  howContent: { flex: 1, gap: 3 },
-  howStep: { color: palette.accent, fontSize: 10.5, fontWeight: '800', textTransform: 'uppercase', letterSpacing: 0.8 },
-  howText: { color: palette.textMuted, fontSize: 13, lineHeight: 19 },
-
   // Bus load banner
   loadBanner: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
     gap: 10, marginBottom: 10, borderRadius: 12, padding: 10,
-    borderWidth: 1, borderColor: 'rgba(255,255,255,0.08)',
+    borderWidth: 1, borderColor: palette.border,
   },
   loadBannerLeft: { flexDirection: 'row', alignItems: 'center', gap: 9, flex: 1 },
   loadStatusText: { fontSize: 13, fontWeight: '800' },
-  loadSubText: { color: 'rgba(255,255,255,0.45)', fontSize: 11.5, marginTop: 1 },
+  loadSubText: { color: palette.textFaint, fontSize: 11.5, marginTop: 1 },
   loadBarWrap: { alignItems: 'flex-end', gap: 3, minWidth: 64 },
   loadBarTrack: {
     width: 60, height: 5, borderRadius: 3,
-    backgroundColor: 'rgba(255,255,255,0.1)', overflow: 'hidden',
+    backgroundColor: 'rgba(16, 36, 60, 0.10)', overflow: 'hidden',
   },
   loadBarFill: { height: '100%', borderRadius: 3 },
   loadPercent: { fontSize: 11, fontWeight: '800' },

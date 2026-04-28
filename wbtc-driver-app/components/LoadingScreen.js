@@ -58,14 +58,14 @@ const styles = StyleSheet.create({
     position: "absolute",
     width: 200,
     height: 200,
-    backgroundColor: "#1DB954",
+    backgroundColor: "#0890C8",
     borderRadius: 100,
     opacity: 0.15,
     top: "40%",
   },
   logo: {
     width: 240,
-    height: 96,
+    height: 129,
   },
   textRow: {
     marginTop: 22,

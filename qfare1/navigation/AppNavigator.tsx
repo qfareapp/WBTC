@@ -73,12 +73,21 @@ const TabsNavigator = () => (
     screenOptions={{
       headerShown: false,
       tabBarStyle: {
-        backgroundColor: palette.surfaceMuted,
+        backgroundColor: palette.surface,
         borderTopColor: palette.border,
         borderTopWidth: 1,
+        marginHorizontal: 14,
+        marginBottom: 10,
+        borderRadius: 26,
         height: 88,
         paddingTop: 6,
-        paddingBottom: 18
+        paddingBottom: 18,
+        position: 'absolute',
+        shadowColor: '#9cb6d0',
+        shadowOffset: { width: 0, height: 8 },
+        shadowOpacity: 0.18,
+        shadowRadius: 20,
+        elevation: 12
       },
       tabBarActiveTintColor: palette.accent,
       tabBarInactiveTintColor: palette.textFaint,
@@ -211,7 +220,7 @@ const styles = StyleSheet.create({
     borderColor: palette.ctaSoft
   },
   scanTabIconActive: {
-    backgroundColor: palette.accentDeep,
+    backgroundColor: palette.accent,
     borderColor: palette.accent
   }
 });

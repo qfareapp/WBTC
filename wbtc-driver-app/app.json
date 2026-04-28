@@ -26,7 +26,7 @@
         "expo-notifications",
         {
           "icon": "./assets/images/android-icon-monochrome.png",
-          "color": "#00C87A",
+          "color": "#0890C8",
           "defaultChannel": "trip-offers",
           "sounds": [
             "./assets/sounds/qfare_bus_jingle.wav"

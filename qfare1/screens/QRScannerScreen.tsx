@@ -11,10 +11,12 @@ import {
 import { Camera, CameraView } from 'expo-camera';
 import { CompositeNavigationProp } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
-import { BottomTabNavigationProp } from '@react-navigation/bottom-tabs';
+import { BottomTabNavigationProp, useBottomTabBarHeight } from '@react-navigation/bottom-tabs';
 import { Ionicons } from '@expo/vector-icons';
+import RazorpayCheckout from 'react-native-razorpay';
 import { BottomTabParamList, RootStackParamList } from '../navigation/AppNavigator';
 import { apiGet, apiPost } from '../lib/api';
+import { useAuth } from '../lib/auth';
 import { saveTicket } from '../lib/ticketStorage';
 import { palette } from '../lib/theme';
 
@@ -56,8 +58,33 @@ type BookingResponse = {
     tripInstanceId: string | null;
   };
 };
+type PaymentOrderResponse = {
+  order: {
+    id: string;
+    amount: number;
+    currency: string;
+    receipt: string;
+    keyId: string;
+    description: string;
+    bookingPreview: {
+      busNumber: string;
+      routeId: string;
+      source: string;
+      destination: string;
+      passengerCount: number;
+      fare: number;
+    };
+  };
+};
+type RazorpaySuccess = {
+  razorpay_payment_id: string;
+  razorpay_order_id: string;
+  razorpay_signature: string;
+};
 
 const QRScannerScreen: React.FC<Props> = ({ navigation }) => {
+  const { token, user } = useAuth();
+  const tabBarHeight = useBottomTabBarHeight();
   const [permissionStatus, setPermissionStatus] = useState<string | null>(null);
   const [isScanning, setIsScanning] = useState(false);
   const [bus, setBus] = useState<BusProfile | null>(null);
@@ -155,19 +182,46 @@ const QRScannerScreen: React.FC<Props> = ({ navigation }) => {
       Alert.alert('Scan required', 'Scan the bus QR to load route details.');
       return;
     }
+    if (!token) {
+      Alert.alert('Sign in required', 'Please sign in again to continue with payment.');
+      return;
+    }
     if (!fromStop || !toStop || totalFare === null) {
       Alert.alert('Select stops', 'Pick both source and destination to continue.');
       return;
     }
     try {
-      const data = await apiPost<BookingResponse>('/api/public/bookings/demo', {
+      const orderData = await apiPost<PaymentOrderResponse>('/api/public/payments/razorpay/order', {
         busNumber: bus.busNumber,
         routeId: bus.routeId,
         source: fromStop,
         destination: toStop,
-        fare: totalFare,
         passengerCount,
-      });
+      }, token);
+      const razorpayResult = await RazorpayCheckout.open({
+        key: orderData.order.keyId,
+        amount: orderData.order.amount,
+        currency: orderData.order.currency,
+        name: 'qfare',
+        description: orderData.order.description,
+        order_id: orderData.order.id,
+        prefill: {
+          name: user?.name || '',
+          email: user?.email || '',
+          contact: user?.phone || '',
+        },
+        theme: {
+          color: palette.accentDeep,
+        },
+      }) as RazorpaySuccess;
+      const data = await apiPost<BookingResponse>('/api/public/payments/razorpay/verify', {
+        ...razorpayResult,
+        busNumber: bus.busNumber,
+        routeId: bus.routeId,
+        source: fromStop,
+        destination: toStop,
+        passengerCount,
+      }, token);
       const tripInstanceId = data.booking.tripInstanceId ?? null;
       await saveTicket({
         bookingId: data.booking.bookingId,
@@ -242,7 +296,10 @@ const QRScannerScreen: React.FC<Props> = ({ navigation }) => {
   };
 
   return (
-    <ScrollView style={styles.container} contentContainerStyle={styles.content}>
+    <ScrollView
+      style={styles.container}
+      contentContainerStyle={[styles.content, { paddingBottom: tabBarHeight + 28 }]}
+    >
       {/* Brand */}
       <View style={styles.topBar}>
         <View style={styles.brandPill}>
@@ -503,7 +560,7 @@ const styles = StyleSheet.create({
   cornerBR: { bottom: 70, right: 18, borderTopWidth: 0, borderLeftWidth: 0, borderBottomRightRadius: 8 },
   scannerOverlay: {
     ...StyleSheet.absoluteFillObject, justifyContent: 'flex-end', padding: 14,
-    backgroundColor: 'rgba(6, 17, 30, 0.55)', gap: 10
+    backgroundColor: 'rgba(15, 23, 42, 0.18)', gap: 10
   },
   overlayTextWrap: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8 },
   overlayText: { color: palette.textMuted, textAlign: 'center', fontSize: 13 },
@@ -512,7 +569,7 @@ const styles = StyleSheet.create({
     backgroundColor: palette.cta, paddingVertical: 14, borderRadius: 16, alignItems: 'center',
     borderWidth: 1, borderColor: palette.ctaSoft
   },
-  scanButtonActive: { backgroundColor: '#3a1a1a', borderColor: 'rgba(255, 143, 163, 0.40)' },
+  scanButtonActive: { backgroundColor: '#fde8ee', borderColor: 'rgba(215, 66, 98, 0.28)' },
   scanButtonText: { color: palette.ctaText, fontSize: 15, fontWeight: '800' },
 
   // Permission

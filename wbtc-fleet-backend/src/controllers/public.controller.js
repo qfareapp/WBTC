@@ -374,6 +374,134 @@ exports.getRouteLiveStatus = asyncHandler(async (req, res) => {
   });
 });
 
+exports.getNearestStop = asyncHandler(async (req, res) => {
+  const latitude = Number(req.query.latitude);
+  const longitude = Number(req.query.longitude);
+
+  if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) {
+    throw new ApiError(400, "latitude and longitude query params are required");
+  }
+
+  if (latitude < -90 || latitude > 90 || longitude < -180 || longitude > 180) {
+    throw new ApiError(400, "latitude/longitude out of range");
+  }
+
+  const stops = await RouteStop.find({
+    $or: [
+      { latitude: { $ne: null }, longitude: { $ne: null } },
+      { upLatitude: { $ne: null }, upLongitude: { $ne: null } },
+      { downLatitude: { $ne: null }, downLongitude: { $ne: null } },
+    ],
+  })
+    .select("routeId name index latitude longitude upLatitude upLongitude downLatitude downLongitude")
+    .sort({ name: 1, index: 1 })
+    .lean();
+
+  let nearest = null;
+
+  for (const stop of stops) {
+    const directionalCandidates = [
+      getStopFieldsForDirection(stop, "UP"),
+      getStopFieldsForDirection(stop, "DOWN"),
+      { latitude: stop.latitude, longitude: stop.longitude },
+    ];
+
+    for (const candidate of directionalCandidates) {
+      if (!hasCoords(candidate)) continue;
+
+      const distanceKm = haversineKm(latitude, longitude, candidate.latitude, candidate.longitude);
+      if (!nearest || distanceKm < nearest.distanceKm) {
+        nearest = {
+          routeId: String(stop.routeId),
+          stopName: stop.name,
+          stopIndex: stop.index,
+          latitude: candidate.latitude,
+          longitude: candidate.longitude,
+          distanceKm,
+        };
+      }
+    }
+  }
+
+  if (!nearest) {
+    throw new ApiError(404, "No geocoded stops found");
+  }
+
+  res.json({
+    ok: true,
+    nearestStop: {
+      routeId: nearest.routeId,
+      stopName: nearest.stopName,
+      stopIndex: nearest.stopIndex,
+      latitude: nearest.latitude,
+      longitude: nearest.longitude,
+      distanceKm: Math.round(nearest.distanceKm * 100) / 100,
+    },
+  });
+});
+
+exports.getNearbyLiveTrips = asyncHandler(async (req, res) => {
+  const latitude = Number(req.query.latitude);
+  const longitude = Number(req.query.longitude);
+  const radiusKm = Math.max(0.5, Math.min(20, Number(req.query.radiusKm) || 5));
+  const date = req.query.date ? String(req.query.date) : getOpsDate();
+
+  if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) {
+    throw new ApiError(400, "latitude and longitude query params are required");
+  }
+
+  if (latitude < -90 || latitude > 90 || longitude < -180 || longitude > 180) {
+    throw new ApiError(400, "latitude/longitude out of range");
+  }
+
+  const trips = await TripInstance.find({
+    date,
+    status: "Active",
+    conductorEndedAt: null,
+  })
+    .populate("busId", "busNumber")
+    .populate("routeId", "routeCode routeName source destination standardTripTimeMin")
+    .select("direction startTime endTime actualStartTime busId routeId lastLatitude lastLongitude lastLocationAt lastLocationName driverLastLatitude driverLastLongitude driverLastLocationAt")
+    .sort({ updatedAt: -1, startTime: 1 });
+
+  const nearbyTrips = trips
+    .map((trip) => {
+      const loc = resolveBestLocation(trip);
+      const route = trip.routeId;
+      if (!loc || !route || !trip.busId?.busNumber) return null;
+
+      const distanceKm = haversineKm(latitude, longitude, loc.lat, loc.lng);
+      if (distanceKm > radiusKm) return null;
+
+      const minutesAway = Math.max(1, Math.round((distanceKm / 25) * 60));
+
+      return {
+        tripId: String(trip._id),
+        routeId: String(route._id),
+        routeCode: route.routeCode,
+        routeName: route.routeName,
+        source: route.source,
+        destination: route.destination,
+        direction: trip.direction,
+        busNumber: trip.busId.busNumber,
+        distanceKm: Math.round(distanceKm * 100) / 100,
+        minutesAway,
+        lastLatitude: loc.lat,
+        lastLongitude: loc.lng,
+        lastLocationAt: loc.at || null,
+        lastLocationName: loc.name || null,
+      };
+    })
+    .filter(Boolean)
+    .sort((left, right) => left.distanceKm - right.distanceKm);
+
+  res.json({
+    ok: true,
+    radiusKm,
+    trips: nearbyTrips,
+  });
+});
+
 /**
  * Lookup or cache the geocoded coordinates for a bus-stop name.
  * Bus stops don't move so we cache forever in StopGeocode.

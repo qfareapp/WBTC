@@ -4,7 +4,7 @@ const logoSource = require("../assets/images/qfare-logo.png");
 
 export default function QfareLogo({ size = "large", align = "center" }) {
   const width = size === "small" ? 180 : 250;
-  const height = size === "small" ? 72 : 100;
+  const height = size === "small" ? 97 : 134;
 
   return (
     <View style={[styles.wrap, align === "left" ? styles.left : styles.center]}>

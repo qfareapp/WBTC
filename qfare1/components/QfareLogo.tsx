@@ -10,7 +10,7 @@ import {
 } from 'react-native';
 import { palette } from '../lib/theme';
 
-const LOGO_SOURCE = require('../assets/qfare-logo.png');
+const LOGO_SOURCE = require('../assets/qfare_navbar.png');
 
 type Props = {
   width?: number;
@@ -22,8 +22,8 @@ type Props = {
 };
 
 const QfareLogo: React.FC<Props> = ({
-  width = 108,
-  height = 42,
+  width = 120,
+  height = 28,
   withPill = false,
   resizeMode = 'contain',
   containerStyle,
@@ -38,8 +38,6 @@ const styles = StyleSheet.create({
   pill: {
     alignSelf: 'flex-start',
     backgroundColor: palette.surfaceMuted,
-    borderWidth: 1,
-    borderColor: palette.border,
     borderRadius: 14,
     paddingHorizontal: 12,
     paddingVertical: 8,

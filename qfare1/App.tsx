@@ -7,7 +7,7 @@ import AppNavigator from './navigation/AppNavigator';
 export default function App() {
   return (
     <AuthProvider>
-      <StatusBar style="light" />
+      <StatusBar style="dark" translucent backgroundColor="transparent" />
       <NavigationContainer>
         <AppNavigator />
       </NavigationContainer>
