@@ -335,7 +335,7 @@ exports.listConductorOffers = asyncHandler(async (req, res) => {
     }
 
     const tripStartMinutes = toMinutes(trip.startTime);
-    if (tripStartMinutes !== null && tripStartMinutes < nowMinutes - 10) {
+    if (String(trip.status || "") !== "Active" && tripStartMinutes !== null && tripStartMinutes < nowMinutes - 10) {
       trackSkip(trip, "trip_offer_expired");
       continue;
     }

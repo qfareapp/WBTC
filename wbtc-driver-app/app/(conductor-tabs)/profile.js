@@ -98,6 +98,15 @@ const SignalBars = ({ strength }) => {
 const buildWhatsAppUrl = (message) =>
   `https://wa.me/${HELP_WHATSAPP_NUMBER}?text=${encodeURIComponent(message)}`;
 
+const formatDepot = (depot) => {
+  if (!depot) return "--";
+  if (typeof depot === "string") return depot;
+  if (typeof depot === "object") {
+    return depot.depotName || depot.depotCode || depot._id || depot.id || "--";
+  }
+  return "--";
+};
+
 const InfoRow = ({ icon, label, value, mono = false, muted = false, accent }) => (
   <View style={styles.infoRow}>
     <View style={styles.infoLead}>
@@ -132,14 +141,39 @@ export default function ConductorProfile() {
 
   useEffect(() => {
     const loadProfile = async () => {
-      const [conductorJson, printerJson] = await Promise.all([
+      const [apiBase, token, conductorJson, printerJson] = await Promise.all([
+        AsyncStorage.getItem(API_BASE_KEY),
+        AsyncStorage.getItem(TOKEN_KEY),
         AsyncStorage.getItem(CONDUCTOR_KEY),
         AsyncStorage.getItem(PRINTER_KEY),
       ]);
-      if (conductorJson) setConductor(JSON.parse(conductorJson));
+      const storedConductor = conductorJson ? JSON.parse(conductorJson) : null;
+      if (storedConductor) setConductor(storedConductor);
       if (printerJson) setConnectedPrinter(JSON.parse(printerJson));
+
+      if (!apiBase || !token) return;
+
+      try {
+        const response = await fetch(`${apiBase}/api/conductor-auth/me`, {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        const text = await response.text();
+        const data = text ? JSON.parse(text) : {};
+        if (!response.ok) throw new Error(data.message || "Failed to load conductor profile");
+
+        const merged = {
+          ...(storedConductor || {}),
+          ...(data.conductor || {}),
+        };
+        setConductor(merged);
+        await AsyncStorage.setItem(CONDUCTOR_KEY, JSON.stringify(merged));
+      } catch (error) {
+        if (!storedConductor) {
+          setNotice(error?.message || "Failed to load conductor profile.");
+        }
+      }
     };
-    loadProfile();
+    void loadProfile();
   }, []);
 
   const requestBluetoothPermissions = async () => {
@@ -275,7 +309,7 @@ export default function ConductorProfile() {
           </View>
           <InfoRow icon="person-outline" label={t("profile", "name")} value={conductor?.name || "--"} />
           <InfoRow icon="id-card-outline" label={t("profile", "employeeId")} value={conductor?.empId || "--"} mono />
-          <InfoRow icon="business-outline" label={t("profile", "depot")} value={conductor?.depotId || "--"} mono muted />
+          <InfoRow icon="business-outline" label={t("profile", "depot")} value={formatDepot(conductor?.depotId)} mono muted />
           <InfoRow icon="checkmark-circle-outline" label={t("profile", "status")} value={status} accent="#00C87A" />
           <InfoRow icon="location-outline" label={t("profile", "startLocation")} value={currentLocation} />
         </View>

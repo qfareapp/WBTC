@@ -121,8 +121,31 @@ export default function ConductorActive() {
   };
 
   const loadConductor = async () => {
+    const auth = await getAuth();
     const conductorJson = await AsyncStorage.getItem(CONDUCTOR_KEY);
-    if (conductorJson) setConductor(JSON.parse(conductorJson));
+    const storedConductor = conductorJson ? JSON.parse(conductorJson) : null;
+    if (storedConductor) setConductor(storedConductor);
+    if (!auth) return;
+
+    try {
+      const response = await fetch(`${auth.apiBase}/api/conductor-auth/me`, {
+        headers: { Authorization: `Bearer ${auth.token}` },
+      });
+      const text = await response.text();
+      const data = text ? JSON.parse(text) : {};
+      if (!response.ok) throw new Error(data.message || "Failed to load conductor profile");
+
+      const merged = {
+        ...(storedConductor || {}),
+        ...(data.conductor || {}),
+      };
+      setConductor(merged);
+      await AsyncStorage.setItem(CONDUCTOR_KEY, JSON.stringify(merged));
+    } catch (err) {
+      if (!storedConductor) {
+        setNotice(err.message);
+      }
+    }
   };
 
   const loadOffers = async () => {

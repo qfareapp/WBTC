@@ -4,6 +4,16 @@ const Conductor = require("../models/Conductor");
 const ApiError = require("../utils/ApiError");
 const asyncHandler = require("../utils/asyncHandler");
 
+const buildConductorProfile = (conductor) => ({
+  id: conductor._id,
+  name: conductor.name,
+  empId: conductor.empId,
+  depotId: conductor.depotId,
+  status: conductor.status,
+  currentLocation: conductor.currentLocation || null,
+  phone: conductor.phone || null,
+});
+
 const signConductorToken = (conductor) =>
   jwt.sign(
     { userId: conductor._id, role: "CONDUCTOR", depotId: conductor.depotId || null },
@@ -25,14 +35,17 @@ exports.loginConductor = asyncHandler(async (req, res) => {
     ok: true,
     token: signConductorToken(conductor),
     mustChangePassword: Boolean(conductor.mustChangePassword),
-    conductor: {
-      id: conductor._id,
-      name: conductor.name,
-      empId: conductor.empId,
-      depotId: conductor.depotId,
-      status: conductor.status,
-      currentLocation: conductor.currentLocation || null,
-    },
+    conductor: buildConductorProfile(conductor),
+  });
+});
+
+exports.getConductorProfile = asyncHandler(async (req, res) => {
+  const conductor = await Conductor.findById(req.user.userId).populate("depotId", "depotName depotCode");
+  if (!conductor) throw new ApiError(404, "Conductor not found");
+
+  res.json({
+    ok: true,
+    conductor: buildConductorProfile(conductor),
   });
 });
 
