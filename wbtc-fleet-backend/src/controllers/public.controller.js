@@ -27,6 +27,7 @@ const {
 
 const normalizeBusNumber = (value) => String(value || "").trim();
 const RAZORPAY_CURRENCY = "INR";
+const RAZORPAY_MIN_AMOUNT_PAISE = 100;
 
 const getRazorpayClient = () => {
   const keyId = String(process.env.RAZORPAY_KEY_ID || "").trim();
@@ -50,6 +51,17 @@ const getRazorpaySecret = () => {
 
 const createRazorpaySignature = ({ orderId, paymentId, secret }) =>
   crypto.createHmac("sha256", secret).update(`${orderId}|${paymentId}`).digest("hex");
+
+const mapRazorpayError = (error, fallbackMessage) => {
+  const statusCode = Number(error?.statusCode || error?.status || 0);
+  if (statusCode === 401) {
+    return new ApiError(401, "Razorpay authentication failed.");
+  }
+  if (statusCode === 400) {
+    return new ApiError(400, error?.error?.description || error?.description || fallbackMessage);
+  }
+  return new ApiError(500, fallbackMessage);
+};
 
 const createBookingId = () => `QF-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
 
@@ -728,20 +740,29 @@ exports.createPassengerPaymentOrder = asyncHandler(async (req, res) => {
   const receipt = `qfare_${Date.now()}`;
   const amountPaise = Math.round(context.totalFare * 100);
 
-  const order = await razorpay.orders.create({
-    amount: amountPaise,
-    currency: RAZORPAY_CURRENCY,
-    receipt,
-    notes: {
-      passengerId: String(req.passenger?.passengerId || ""),
-      busNumber: context.normalizedBusNumber,
-      routeId: String(req.body.routeId),
-      source: context.normalizedSource,
-      destination: context.normalizedDestination,
-      passengerCount: String(context.passengerCount),
-      passengerPushToken: String(passengerPushToken || ""),
-    },
-  });
+  if (amountPaise < RAZORPAY_MIN_AMOUNT_PAISE) {
+    throw new ApiError(400, "Minimum payable amount is INR 1.00.");
+  }
+
+  let order;
+  try {
+    order = await razorpay.orders.create({
+      amount: amountPaise,
+      currency: RAZORPAY_CURRENCY,
+      receipt,
+      notes: {
+        passengerId: String(req.passenger?.passengerId || ""),
+        busNumber: context.normalizedBusNumber,
+        routeId: String(req.body.routeId),
+        source: context.normalizedSource,
+        destination: context.normalizedDestination,
+        passengerCount: String(context.passengerCount),
+        passengerPushToken: String(passengerPushToken || ""),
+      },
+    });
+  } catch (error) {
+    throw mapRazorpayError(error, "Failed to create Razorpay order.");
+  }
 
   res.status(201).json({
     ok: true,
@@ -800,7 +821,12 @@ exports.verifyPassengerPaymentAndCreateBooking = asyncHandler(async (req, res) =
   });
 
   const razorpay = getRazorpayClient();
-  const payment = await razorpay.payments.fetch(razorpayPaymentId);
+  let payment;
+  try {
+    payment = await razorpay.payments.fetch(razorpayPaymentId);
+  } catch (error) {
+    throw mapRazorpayError(error, "Failed to fetch Razorpay payment.");
+  }
   if (!payment || String(payment.order_id) !== String(razorpayOrderId)) {
     throw new ApiError(400, "Payment does not belong to this order.");
   }
@@ -812,11 +838,16 @@ exports.verifyPassengerPaymentAndCreateBooking = asyncHandler(async (req, res) =
 
   let paymentStatus = String(payment.status || "").toUpperCase();
   if (paymentStatus === "AUTHORIZED") {
-    const captured = await razorpay.payments.capture(
-      razorpayPaymentId,
-      expectedAmountPaise,
-      RAZORPAY_CURRENCY
-    );
+    let captured;
+    try {
+      captured = await razorpay.payments.capture(
+        razorpayPaymentId,
+        expectedAmountPaise,
+        RAZORPAY_CURRENCY
+      );
+    } catch (error) {
+      throw mapRazorpayError(error, "Failed to capture Razorpay payment.");
+    }
     paymentStatus = String(captured.status || paymentStatus).toUpperCase();
   }
 

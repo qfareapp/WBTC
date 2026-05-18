@@ -352,6 +352,7 @@ const HomeScreen: React.FC<Props> = ({ navigation }) => {
   const [nearbyLiveTrips, setNearbyLiveTrips] = useState<NearbyLiveTrip[]>([]);
   const [nearbyLiveLoading, setNearbyLiveLoading] = useState(false);
   const [nearbyLiveError, setNearbyLiveError] = useState<string | null>(null);
+  const [expandedNearbyTripId, setExpandedNearbyTripId] = useState<string | null>(null);
   const liveButtonPulse = useRef(new Animated.Value(0)).current;
   const hasResolvedStartupLocation = useRef(false);
 
@@ -895,6 +896,409 @@ const HomeScreen: React.FC<Props> = ({ navigation }) => {
     outputRange: [1, 1.35],
   });
 
+  const renderActiveRouteLiveSection = () => (
+    <View style={styles.routeInlineLiveSection}>
+      <View style={styles.sectionTitleRow}>
+        <View style={[styles.livePulse, liveTrips.length > 0 && styles.livePulseActive]} />
+        <Text style={styles.sectionTitle}>Live buses</Text>
+        {liveRoute && <Text style={styles.sectionMeta}>{liveRoute.routeCode}</Text>}
+      </View>
+      {liveRoute && <Text style={styles.liveRouteName}>{liveRoute.routeName}</Text>}
+      {liveLoading && (
+        <View style={styles.hintRow}>
+          <Ionicons name="radio-outline" size={13} color={palette.textFaint} />
+          <Text style={styles.hint}>Fetching live status...</Text>
+        </View>
+      )}
+      {liveError && (
+        <View style={styles.errorBanner}>
+          <Ionicons name="alert-circle-outline" size={14} color={palette.danger} />
+          <Text style={styles.errorText}>{liveError}</Text>
+        </View>
+      )}
+      {!liveLoading && !liveError && liveTrips.length === 0 && (
+        <View style={styles.emptyState}>
+          <Ionicons name="bus-outline" size={28} color={palette.textFaint} />
+          <Text style={styles.emptyTitle}>No active buses right now</Text>
+          <Text style={styles.emptyText}>Check back closer to departure time.</Text>
+        </View>
+      )}
+      {!liveLoading && !liveError && liveTrips.length > 0 && filteredLiveTrips.length === 0 && (
+        <View style={styles.emptyState}>
+          <Ionicons name="swap-horizontal-outline" size={28} color={palette.textFaint} />
+          <Text style={styles.emptyTitle}>No buses in this direction</Text>
+          <Text style={styles.emptyText}>
+            No active buses heading {from.trim()} {'->'} {to.trim()} right now.
+          </Text>
+        </View>
+      )}
+      {filteredLiveTrips.map(trip => {
+        const tripId = String(trip.id);
+        const eta = tripEtas[tripId];
+        const load = tripLoads[tripId] ?? null;
+        const hasLocation = typeof trip.lastLatitude === 'number' && typeof trip.lastLongitude === 'number';
+        const stops = liveRoute?.stops ?? [];
+        const nearestStopInfo = hasLocation ? getTripNearestRouteStop(trip, stops) : null;
+        const currentStop = nearestStopInfo
+          ? {
+              name: nearestStopInfo.routeStop.name,
+              distanceKm: resolveCurrentStop(trip.lastLatitude as number, trip.lastLongitude as number, stops, trip.direction)?.distanceKm ?? 0,
+              status: nearestStopInfo.status,
+            }
+          : null;
+        const dirLabel = trip.direction === 'UP'
+          ? `${liveRoute?.source ?? ''}  ->  ${liveRoute?.destination ?? ''}`
+          : `${liveRoute?.destination ?? ''}  ->  ${liveRoute?.source ?? ''}`;
+        const isExpanded = expandedTrips[tripId] ?? false;
+        const waitingStatus = waitingStatusByTrip[tripId];
+        const waitingBusy = waitingBusyByTrip[tripId] ?? false;
+        const selectedStop = from.trim();
+        const selectedRouteStop = liveRoute?.stops?.find(
+          stop => normalizeStopName(stop.name) === normalizeStopName(selectedStop)
+        ) ?? null;
+        const progress = getTripProgressState(trip, stops, selectedStop, trip.direction);
+        const crossedBoardingStop = progress.crossedSelectedStop;
+        const stopLandmarkImageUrl = selectedRouteStop?.landmarkImageUrl?.trim() || '';
+        const alreadyNotifiedSelectedStop =
+          Boolean(waitingStatus?.stopName) &&
+          String(waitingStatus?.stopName).trim().toLowerCase() === selectedStop.toLowerCase();
+        const waitingActionDisabled = waitingBusy || crossedBoardingStop;
+        const toggleExpanded = () => {
+          if (!isExpanded && token && waitingStatusByTrip[tripId] === undefined) {
+            void fetchWaitingStatusForTrip(tripId);
+          }
+          setExpandedTrips(prev => ({ ...prev, [tripId]: !prev[tripId] }));
+        };
+
+        const collapsedEtaLabel = from.trim()
+          ? eta
+            ? eta.text
+            : hasLocation
+              ? 'Calculating...'
+              : null
+          : null;
+
+        const busRegion = hasLocation ? {
+          latitude: trip.lastLatitude as number,
+          longitude: trip.lastLongitude as number,
+          latitudeDelta: 0.012,
+          longitudeDelta: 0.012,
+        } : null;
+
+        return (
+          <View key={tripId} style={styles.liveTripCard}>
+            <TouchableOpacity
+              style={styles.liveTripHeader}
+              onPress={toggleExpanded}
+              activeOpacity={0.7}
+            >
+              <View style={styles.liveBusBadge}>
+                <Ionicons name="bus-outline" size={13} color={palette.accent} />
+                <Text style={styles.liveBus}>{trip.bus.busNumber || 'Bus'}</Text>
+              </View>
+
+              {!isExpanded && collapsedEtaLabel ? (
+                <View style={styles.collapsedEtaPill}>
+                  <Ionicons name="timer-outline" size={12} color={eta ? palette.accent : palette.textFaint} />
+                  <Text style={[styles.collapsedEtaText, !eta && { color: palette.textFaint }]}>
+                    {collapsedEtaLabel}
+                  </Text>
+                  {eta && <Text style={styles.collapsedEtaStop}>· {from.trim()}</Text>}
+                </View>
+              ) : (
+                <Text style={styles.liveDirectionLabel} numberOfLines={1}>{dirLabel}</Text>
+              )}
+
+              <Ionicons
+                name={isExpanded ? 'chevron-up-outline' : 'chevron-down-outline'}
+                size={16}
+                color={palette.textMuted}
+              />
+            </TouchableOpacity>
+
+            {isExpanded && (
+              <>
+                <View style={styles.expandedDirRow}>
+                  <Ionicons name="arrow-forward-outline" size={12} color={palette.textFaint} />
+                  <Text style={styles.expandedDirText}>{dirLabel}</Text>
+                </View>
+
+                {busRegion && (() => {
+                  const lat = Number(trip.lastLatitude);
+                  const lng = Number(trip.lastLongitude);
+                  const busLabel = (trip.bus.busNumber || 'Bus').replace(/['"\\]/g, '');
+                  const mapHtml = `<!DOCTYPE html><html><head>
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+html,body{width:100%;height:100%;overflow:hidden;background:#aad3df}
+#map{width:100%;height:100%;position:relative;overflow:hidden}
+img.tile{position:absolute;width:256px;height:256px;display:block}
+#marker{position:absolute;z-index:999;width:40px;height:40px;transform:translate(-50%,-50%);background:#1B9AAA;border-radius:50%;border:3px solid #fff;display:flex;align-items:center;justify-content:center;font-size:20px;line-height:1;box-shadow:0 2px 8px rgba(0,0,0,0.4)}
+#label{position:absolute;z-index:998;background:rgba(0,0,0,0.7);color:#fff;font-size:11px;padding:2px 6px;border-radius:4px;white-space:nowrap;transform:translate(-50%,14px)}
+</style></head><body><div id="map"></div>
+<script>
+var lat=${lat},lng=${lng},zoom=15;
+function lat2y(la){return Math.floor((1-Math.log(Math.tan(la*Math.PI/180)+1/Math.cos(la*Math.PI/180))/Math.PI)/2*Math.pow(2,zoom));}
+function lng2x(lo){return Math.floor((lo+180)/360*Math.pow(2,zoom));}
+var W=window.innerWidth,H=window.innerHeight;
+var cx=lng2x(lng),cy=lat2y(lat);
+var map=document.getElementById('map');
+for(var dx=-3;dx<=3;dx++){for(var dy=-3;dy<=3;dy++){
+  var img=document.createElement('img');
+  img.className='tile';
+  var s=['a','b','c'][Math.abs(cx+dx+cy+dy)%3];
+  img.src='https://'+s+'.tile.openstreetmap.org/'+zoom+'/'+(cx+dx)+'/'+(cy+dy)+'.png';
+  img.style.left=(W/2+(dx-0.5)*256)+'px';
+  img.style.top=(H/2+(dy-0.5)*256)+'px';
+  map.appendChild(img);
+}}
+var m=document.createElement('div');m.id='marker';m.innerHTML='<svg width="20" height="20" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><rect x="5" y="3.5" width="14" height="13" rx="2.5" fill="white"/><rect x="7" y="6" width="10" height="5" rx="1" fill="#1B9AAA"/><rect x="7" y="12.5" width="2.2" height="2.2" rx="0.6" fill="#1B9AAA"/><rect x="14.8" y="12.5" width="2.2" height="2.2" rx="0.6" fill="#1B9AAA"/><circle cx="8.5" cy="18.2" r="1.7" fill="white"/><circle cx="15.5" cy="18.2" r="1.7" fill="white"/><path d="M5 16.5H19" stroke="white" stroke-width="1.4" stroke-linecap="round"/></svg>';
+m.style.left=W/2+'px';m.style.top=H/2+'px';map.appendChild(m);
+var lb=document.createElement('div');lb.id='label';lb.innerText='${busLabel}';
+lb.style.left=W/2+'px';lb.style.top=H/2+'px';map.appendChild(lb);
+</script></body></html>`;
+                  return (
+                    <WebView
+                      style={styles.liveMap}
+                      originWhitelist={['*']}
+                      javaScriptEnabled
+                      domStorageEnabled
+                      source={{ html: mapHtml }}
+                    />
+                  );
+                })()}
+
+                {hasLocation ? (
+                  <View style={[
+                    styles.busLocationBlock,
+                    currentStop?.status === 'at' && styles.busLocationBlockAt
+                  ]}>
+                    <View style={styles.busLocationIconCol}>
+                      <Ionicons
+                        name={currentStop?.status === 'at' ? 'radio-button-on' : 'navigate'}
+                        size={16}
+                        color={currentStop?.status === 'at' ? palette.accent : palette.gold}
+                      />
+                    </View>
+                    <View style={styles.busLocationTextCol}>
+                      {currentStop ? (
+                        <>
+                          <Text style={[
+                            styles.busLocationStopName,
+                            currentStop.status === 'at' && { color: palette.accent }
+                          ]}>
+                            {currentStop.status === 'at' ? `At ${currentStop.name}` : `Near ${currentStop.name}`}
+                          </Text>
+                          {currentStop.status !== 'at' && (
+                            <Text style={styles.busLocationSub}>
+                              {currentStop.distanceKm} km from stop
+                              {(trip.lastLocationName || tripLocationNames[tripId]) &&
+                                ` · ${trip.lastLocationName || tripLocationNames[tripId]}`}
+                            </Text>
+                          )}
+                        </>
+                      ) : (
+                        <>
+                          <Text style={styles.busLocationStopName}>
+                            {trip.lastLocationName || tripLocationNames[tripId] || 'Locating...'}
+                          </Text>
+                          <Text style={styles.busLocationSub}>No stop lat/lng configured yet</Text>
+                        </>
+                      )}
+                    </View>
+                  </View>
+                ) : (
+                  <View style={styles.busLocationBlockOffline}>
+                    <Ionicons name="location-outline" size={14} color={palette.textFaint} />
+                    <Text style={styles.busLocationOfflineText}>Location unavailable</Text>
+                  </View>
+                )}
+
+                {trip.approachingStop && (
+                  <View style={styles.approachingBanner}>
+                    <Ionicons name="navigate" size={14} color={palette.accent} />
+                    <Text style={styles.approachingText}>
+                      Approaching {trip.approachingStop}
+                    </Text>
+                  </View>
+                )}
+
+                {crossedBoardingStop && (
+                  <View style={styles.approachingBanner}>
+                    <Ionicons name="alert-circle-outline" size={14} color={palette.gold} />
+                    <Text style={styles.approachingText}>
+                      Bus has crossed your boarding stop
+                    </Text>
+                  </View>
+                )}
+
+                {from.trim() && hasLocation && (
+                  <View style={eta ? styles.etaBanner : styles.etaBannerPending}>
+                    <Ionicons
+                      name={eta ? 'timer-outline' : 'time-outline'}
+                      size={14}
+                      color={eta ? palette.accent : palette.textFaint}
+                    />
+                    <View style={styles.etaContent}>
+                      <Text style={eta ? styles.etaText : styles.etaTextPending}>
+                        {eta ? eta.text : 'Calculating ETA...'}
+                      </Text>
+                      {eta && (
+                        <Text style={styles.etaSubText}>
+                          to {from.trim()} · {eta.distanceKm} km
+                          {eta.source === 'haversine' ? ' (est.)' : ''}
+                        </Text>
+                      )}
+                    </View>
+                    {(() => {
+                      const fromStop = liveRoute?.stops?.find(s => s.name.toLowerCase() === from.trim().toLowerCase() && s.latitude && s.longitude);
+                      if (!fromStop) return null;
+                      return (
+                        <TouchableOpacity
+                          onPress={() => navigateToStop(from.trim())}
+                          style={styles.etaNavigateBtn}
+                          hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                        >
+                          <Ionicons name="navigate" size={16} color={palette.accent} />
+                        </TouchableOpacity>
+                      );
+                    })()}
+                  </View>
+                )}
+
+                {from.trim() && hasLocation && (
+                  <View style={styles.waitingBanner}>
+                    <View style={styles.waitingBannerTop}>
+                      <View style={styles.waitingCopy}>
+                        <Text style={styles.waitingTitle}>Waiting at {selectedStop}</Text>
+                        <Text style={styles.waitingText}>
+                          {crossedBoardingStop
+                            ? `Currently near ${currentStop?.name || 'the next stop'}`
+                            : alreadyNotifiedSelectedStop
+                            ? 'Driver and conductor have your stop.'
+                            : waitingStatus?.stopName
+                              ? `Current alert: ${waitingStatus.stopName}`
+                              : 'Notify the crew that you are waiting at this stop.'}
+                        </Text>
+                      </View>
+                      <TouchableOpacity
+                        style={[
+                          styles.waitingButton,
+                          crossedBoardingStop && styles.waitingButtonDisabled,
+                          alreadyNotifiedSelectedStop && styles.waitingButtonActive,
+                          waitingActionDisabled && styles.waitingButtonDisabled,
+                        ]}
+                        onPress={() => { void handleWaitingAction(tripId, selectedStop); }}
+                        disabled={waitingActionDisabled}
+                      >
+                        <Text
+                          style={[
+                            styles.waitingButtonText,
+                            crossedBoardingStop && styles.waitingButtonTextDisabled,
+                            alreadyNotifiedSelectedStop && styles.waitingButtonTextActive,
+                          ]}
+                        >
+                          {crossedBoardingStop
+                            ? 'Stop crossed'
+                            : waitingBusy
+                            ? 'Sending...'
+                            : alreadyNotifiedSelectedStop
+                              ? 'Notified'
+                              : waitingStatus?.stopName
+                                ? 'Update stop'
+                                : 'Notify crew'}
+                        </Text>
+                      </TouchableOpacity>
+                    </View>
+                    {stopLandmarkImageUrl ? (
+                      <TouchableOpacity
+                        style={styles.stopLandmarkThumbWrap}
+                        activeOpacity={0.85}
+                        onPress={() => {
+                          setStopLandmarkPreview({
+                            name: selectedRouteStop?.name || selectedStop,
+                            imageUrl: stopLandmarkImageUrl,
+                            latitude: selectedRouteStop?.latitude ?? null,
+                            longitude: selectedRouteStop?.longitude ?? null,
+                          });
+                        }}
+                      >
+                        <Image
+                          source={{ uri: stopLandmarkImageUrl }}
+                          style={styles.stopLandmarkThumb}
+                          resizeMode="cover"
+                        />
+                        <View style={styles.stopLandmarkThumbMeta}>
+                          <Text style={styles.stopLandmarkThumbTitle}>Bus stop landmark</Text>
+                          <Text style={styles.stopLandmarkThumbText}>
+                            Tap to view the exact stop image.
+                          </Text>
+                        </View>
+                        <Ionicons name="expand-outline" size={18} color={palette.blue} />
+                      </TouchableOpacity>
+                    ) : null}
+                  </View>
+                )}
+
+                {load ? (() => {
+                  const isUnavailable = load.status === 'unavailable';
+                  const cfg = loadConfig(load.status);
+                  return (
+                    <View style={[styles.loadBanner, { backgroundColor: cfg.bg }]}>
+                      <View style={styles.loadBannerLeft}>
+                        <Ionicons name={cfg.icon} size={15} color={cfg.color} />
+                        <View style={{ flex: 1 }}>
+                          <Text style={[styles.loadStatusText, { color: cfg.color }]}>
+                            {isUnavailable ? 'Bus Load' : cfg.label}
+                          </Text>
+                          <Text style={styles.loadSubText}>
+                            {isUnavailable
+                              ? load.totalBooked > 0
+                                ? `${load.totalBooked} ticket${load.totalBooked !== 1 ? 's' : ''} booked · live tracking needs stop coordinates`
+                                : 'No tickets booked yet'
+                              : load.onboard !== null
+                                ? load.capacity > 0
+                                  ? `${load.onboard} / ${load.capacity} seats occupied`
+                                  : `${load.onboard} passengers onboard`
+                                : 'Estimating...'}
+                          </Text>
+                        </View>
+                      </View>
+                      {!isUnavailable && load.capacity > 0 && load.loadPercent !== null ? (
+                        <View style={styles.loadBarWrap}>
+                          <View style={styles.loadBarTrack}>
+                            <View style={[
+                              styles.loadBarFill,
+                              {
+                                width: `${Math.min(load.loadPercent, 100)}%` as any,
+                                backgroundColor: cfg.color,
+                              }
+                            ]} />
+                          </View>
+                          <Text style={[styles.loadPercent, { color: cfg.color }]}>
+                            {load.loadPercent}%
+                          </Text>
+                        </View>
+                      ) : null}
+                    </View>
+                  );
+                })() : null}
+
+                <View style={[styles.liveMetaItem, { marginTop: 8 }]}>
+                  <Ionicons name="refresh-outline" size={12} color={staleColor(trip.lastLocationAt)} />
+                  <Text style={[styles.liveMeta, { color: staleColor(trip.lastLocationAt) }]}>
+                    {formatUpdated(trip.lastLocationAt)}
+                  </Text>
+                </View>
+              </>
+            )}
+          </View>
+        );
+      })}
+    </View>
+  );
+
   return (
     <KeyboardAvoidingView
       style={styles.flex}
@@ -1248,50 +1652,54 @@ const HomeScreen: React.FC<Props> = ({ navigation }) => {
           {/* Matching routes */}
           {matchingRoutePreviews.length > 0 ? (
             <View style={styles.routeList}>
-              {matchingRoutePreviews.map(({ route, stops }) => (
-                <Pressable
-                  key={route.id}
-                  style={styles.routeCard}
-                  onPress={() => setSelectedRoutePreview({ route, stops })}
-                >
-                  <View style={styles.routeCardAccent} />
-                  <View style={styles.routeCardBody}>
-                    <View style={styles.routeTop}>
-                      <View style={styles.routeTopLeft}>
-                        <View style={styles.routeCodeBadge}>
-                          <Text style={styles.routeCodeBadgeText}>{route.routeCode}</Text>
+              {matchingRoutePreviews.map(({ route, stops }) => {
+                const isActiveLiveRoute = activeRouteId === route.id;
+
+                return (
+                  <View key={route.id} style={styles.routeCard}>
+                    <View style={styles.routeCardAccent} />
+                    <View style={styles.routeCardBody}>
+                      <Pressable onPress={() => setSelectedRoutePreview({ route, stops })}>
+                        <View style={styles.routeTop}>
+                          <View style={styles.routeTopLeft}>
+                            <View style={styles.routeCodeBadge}>
+                              <Text style={styles.routeCodeBadgeText}>{route.routeCode}</Text>
+                            </View>
+                            <Text style={styles.routePath}>
+                              {route.source}{'  ->  '}{route.destination}
+                            </Text>
+                          </View>
+                          <Animated.View
+                            style={[
+                              styles.liveButtonWrap,
+                              {
+                                opacity: liveButtonGlowOpacity,
+                                transform: [{ scale: liveButtonScale }],
+                              },
+                            ]}
+                          />
+                          <TouchableOpacity
+                            style={styles.liveButton}
+                            onPress={() => {
+                              setActiveRouteId(route.id);
+                              void loadLiveStatus(route.id);
+                            }}
+                          >
+                            <Animated.View style={[styles.liveDotSmall, { transform: [{ scale: liveDotScale }] }]} />
+                            <Text style={styles.liveButtonText}>Live</Text>
+                          </TouchableOpacity>
                         </View>
-                        <Text style={styles.routePath}>
-                          {route.source}{'  ->  '}{route.destination}
+                        <Text style={styles.routeName}>{route.routeName}</Text>
+                        <Text style={styles.routeStops} numberOfLines={2}>
+                          {stops.join('  ·  ')}
                         </Text>
-                      </View>
-                      <Animated.View
-                        style={[
-                          styles.liveButtonWrap,
-                          {
-                            opacity: liveButtonGlowOpacity,
-                            transform: [{ scale: liveButtonScale }],
-                          },
-                        ]}
-                      />
-                      <TouchableOpacity
-                        style={styles.liveButton}
-                        onPress={() => {
-                          setActiveRouteId(route.id);
-                          void loadLiveStatus(route.id);
-                        }}
-                      >
-                        <Animated.View style={[styles.liveDotSmall, { transform: [{ scale: liveDotScale }] }]} />
-                        <Text style={styles.liveButtonText}>Live</Text>
-                      </TouchableOpacity>
+                      </Pressable>
+
+                      {isActiveLiveRoute ? renderActiveRouteLiveSection() : null}
                     </View>
-                    <Text style={styles.routeName}>{route.routeName}</Text>
-                    <Text style={styles.routeStops} numberOfLines={2}>
-                      {stops.join('  ·  ')}
-                    </Text>
                   </View>
-                </Pressable>
-              ))}
+                );
+              })}
             </View>
           ) : hasRouteSearch && !loadingRoutes && !routesError ? (
             <View style={[styles.emptyState, styles.routeEmptyState]}>
@@ -1334,42 +1742,115 @@ const HomeScreen: React.FC<Props> = ({ navigation }) => {
             </View>
           ) : nearbyLiveTrips.length ? (
             <View style={styles.nearbyTripsList}>
-              {nearbyLiveTrips.map(trip => (
-                <TouchableOpacity
+              {nearbyLiveTrips.map(trip => {
+                const isExpanded = expandedNearbyTripId === trip.tripId;
+                return (
+                <View
                   key={trip.tripId}
-                  style={styles.nearbyTripCard}
-                  activeOpacity={0.85}
-                  onPress={() => {
-                    setActiveRouteId(trip.routeId);
-                    void loadLiveStatus(trip.routeId);
-                  }}
+                  style={styles.nearbyLiveTripCard}
                 >
-                  <View style={styles.nearbyTripIconWrap}>
-                    <Ionicons name="bus" size={28} color="#203d7a" />
-                  </View>
-                  <View style={styles.nearbyTripContent}>
-                    <View style={styles.nearbyTripTopRow}>
-                      <Text style={styles.nearbyTripBusNumber}>{trip.busNumber}</Text>
-                      <View style={styles.nearbyTripEtaWrap}>
-                        <Text style={styles.nearbyTripEtaValue}>{trip.minutesAway} min</Text>
-                        <Text style={styles.nearbyTripEtaLabel}>Away</Text>
+                  <View style={styles.nearbyLiveTripAccent} />
+                  <TouchableOpacity
+                    style={styles.nearbyLiveTripHeader}
+                    activeOpacity={0.8}
+                    onPress={() => {
+                      setExpandedNearbyTripId(current => current === trip.tripId ? null : trip.tripId);
+                    }}
+                  >
+                    <View style={styles.nearbyLiveTripIconShell}>
+                      <Ionicons name="bus-outline" size={20} color={palette.accent} />
+                    </View>
+                    <View style={styles.nearbyLiveTripLeft}>
+                      <View style={styles.nearbyLiveTripMetaRow}>
+                        <Text style={styles.liveBus}>{trip.busNumber}</Text>
+                        <View style={styles.routeCodeBadge}>
+                          <Text style={styles.routeCodeBadgeText}>{trip.routeCode}</Text>
+                        </View>
                       </View>
+                      <Text style={styles.nearbyLiveTripRoute}>
+                        {trip.source} {'->'} {trip.destination}
+                      </Text>
                     </View>
-                    <Text style={styles.nearbyTripRoute} numberOfLines={1}>
-                      {trip.source} {'->'} {trip.destination}
-                    </Text>
-                    <View style={styles.nearbyTripProgressRow}>
-                      <View style={[styles.nearbyTripDot, styles.nearbyTripDotActive]} />
-                      <View style={[styles.nearbyTripLine, styles.nearbyTripLineActive]} />
-                      <View style={[styles.nearbyTripDot, styles.nearbyTripDotActive]} />
-                      <View style={styles.nearbyTripLine} />
-                      <View style={styles.nearbyTripDot} />
-                      <View style={styles.nearbyTripLine} />
-                      <View style={styles.nearbyTripDot} />
+                    <View style={styles.nearbyLiveTripRight}>
+                      <View style={styles.nearbyLiveEtaPill}>
+                        <Ionicons name="timer-outline" size={12} color={palette.accent} />
+                        <Text style={styles.collapsedEtaText}>{trip.minutesAway} min</Text>
+                        <Text style={styles.collapsedEtaStop}>away</Text>
+                      </View>
+                      <Ionicons
+                        name={isExpanded ? 'chevron-up-outline' : 'chevron-down-outline'}
+                        size={16}
+                        color={palette.textFaint}
+                      />
                     </View>
-                  </View>
-                </TouchableOpacity>
-              ))}
+                  </TouchableOpacity>
+
+                  {isExpanded && (
+                    <>
+                      {(() => {
+                        const lat = Number(trip.lastLatitude);
+                        const lng = Number(trip.lastLongitude);
+                        const busLabel = (trip.busNumber || 'Bus').replace(/['"\\]/g, '');
+                        const mapHtml = `<!DOCTYPE html><html><head>
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+html,body{width:100%;height:100%;overflow:hidden;background:#aad3df}
+#map{width:100%;height:100%;position:relative;overflow:hidden}
+img.tile{position:absolute;width:256px;height:256px;display:block}
+#marker{position:absolute;z-index:999;width:40px;height:40px;transform:translate(-50%,-50%);background:#1B9AAA;border-radius:50%;border:3px solid #fff;display:flex;align-items:center;justify-content:center;font-size:20px;line-height:1;box-shadow:0 2px 8px rgba(0,0,0,0.4)}
+#label{position:absolute;z-index:998;background:rgba(0,0,0,0.7);color:#fff;font-size:11px;padding:2px 6px;border-radius:4px;white-space:nowrap;transform:translate(-50%,14px)}
+</style></head><body><div id="map"></div>
+<script>
+var lat=${lat},lng=${lng},zoom=15;
+function lat2y(la){return Math.floor((1-Math.log(Math.tan(la*Math.PI/180)+1/Math.cos(la*Math.PI/180))/Math.PI)/2*Math.pow(2,zoom));}
+function lng2x(lo){return Math.floor((lo+180)/360*Math.pow(2,zoom));}
+var W=window.innerWidth,H=window.innerHeight;
+var cx=lng2x(lng),cy=lat2y(lat);
+var map=document.getElementById('map');
+for(var dx=-3;dx<=3;dx++){for(var dy=-3;dy<=3;dy++){
+  var img=document.createElement('img');
+  img.className='tile';
+  var s=['a','b','c'][Math.abs(cx+dx+cy+dy)%3];
+  img.src='https://'+s+'.tile.openstreetmap.org/'+zoom+'/'+(cx+dx)+'/'+(cy+dy)+'.png';
+  img.style.left=(W/2+(dx-0.5)*256)+'px';
+  img.style.top=(H/2+(dy-0.5)*256)+'px';
+  map.appendChild(img);
+}}
+var m=document.createElement('div');m.id='marker';m.innerHTML='<svg width="20" height="20" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><rect x="5" y="3.5" width="14" height="13" rx="2.5" fill="white"/><rect x="7" y="6" width="10" height="5" rx="1" fill="#1B9AAA"/><rect x="7" y="12.5" width="2.2" height="2.2" rx="0.6" fill="#1B9AAA"/><rect x="14.8" y="12.5" width="2.2" height="2.2" rx="0.6" fill="#1B9AAA"/><circle cx="8.5" cy="18.2" r="1.7" fill="white"/><circle cx="15.5" cy="18.2" r="1.7" fill="white"/><path d="M5 16.5H19" stroke="white" stroke-width="1.4" stroke-linecap="round"/></svg>';
+m.style.left=W/2+'px';m.style.top=H/2+'px';map.appendChild(m);
+var lb=document.createElement('div');lb.id='label';lb.innerText='${busLabel}';
+lb.style.left=W/2+'px';lb.style.top=H/2+'px';map.appendChild(lb);
+</script></body></html>`;
+                        return (
+                          <WebView
+                            style={styles.liveMap}
+                            originWhitelist={['*']}
+                            javaScriptEnabled
+                            domStorageEnabled
+                            source={{ html: mapHtml }}
+                          />
+                        );
+                      })()}
+
+                      <View style={styles.busLocationBlock}>
+                        <View style={styles.busLocationIconCol}>
+                          <Ionicons name="navigate" size={16} color={palette.gold} />
+                        </View>
+                        <View style={styles.busLocationTextCol}>
+                          <Text style={styles.busLocationStopName}>
+                            {trip.lastLocationName || 'Live location available'}
+                          </Text>
+                          <Text style={styles.busLocationSub}>
+                            {trip.distanceKm} km from you
+                            {trip.lastLocationAt ? ` · ${formatUpdated(trip.lastLocationAt)}` : ''}
+                          </Text>
+                        </View>
+                      </View>
+                    </>
+                  )}
+                </View>
+              )})}
             </View>
           ) : (
             <View style={styles.emptyState}>
@@ -1550,421 +2031,6 @@ const HomeScreen: React.FC<Props> = ({ navigation }) => {
           </View>
         </Pressable>
       </Modal>
-
-      {/* Live buses */}
-      {activeRouteId && (
-        <View style={styles.card}>
-          <View style={styles.sectionTitleRow}>
-            <View style={[styles.livePulse, liveTrips.length > 0 && styles.livePulseActive]} />
-            <Text style={styles.sectionTitle}>Live buses</Text>
-            {liveRoute && <Text style={styles.sectionMeta}>{liveRoute.routeCode}</Text>}
-          </View>
-          {liveRoute && <Text style={styles.liveRouteName}>{liveRoute.routeName}</Text>}
-          {liveLoading && (
-            <View style={styles.hintRow}>
-              <Ionicons name="radio-outline" size={13} color={palette.textFaint} />
-              <Text style={styles.hint}>Fetching live status...</Text>
-            </View>
-          )}
-          {liveError && (
-            <View style={styles.errorBanner}>
-              <Ionicons name="alert-circle-outline" size={14} color={palette.danger} />
-              <Text style={styles.errorText}>{liveError}</Text>
-            </View>
-          )}
-          {!liveLoading && !liveError && liveTrips.length === 0 && (
-            <View style={styles.emptyState}>
-              <Ionicons name="bus-outline" size={28} color={palette.textFaint} />
-              <Text style={styles.emptyTitle}>No active buses right now</Text>
-              <Text style={styles.emptyText}>Check back closer to departure time.</Text>
-            </View>
-          )}
-          {!liveLoading && !liveError && liveTrips.length > 0 && filteredLiveTrips.length === 0 && (
-            <View style={styles.emptyState}>
-              <Ionicons name="swap-horizontal-outline" size={28} color={palette.textFaint} />
-              <Text style={styles.emptyTitle}>No buses in this direction</Text>
-              <Text style={styles.emptyText}>
-                No active buses heading {from.trim()} {'->'} {to.trim()} right now.
-              </Text>
-            </View>
-          )}
-          {filteredLiveTrips.map(trip => {
-            const tripId = String(trip.id);
-            const eta = tripEtas[tripId];
-            const load = tripLoads[tripId] ?? null;
-            const hasLocation = typeof trip.lastLatitude === 'number' && typeof trip.lastLongitude === 'number';
-            const stops = liveRoute?.stops ?? [];
-            const nearestStopInfo = hasLocation ? getTripNearestRouteStop(trip, stops) : null;
-            const currentStop = nearestStopInfo
-              ? {
-                  name: nearestStopInfo.routeStop.name,
-                  distanceKm: resolveCurrentStop(trip.lastLatitude as number, trip.lastLongitude as number, stops, trip.direction)?.distanceKm ?? 0,
-                  status: nearestStopInfo.status,
-                }
-              : null;
-            const dirLabel = trip.direction === 'UP'
-              ? `${liveRoute?.source ?? ''}  ->  ${liveRoute?.destination ?? ''}`
-              : `${liveRoute?.destination ?? ''}  ->  ${liveRoute?.source ?? ''}`;
-            const isExpanded = expandedTrips[tripId] ?? false;
-            const waitingStatus = waitingStatusByTrip[tripId];
-            const waitingBusy = waitingBusyByTrip[tripId] ?? false;
-            const selectedStop = from.trim();
-            const selectedRouteStop = liveRoute?.stops?.find(
-              stop => normalizeStopName(stop.name) === normalizeStopName(selectedStop)
-            ) ?? null;
-            const progress = getTripProgressState(trip, stops, selectedStop, trip.direction);
-            const crossedBoardingStop = progress.crossedSelectedStop;
-            const stopLandmarkImageUrl = selectedRouteStop?.landmarkImageUrl?.trim() || '';
-            const alreadyNotifiedSelectedStop =
-              Boolean(waitingStatus?.stopName) &&
-              String(waitingStatus?.stopName).trim().toLowerCase() === selectedStop.toLowerCase();
-            const waitingActionDisabled = waitingBusy || crossedBoardingStop;
-            const toggleExpanded = () => {
-              if (!isExpanded && token && waitingStatusByTrip[tripId] === undefined) {
-                void fetchWaitingStatusForTrip(tripId);
-              }
-              setExpandedTrips(prev => ({ ...prev, [tripId]: !prev[tripId] }));
-            };
-
-            // Collapsed summary: ETA pill when user has a from-stop, else direction
-            const collapsedEtaLabel = from.trim()
-              ? eta
-                ? eta.text
-                : hasLocation
-                  ? 'Calculating...'
-                  : null
-              : null;
-
-            const busRegion = hasLocation ? {
-              latitude: trip.lastLatitude as number,
-              longitude: trip.lastLongitude as number,
-              latitudeDelta: 0.012,
-              longitudeDelta: 0.012,
-            } : null;
-
-            return (
-              <View key={tripId} style={styles.liveTripCard}>
-                {/* Tappable header */}
-                <TouchableOpacity
-                  style={styles.liveTripHeader}
-                  onPress={toggleExpanded}
-                  activeOpacity={0.7}
-                >
-                  <View style={styles.liveBusBadge}>
-                    <Ionicons name="bus-outline" size={13} color={palette.accent} />
-                    <Text style={styles.liveBus}>{trip.bus.busNumber || 'Bus'}</Text>
-                  </View>
-
-                  {/* Collapsed: ETA to user's stop, or direction when no from-stop */}
-                  {!isExpanded && collapsedEtaLabel ? (
-                    <View style={styles.collapsedEtaPill}>
-                      <Ionicons name="timer-outline" size={12} color={eta ? palette.accent : palette.textFaint} />
-                      <Text style={[styles.collapsedEtaText, !eta && { color: palette.textFaint }]}>
-                        {collapsedEtaLabel}
-                      </Text>
-                      {eta && <Text style={styles.collapsedEtaStop}>· {from.trim()}</Text>}
-                    </View>
-                  ) : (
-                    <Text style={styles.liveDirectionLabel} numberOfLines={1}>{dirLabel}</Text>
-                  )}
-
-                  <Ionicons
-                    name={isExpanded ? 'chevron-up-outline' : 'chevron-down-outline'}
-                    size={16}
-                    color={palette.textMuted}
-                  />
-                </TouchableOpacity>
-
-                {/* Expanded body */}
-                {isExpanded && (
-                  <>
-                    {/* Direction row */}
-                    <View style={styles.expandedDirRow}>
-                      <Ionicons name="arrow-forward-outline" size={12} color={palette.textFaint} />
-                      <Text style={styles.expandedDirText}>{dirLabel}</Text>
-                    </View>
-
-                    {/* Per-bus map - OpenStreetMap tiles (no CDN dependency) */}
-                    {busRegion && (() => {
-                      const lat = Number(trip.lastLatitude);
-                      const lng = Number(trip.lastLongitude);
-                      const busLabel = (trip.bus.busNumber || 'Bus').replace(/['"\\]/g, '');
-                      const mapHtml = `<!DOCTYPE html><html><head>
-<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
-<style>
-*{margin:0;padding:0;box-sizing:border-box}
-html,body{width:100%;height:100%;overflow:hidden;background:#aad3df}
-#map{width:100%;height:100%;position:relative;overflow:hidden}
-img.tile{position:absolute;width:256px;height:256px;display:block}
-#marker{position:absolute;z-index:999;width:40px;height:40px;transform:translate(-50%,-50%);background:#1B9AAA;border-radius:50%;border:3px solid #fff;display:flex;align-items:center;justify-content:center;font-size:20px;line-height:1;box-shadow:0 2px 8px rgba(0,0,0,0.4)}
-#label{position:absolute;z-index:998;background:rgba(0,0,0,0.7);color:#fff;font-size:11px;padding:2px 6px;border-radius:4px;white-space:nowrap;transform:translate(-50%,14px)}
-</style></head><body><div id="map"></div>
-<script>
-var lat=${lat},lng=${lng},zoom=15;
-function lat2y(la){return Math.floor((1-Math.log(Math.tan(la*Math.PI/180)+1/Math.cos(la*Math.PI/180))/Math.PI)/2*Math.pow(2,zoom));}
-function lng2x(lo){return Math.floor((lo+180)/360*Math.pow(2,zoom));}
-var W=window.innerWidth,H=window.innerHeight;
-var cx=lng2x(lng),cy=lat2y(lat);
-var map=document.getElementById('map');
-for(var dx=-3;dx<=3;dx++){for(var dy=-3;dy<=3;dy++){
-  var img=document.createElement('img');
-  img.className='tile';
-  var s=['a','b','c'][Math.abs(cx+dx+cy+dy)%3];
-  img.src='https://'+s+'.tile.openstreetmap.org/'+zoom+'/'+(cx+dx)+'/'+(cy+dy)+'.png';
-  img.style.left=(W/2+(dx-0.5)*256)+'px';
-  img.style.top=(H/2+(dy-0.5)*256)+'px';
-  map.appendChild(img);
-}}
-var m=document.createElement('div');m.id='marker';m.innerHTML='BUS';
-m.style.left=W/2+'px';m.style.top=H/2+'px';map.appendChild(m);
-var lb=document.createElement('div');lb.id='label';lb.innerText='${busLabel}';
-lb.style.left=W/2+'px';lb.style.top=H/2+'px';map.appendChild(lb);
-</script></body></html>`;
-                      return (
-                        <WebView
-                          style={styles.liveMap}
-                          originWhitelist={['*']}
-                          javaScriptEnabled
-                          domStorageEnabled
-                          source={{ html: mapHtml }}
-                        />
-                      );
-                    })()}
-
-                    {/* Current stop / location block */}
-                    {hasLocation ? (
-                      <View style={[
-                        styles.busLocationBlock,
-                        currentStop?.status === 'at' && styles.busLocationBlockAt
-                      ]}>
-                        <View style={styles.busLocationIconCol}>
-                          <Ionicons
-                            name={currentStop?.status === 'at' ? 'radio-button-on' : 'navigate'}
-                            size={16}
-                            color={currentStop?.status === 'at' ? palette.accent : palette.gold}
-                          />
-                        </View>
-                        <View style={styles.busLocationTextCol}>
-                          {currentStop ? (
-                            <>
-                              <Text style={[
-                                styles.busLocationStopName,
-                                currentStop.status === 'at' && { color: palette.accent }
-                              ]}>
-                                {currentStop.status === 'at' ? `At ${currentStop.name}` : `Near ${currentStop.name}`}
-                              </Text>
-                              {currentStop.status !== 'at' && (
-                                <Text style={styles.busLocationSub}>
-                                  {currentStop.distanceKm} km from stop
-                                  {(trip.lastLocationName || tripLocationNames[tripId]) &&
-                                    ` · ${trip.lastLocationName || tripLocationNames[tripId]}`}
-                                </Text>
-                              )}
-                            </>
-                          ) : (
-                            <>
-                              <Text style={styles.busLocationStopName}>
-                                {trip.lastLocationName || tripLocationNames[tripId] || 'Locating...'}
-                              </Text>
-                              <Text style={styles.busLocationSub}>No stop lat/lng configured yet</Text>
-                            </>
-                          )}
-                        </View>
-                      </View>
-                    ) : (
-                      <View style={styles.busLocationBlockOffline}>
-                        <Ionicons name="location-outline" size={14} color={palette.textFaint} />
-                        <Text style={styles.busLocationOfflineText}>Location unavailable</Text>
-                      </View>
-                    )}
-
-                    {/* Approaching stop banner */}
-                    {trip.approachingStop && (
-                      <View style={styles.approachingBanner}>
-                        <Ionicons name="navigate" size={14} color={palette.accent} />
-                        <Text style={styles.approachingText}>
-                          Approaching {trip.approachingStop}
-                        </Text>
-                      </View>
-                    )}
-
-                    {crossedBoardingStop && (
-                      <View style={styles.approachingBanner}>
-                        <Ionicons name="alert-circle-outline" size={14} color={palette.gold} />
-                        <Text style={styles.approachingText}>
-                          Bus has crossed your boarding stop
-                        </Text>
-                      </View>
-                    )}
-
-                    {/* Full ETA banner */}
-                    {from.trim() && hasLocation && (
-                      <View style={eta ? styles.etaBanner : styles.etaBannerPending}>
-                        <Ionicons
-                          name={eta ? 'timer-outline' : 'time-outline'}
-                          size={14}
-                          color={eta ? palette.accent : palette.textFaint}
-                        />
-                        <View style={styles.etaContent}>
-                          <Text style={eta ? styles.etaText : styles.etaTextPending}>
-                            {eta ? eta.text : 'Calculating ETA...'}
-                          </Text>
-                          {eta && (
-                            <Text style={styles.etaSubText}>
-                              to {from.trim()} · {eta.distanceKm} km
-                              {eta.source === 'haversine' ? ' (est.)' : ''}
-                            </Text>
-                          )}
-                        </View>
-                        {(() => {
-                          const fromStop = liveRoute?.stops?.find(s => s.name.toLowerCase() === from.trim().toLowerCase() && s.latitude && s.longitude);
-                          if (!fromStop) return null;
-                          return (
-                            <TouchableOpacity
-                              onPress={() => navigateToStop(from.trim())}
-                              style={styles.etaNavigateBtn}
-                              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-                            >
-                              <Ionicons name="navigate" size={16} color={palette.accent} />
-                            </TouchableOpacity>
-                          );
-                        })()}
-                      </View>
-                    )}
-
-                    {from.trim() && hasLocation && (
-                      <View style={styles.waitingBanner}>
-                        <View style={styles.waitingBannerTop}>
-                          <View style={styles.waitingCopy}>
-                            <Text style={styles.waitingTitle}>Waiting at {selectedStop}</Text>
-                            <Text style={styles.waitingText}>
-                              {crossedBoardingStop
-                                ? `Currently near ${currentStop?.name || 'the next stop'}`
-                                : alreadyNotifiedSelectedStop
-                                ? 'Driver and conductor have your stop.'
-                                : waitingStatus?.stopName
-                                  ? `Current alert: ${waitingStatus.stopName}`
-                                  : 'Notify the crew that you are waiting at this stop.'}
-                            </Text>
-                          </View>
-                          <TouchableOpacity
-                            style={[
-                              styles.waitingButton,
-                              crossedBoardingStop && styles.waitingButtonDisabled,
-                              alreadyNotifiedSelectedStop && styles.waitingButtonActive,
-                              waitingActionDisabled && styles.waitingButtonDisabled,
-                            ]}
-                            onPress={() => { void handleWaitingAction(tripId, selectedStop); }}
-                            disabled={waitingActionDisabled}
-                          >
-                            <Text
-                              style={[
-                                styles.waitingButtonText,
-                                crossedBoardingStop && styles.waitingButtonTextDisabled,
-                                alreadyNotifiedSelectedStop && styles.waitingButtonTextActive,
-                              ]}
-                            >
-                              {crossedBoardingStop
-                                ? 'Stop crossed'
-                                : waitingBusy
-                                ? 'Sending...'
-                                : alreadyNotifiedSelectedStop
-                                  ? 'Notified'
-                                  : waitingStatus?.stopName
-                                    ? 'Update stop'
-                                    : 'Notify crew'}
-                            </Text>
-                          </TouchableOpacity>
-                        </View>
-                        {stopLandmarkImageUrl ? (
-                          <TouchableOpacity
-                            style={styles.stopLandmarkThumbWrap}
-                            activeOpacity={0.85}
-                            onPress={() => {
-                              setStopLandmarkPreview({
-                                name: selectedRouteStop?.name || selectedStop,
-                                imageUrl: stopLandmarkImageUrl,
-                                latitude: selectedRouteStop?.latitude ?? null,
-                                longitude: selectedRouteStop?.longitude ?? null,
-                              });
-                            }}
-                          >
-                            <Image
-                              source={{ uri: stopLandmarkImageUrl }}
-                              style={styles.stopLandmarkThumb}
-                              resizeMode="cover"
-                            />
-                            <View style={styles.stopLandmarkThumbMeta}>
-                              <Text style={styles.stopLandmarkThumbTitle}>Bus stop landmark</Text>
-                              <Text style={styles.stopLandmarkThumbText}>
-                                Tap to view the exact stop image.
-                              </Text>
-                            </View>
-                            <Ionicons name="expand-outline" size={18} color={palette.blue} />
-                          </TouchableOpacity>
-                        ) : null}
-                      </View>
-                    )}
-
-                    {/* Bus load indicator */}
-                    {load ? (() => {
-                      const isUnavailable = load.status === 'unavailable';
-                      const cfg = loadConfig(load.status);
-                      return (
-                        <View style={[styles.loadBanner, { backgroundColor: cfg.bg }]}>
-                          <View style={styles.loadBannerLeft}>
-                            <Ionicons name={cfg.icon} size={15} color={cfg.color} />
-                            <View style={{ flex: 1 }}>
-                              <Text style={[styles.loadStatusText, { color: cfg.color }]}>
-                                {isUnavailable ? 'Bus Load' : cfg.label}
-                              </Text>
-                              <Text style={styles.loadSubText}>
-                                {isUnavailable
-                                  ? load.totalBooked > 0
-                                    ? `${load.totalBooked} ticket${load.totalBooked !== 1 ? 's' : ''} booked · live tracking needs stop coordinates`
-                                    : 'No tickets booked yet'
-                                  : load.onboard !== null
-                                    ? load.capacity > 0
-                                      ? `${load.onboard} / ${load.capacity} seats occupied`
-                                      : `${load.onboard} passengers onboard`
-                                    : 'Estimating...'}
-                              </Text>
-                            </View>
-                          </View>
-                          {!isUnavailable && load.capacity > 0 && load.loadPercent !== null ? (
-                            <View style={styles.loadBarWrap}>
-                              <View style={styles.loadBarTrack}>
-                                <View style={[
-                                  styles.loadBarFill,
-                                  {
-                                    width: `${Math.min(load.loadPercent, 100)}%` as any,
-                                    backgroundColor: cfg.color,
-                                  }
-                                ]} />
-                              </View>
-                              <Text style={[styles.loadPercent, { color: cfg.color }]}>
-                                {load.loadPercent}%
-                              </Text>
-                            </View>
-                          ) : null}
-                        </View>
-                      );
-                    })() : null}
-
-                    {/* Updated timestamp */}
-                    <View style={[styles.liveMetaItem, { marginTop: 8 }]}>
-                      <Ionicons name="refresh-outline" size={12} color={staleColor(trip.lastLocationAt)} />
-                      <Text style={[styles.liveMeta, { color: staleColor(trip.lastLocationAt) }]}>
-                        {formatUpdated(trip.lastLocationAt)}
-                      </Text>
-                    </View>
-                  </>
-                )}
-              </View>
-            );
-          })}
-        </View>
-      )}
 
     </ScrollView>
     </KeyboardAvoidingView>
@@ -2388,6 +2454,12 @@ const styles = StyleSheet.create({
   },
   routeCardAccent: { height: 2, backgroundColor: palette.blue },
   routeCardBody: { padding: 16 },
+  routeInlineLiveSection: {
+    marginTop: 16,
+    paddingTop: 14,
+    borderTopWidth: 1,
+    borderTopColor: palette.border,
+  },
   routeTop: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', gap: 10 },
   routeTopLeft: { flex: 1, gap: 6 },
   routeCodeBadge: {
@@ -2412,83 +2484,80 @@ const styles = StyleSheet.create({
   liveButtonText: { color: palette.accent, fontSize: 12, fontWeight: '700' },
   routeStops: { color: palette.textFaint, marginTop: 6, lineHeight: 18, fontSize: 12 },
   nearbyTripsList: { gap: 12 },
-  nearbyTripCard: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 12,
-    backgroundColor: '#ffffff',
+  nearbyLiveTripCard: {
+    backgroundColor: '#fcfdff',
+    borderRadius: 22,
+    padding: 16,
     borderWidth: 1,
-    borderColor: 'rgba(16, 36, 60, 0.10)',
-    borderRadius: 18,
-    paddingHorizontal: 14,
-    paddingVertical: 14,
-    shadowColor: '#a7bdd5',
-    shadowOffset: { width: 0, height: 8 },
-    shadowOpacity: 0.10,
-    shadowRadius: 16,
-    elevation: 4,
+    borderColor: 'rgba(142, 180, 215, 0.34)',
+    shadowColor: '#9ab5cf',
+    shadowOffset: { width: 0, height: 12 },
+    shadowOpacity: 0.16,
+    shadowRadius: 24,
+    elevation: 6,
+    gap: 12,
+    overflow: 'hidden',
   },
-  nearbyTripIconWrap: {
-    width: 42,
-    alignItems: 'center',
-    justifyContent: 'center',
+  nearbyLiveTripAccent: {
+    position: 'absolute',
+    left: 0,
+    top: 0,
+    bottom: 0,
+    width: 4,
+    backgroundColor: palette.accent,
   },
-  nearbyTripContent: { flex: 1 },
-  nearbyTripTopRow: {
+  nearbyLiveTripHeader: {
     flexDirection: 'row',
     alignItems: 'flex-start',
-    justifyContent: 'space-between',
     gap: 12,
   },
-  nearbyTripBusNumber: {
-    color: '#10243c',
-    fontSize: 23,
-    fontWeight: '800',
+  nearbyLiveTripIconShell: {
+    width: 42,
+    height: 42,
+    borderRadius: 14,
+    backgroundColor: 'rgba(0, 184, 135, 0.12)',
+    borderWidth: 1,
+    borderColor: 'rgba(0, 184, 135, 0.20)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    shadowColor: '#9ad5c4',
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.18,
+    shadowRadius: 10,
+    elevation: 2,
   },
-  nearbyTripEtaWrap: {
-    alignItems: 'flex-end',
-    minWidth: 62,
+  nearbyLiveTripLeft: {
+    flex: 1,
+    gap: 6,
+    paddingTop: 1,
   },
-  nearbyTripEtaValue: {
-    color: '#1ca36c',
-    fontSize: 16,
-    fontWeight: '800',
-  },
-  nearbyTripEtaLabel: {
-    color: '#203d7a',
-    fontSize: 13,
-    fontWeight: '700',
-    marginTop: 2,
-  },
-  nearbyTripRoute: {
-    color: '#364a67',
-    fontSize: 16,
-    fontWeight: '600',
-    marginTop: 2,
-  },
-  nearbyTripProgressRow: {
+  nearbyLiveTripMetaRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    marginTop: 12,
+    gap: 8,
+    flexWrap: 'wrap',
   },
-  nearbyTripDot: {
-    width: 9,
-    height: 9,
+  nearbyLiveTripRoute: {
+    color: '#415771',
+    fontSize: 14,
+    fontWeight: '600',
+    lineHeight: 20,
+  },
+  nearbyLiveTripRight: {
+    alignItems: 'flex-end',
+    gap: 10,
+    minWidth: 92,
+  },
+  nearbyLiveEtaPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    paddingHorizontal: 10,
+    paddingVertical: 7,
     borderRadius: 999,
-    backgroundColor: '#aab5c4',
-  },
-  nearbyTripDotActive: {
-    backgroundColor: '#15955f',
-  },
-  nearbyTripLine: {
-    flex: 1,
-    height: 3,
-    borderRadius: 999,
-    backgroundColor: '#cbd4df',
-    marginHorizontal: 4,
-  },
-  nearbyTripLineActive: {
-    backgroundColor: '#15955f',
+    backgroundColor: 'rgba(0, 184, 135, 0.10)',
+    borderWidth: 1,
+    borderColor: 'rgba(0, 184, 135, 0.16)',
   },
 
   // Live section

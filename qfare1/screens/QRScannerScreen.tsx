@@ -1,7 +1,10 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import {
   Alert,
+  NativeModules,
+  Platform,
   ScrollView,
+  StatusBar,
   StyleSheet,
   Text,
   TextInput,
@@ -19,6 +22,7 @@ import { apiGet, apiPost } from '../lib/api';
 import { useAuth } from '../lib/auth';
 import { saveTicket } from '../lib/ticketStorage';
 import { palette } from '../lib/theme';
+import QfareLogo from '../components/QfareLogo';
 
 type Props = {
   navigation: CompositeNavigationProp<
@@ -82,11 +86,77 @@ type RazorpaySuccess = {
   razorpay_signature: string;
 };
 
+type RazorpayFailure = {
+  code?: number | string;
+  description?: string;
+  reason?: string;
+  step?: string;
+  source?: string;
+  error?: {
+    code?: number | string;
+    description?: string;
+    reason?: string;
+    step?: string;
+    source?: string;
+  };
+};
+
+const topInset = Platform.OS === 'android' ? (StatusBar.currentHeight ?? 0) + 14 : 20;
+
+const isRazorpayAvailable = () =>
+  typeof RazorpayCheckout?.open === 'function' ||
+  Boolean(NativeModules?.RNRazorpayCheckout) ||
+  Boolean(NativeModules?.RazorpayCheckout);
+
+const getRazorpayFailureMessage = (error: unknown) => {
+  if (!error || typeof error !== 'object') {
+    return { title: 'Payment failed', message: 'Unable to complete payment right now.' };
+  }
+
+  const failure = error as RazorpayFailure & { message?: string };
+  const details = failure.error ?? failure;
+  const rawText = [
+    failure.message,
+    details.description,
+    details.reason,
+    details.step,
+    details.source,
+    String(details.code ?? ''),
+  ]
+    .filter(Boolean)
+    .join(' ')
+    .toLowerCase();
+
+  if (
+    rawText.includes('cancel') ||
+    rawText.includes('dismiss') ||
+    rawText.includes('backpressed') ||
+    rawText.includes('payment_cancelled')
+  ) {
+    return {
+      title: 'Payment cancelled',
+      message: 'You closed the Razorpay checkout before completing payment.',
+    };
+  }
+
+  if (rawText.includes('open of null')) {
+    return {
+      title: 'Payment failed',
+      message: 'Razorpay is missing from this app build. Rebuild and reinstall the app, then try again.',
+    };
+  }
+
+  return {
+    title: 'Payment failed',
+    message: details.description || details.reason || failure.message || 'Unable to complete payment right now.',
+  };
+};
+
 const QRScannerScreen: React.FC<Props> = ({ navigation }) => {
   const { token, user } = useAuth();
   const tabBarHeight = useBottomTabBarHeight();
   const [permissionStatus, setPermissionStatus] = useState<string | null>(null);
-  const [isScanning, setIsScanning] = useState(false);
+  const [scanLocked, setScanLocked] = useState(false);
   const [bus, setBus] = useState<BusProfile | null>(null);
   const [fromStop, setFromStop] = useState<string | null>(null);
   const [toStop, setToStop] = useState<string | null>(null);
@@ -94,6 +164,7 @@ const QRScannerScreen: React.FC<Props> = ({ navigation }) => {
   const [manualBusNumber, setManualBusNumber] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [showRouteStops, setShowRouteStops] = useState(false);
 
   useEffect(() => {
     const requestPermission = async () => {
@@ -150,23 +221,50 @@ const QRScannerScreen: React.FC<Props> = ({ navigation }) => {
       setFromStop(null);
       setToStop(null);
       setPassengerCount(1);
+      setShowRouteStops(false);
+      setScanLocked(true);
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Failed to load bus route';
       setLoadError(message);
       Alert.alert('Could not load route', message);
+      setScanLocked(false);
     } finally {
       setIsLoading(false);
     }
   };
 
   const onScanned = ({ data }: { data: string }) => {
-    setIsScanning(false);
+    if (scanLocked || isLoading) return;
+    setScanLocked(true);
     const parsed = parseBusPayload(data);
     if (!parsed) {
+      setScanLocked(false);
       Alert.alert('Invalid QR', 'Could not read bus data from QR code.');
       return;
     }
     void loadBusRoute(parsed);
+  };
+
+  const handleSelectFromStop = (stop: string) => {
+    if (!bus) return;
+    const nextFromIndex = bus.stops.indexOf(stop);
+    setFromStop(stop);
+    setToStop(currentTo => {
+      if (!currentTo) return currentTo;
+      const currentToIndex = bus.stops.indexOf(currentTo);
+      return currentToIndex > nextFromIndex ? currentTo : null;
+    });
+  };
+
+  const resetScanSession = () => {
+    setBus(null);
+    setFromStop(null);
+    setToStop(null);
+    setPassengerCount(1);
+    setManualBusNumber('');
+    setLoadError(null);
+    setShowRouteStops(false);
+    setScanLocked(false);
   };
 
   const handleManualLookup = () => {
@@ -188,6 +286,13 @@ const QRScannerScreen: React.FC<Props> = ({ navigation }) => {
     }
     if (!fromStop || !toStop || totalFare === null) {
       Alert.alert('Select stops', 'Pick both source and destination to continue.');
+      return;
+    }
+    if (!isRazorpayAvailable()) {
+      Alert.alert(
+        'Payment unavailable',
+        'This build does not include the Razorpay payment module yet. Rebuild and reinstall the Android app using a development build or release APK, then try payment again.'
+      );
       return;
     }
     try {
@@ -223,7 +328,11 @@ const QRScannerScreen: React.FC<Props> = ({ navigation }) => {
         passengerCount,
       }, token);
       const tripInstanceId = data.booking.tripInstanceId ?? null;
-      await saveTicket({
+      if (!user?.id) {
+        throw new Error('User session missing. Please sign in again.');
+      }
+      await saveTicket(user.id, {
+        ownerUserId: user.id,
         bookingId: data.booking.bookingId,
         tripInstanceId,
         busNumber: bus.busNumber,
@@ -250,8 +359,8 @@ const QRScannerScreen: React.FC<Props> = ({ navigation }) => {
         tripInstanceId,
       });
     } catch (error) {
-      const message = error instanceof Error ? error.message : 'Payment failed';
-      Alert.alert('Payment failed', message);
+      const { title, message } = getRazorpayFailureMessage(error);
+      Alert.alert(title, message);
     }
   };
 
@@ -270,18 +379,24 @@ const QRScannerScreen: React.FC<Props> = ({ navigation }) => {
         <View style={styles.stopList}>
           {bus?.stops.map(stop => {
             const isSelected = selected === stop;
+            const fromIndex = fromStop ? bus.stops.indexOf(fromStop) : -1;
+            const stopIndex = bus.stops.indexOf(stop);
+            const isDisabled = !isFromGroup && fromIndex >= 0 && stopIndex <= fromIndex;
             return (
               <TouchableOpacity
                 key={`${label}-${stop}`}
                 style={[
                   styles.stopPill,
+                  isDisabled && styles.stopPillDisabled,
                   isSelected && (isFromGroup ? styles.stopPillSelectedFrom : styles.stopPillSelectedTo)
                 ]}
                 onPress={() => onSelect(stop)}
+                disabled={isDisabled}
               >
                 <Text
                   style={[
                     styles.stopText,
+                    isDisabled && styles.stopTextDisabled,
                     isSelected && (isFromGroup ? styles.stopTextSelectedFrom : styles.stopTextSelectedTo)
                   ]}
                 >
@@ -302,23 +417,27 @@ const QRScannerScreen: React.FC<Props> = ({ navigation }) => {
     >
       {/* Brand */}
       <View style={styles.topBar}>
-        <View style={styles.brandPill}>
-          <Text style={styles.brandQ}>q</Text>
-          <Text style={styles.brandFare}>fare</Text>
-        </View>
+        <QfareLogo
+          width={120}
+          height={28}
+          imageStyle={{ marginLeft: -18 }}
+          containerStyle={{ marginLeft: 0 }}
+        />
       </View>
 
       {/* Hero */}
-      <View style={styles.heroCard}>
-        <View style={styles.heroAccent} />
-        <View style={styles.heroBody}>
-          <Text style={styles.heroBadge}>QR Boarding</Text>
-          <Text style={styles.heading}>Scan to board</Text>
-          <Text style={styles.heroText}>
-            Point your camera at the QR code on the bus, or enter the bus number manually.
-          </Text>
+      {!bus && (
+        <View style={styles.heroCard}>
+          <View style={styles.heroAccent} />
+          <View style={styles.heroBody}>
+            <Text style={styles.heroBadge}>QR Boarding</Text>
+            <Text style={styles.heading}>Scan to board</Text>
+            <Text style={styles.heroText}>
+              Point your camera at the QR code on the bus, or enter the bus number manually.
+            </Text>
+          </View>
         </View>
-      </View>
+      )}
 
       {/* Camera permission denied */}
       {permissionStatus === 'denied' && (
@@ -331,10 +450,10 @@ const QRScannerScreen: React.FC<Props> = ({ navigation }) => {
       )}
 
       {/* Scanner */}
-      {permissionStatus === 'granted' && (
+      {permissionStatus === 'granted' && !bus && (
         <View style={styles.scannerShell}>
           <CameraView
-            onBarcodeScanned={isScanning ? onScanned : undefined}
+            onBarcodeScanned={scanLocked ? undefined : onScanned}
             style={StyleSheet.absoluteFillObject}
             barcodeScannerSettings={{ barcodeTypes: ['qr', 'pdf417', 'aztec'] }}
           />
@@ -347,50 +466,44 @@ const QRScannerScreen: React.FC<Props> = ({ navigation }) => {
           <View style={styles.scannerOverlay}>
             <View style={styles.overlayTextWrap}>
               <Ionicons
-                name={isScanning ? 'scan-outline' : 'qr-code-outline'}
+                name="scan-outline"
                 size={16}
-                color={isScanning ? palette.accent : palette.textMuted}
+                color={palette.accent}
               />
-              <Text style={[styles.overlayText, isScanning && styles.overlayTextActive]}>
-                {isScanning ? 'Align QR within the frame' : 'Tap to start scanning'}
+              <Text style={[styles.overlayText, styles.overlayTextActive]}>
+                {scanLocked ? 'QR captured. Loading route details...' : 'Point the camera at the bus QR code'}
               </Text>
             </View>
-            <TouchableOpacity
-              style={[styles.scanButton, isScanning && styles.scanButtonActive]}
-              onPress={() => setIsScanning(current => !current)}
-            >
-              <Text style={styles.scanButtonText}>
-                {isScanning ? 'Stop scanning' : 'Start scanning'}
-              </Text>
-            </TouchableOpacity>
           </View>
         </View>
       )}
 
       {/* Manual lookup */}
-      <View style={styles.card}>
-        <View style={styles.sectionTitleRow}>
-          <View style={styles.sectionBarBlue} />
-          <Text style={styles.sectionTitle}>Manual lookup</Text>
-        </View>
-        <Text style={styles.manualLabel}>No camera? Enter the bus number directly</Text>
-        <View style={styles.manualRow}>
-          <View style={styles.manualInputWrap}>
-            <Ionicons name="bus-outline" size={15} color={palette.textFaint} style={styles.manualIcon} />
-            <TextInput
-              value={manualBusNumber}
-              onChangeText={setManualBusNumber}
-              placeholder="e.g. WBTC-2026-014"
-              placeholderTextColor={palette.textFaint}
-              style={styles.manualInput}
-              autoCapitalize="characters"
-            />
+      {!bus && (
+        <View style={styles.card}>
+          <View style={styles.sectionTitleRow}>
+            <View style={styles.sectionBarBlue} />
+            <Text style={styles.sectionTitle}>Manual lookup</Text>
           </View>
-          <TouchableOpacity onPress={handleManualLookup} style={styles.secondaryButton}>
-            <Text style={styles.secondaryButtonText}>Load</Text>
-          </TouchableOpacity>
+          <Text style={styles.manualLabel}>No camera? Enter the bus number directly</Text>
+          <View style={styles.manualRow}>
+            <View style={styles.manualInputWrap}>
+              <Ionicons name="bus-outline" size={15} color={palette.textFaint} style={styles.manualIcon} />
+              <TextInput
+                value={manualBusNumber}
+                onChangeText={setManualBusNumber}
+                placeholder="e.g. WBTC-2026-014"
+                placeholderTextColor={palette.textFaint}
+                style={styles.manualInput}
+                autoCapitalize="characters"
+              />
+            </View>
+            <TouchableOpacity onPress={handleManualLookup} style={styles.secondaryButton}>
+              <Text style={styles.secondaryButtonText}>Load</Text>
+            </TouchableOpacity>
+          </View>
         </View>
-      </View>
+      )}
 
       {/* Loading / Error */}
       {isLoading && (
@@ -433,23 +546,41 @@ const QRScannerScreen: React.FC<Props> = ({ navigation }) => {
 
           {/* All stops */}
           <View style={styles.stopsDivider} />
-          <Text style={styles.sectionSubheading}>Route stops</Text>
-          <View style={styles.stopsRow}>
-            {bus.stops.map((stop, idx) => (
-              <View key={stop} style={styles.stopChip}>
-                {idx === 0 && <Ionicons name="radio-button-on" size={10} color={palette.accent} />}
-                {idx === bus.stops.length - 1 && <Ionicons name="location" size={10} color={palette.blue} />}
-                {idx !== 0 && idx !== bus.stops.length - 1 && (
-                  <View style={styles.stopChipDot} />
-                )}
-                <Text style={styles.stopChipText}>{stop}</Text>
-              </View>
-            ))}
-          </View>
+          <TouchableOpacity
+            style={styles.routeStopsToggle}
+            activeOpacity={0.85}
+            onPress={() => setShowRouteStops(current => !current)}
+          >
+            <View style={styles.routeStopsToggleLeft}>
+              <Text style={styles.sectionSubheading}>Route stops</Text>
+              <Text style={styles.routeStopsToggleHint}>
+                {showRouteStops ? 'Hide all stops' : 'Tap to view all stops'}
+              </Text>
+            </View>
+            <Ionicons
+              name={showRouteStops ? 'chevron-up-outline' : 'chevron-down-outline'}
+              size={18}
+              color={palette.textMuted}
+            />
+          </TouchableOpacity>
+          {showRouteStops && (
+            <View style={styles.stopsRow}>
+              {bus.stops.map((stop, idx) => (
+                <View key={stop} style={styles.stopChip}>
+                  {idx === 0 && <Ionicons name="radio-button-on" size={10} color={palette.accent} />}
+                  {idx === bus.stops.length - 1 && <Ionicons name="location" size={10} color={palette.blue} />}
+                  {idx !== 0 && idx !== bus.stops.length - 1 && (
+                    <View style={styles.stopChipDot} />
+                  )}
+                  <Text style={styles.stopChipText}>{stop}</Text>
+                </View>
+              ))}
+            </View>
+          )}
 
           {/* From / To selectors */}
           <View style={styles.stopsDivider} />
-          {renderStopButtons('From', fromStop, setFromStop)}
+          {renderStopButtons('From', fromStop, handleSelectFromStop)}
           {renderStopButtons('To', toStop, setToStop)}
 
           {/* Passenger count */}
@@ -514,6 +645,14 @@ const QRScannerScreen: React.FC<Props> = ({ navigation }) => {
             <Text style={styles.primaryButtonText}>Pay & Generate Ticket</Text>
             <Ionicons name="arrow-forward" size={16} color="rgba(255,255,255,0.7)" />
           </TouchableOpacity>
+
+          <TouchableOpacity
+            style={styles.scanAgainButton}
+            onPress={resetScanSession}
+          >
+            <Ionicons name="scan-outline" size={16} color={palette.blue} />
+            <Text style={styles.scanAgainButtonText}>Scan another bus</Text>
+          </TouchableOpacity>
         </View>
       )}
     </ScrollView>
@@ -525,14 +664,7 @@ const styles = StyleSheet.create({
   content: { padding: 20, paddingBottom: 32 },
 
   // Top bar
-  topBar: { marginBottom: 16 },
-  brandPill: {
-    alignSelf: 'flex-start', backgroundColor: palette.surfaceMuted, borderWidth: 1,
-    borderColor: palette.border, borderRadius: 14, paddingHorizontal: 16,
-    paddingVertical: 8, flexDirection: 'row', alignItems: 'center', gap: 1
-  },
-  brandQ: { color: palette.accent, fontSize: 20, fontWeight: '900' },
-  brandFare: { color: palette.text, fontSize: 20, fontWeight: '900' },
+  topBar: { marginBottom: 16, paddingTop: topInset },
 
   // Hero
   heroCard: {
@@ -565,12 +697,6 @@ const styles = StyleSheet.create({
   overlayTextWrap: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8 },
   overlayText: { color: palette.textMuted, textAlign: 'center', fontSize: 13 },
   overlayTextActive: { color: palette.accent, fontWeight: '600' },
-  scanButton: {
-    backgroundColor: palette.cta, paddingVertical: 14, borderRadius: 16, alignItems: 'center',
-    borderWidth: 1, borderColor: palette.ctaSoft
-  },
-  scanButtonActive: { backgroundColor: '#fde8ee', borderColor: 'rgba(215, 66, 98, 0.28)' },
-  scanButtonText: { color: palette.ctaText, fontSize: 15, fontWeight: '800' },
 
   // Permission
   permissionCard: {
@@ -605,6 +731,20 @@ const styles = StyleSheet.create({
     borderRadius: 14, paddingHorizontal: 18, paddingVertical: 13
   },
   secondaryButtonText: { color: palette.blue, fontWeight: '800', fontSize: 14 },
+  scanAgainButton: {
+    marginTop: 12,
+    borderRadius: 14,
+    paddingVertical: 12,
+    paddingHorizontal: 14,
+    borderWidth: 1,
+    borderColor: 'rgba(68, 153, 255, 0.26)',
+    backgroundColor: palette.blueSoft,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+  },
+  scanAgainButtonText: { color: palette.blue, fontWeight: '800', fontSize: 13.5 },
 
   // Bus card
   routeBadgeRow: {
@@ -627,6 +767,15 @@ const styles = StyleSheet.create({
   busMetaText: { color: palette.textMuted, fontSize: 12.5, fontWeight: '600' },
   stopsDivider: { height: 1, backgroundColor: palette.border, marginVertical: 14 },
   sectionSubheading: { color: palette.textMuted, marginBottom: 10, fontWeight: '700', fontSize: 12, textTransform: 'uppercase', letterSpacing: 0.8 },
+  routeStopsToggle: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 12,
+    marginBottom: 10,
+  },
+  routeStopsToggleLeft: { flex: 1 },
+  routeStopsToggleHint: { color: palette.textFaint, fontSize: 12, marginTop: -2 },
   stopsRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
   stopChip: {
     backgroundColor: palette.surfaceStrong, borderWidth: 1, borderColor: palette.border,
@@ -647,9 +796,15 @@ const styles = StyleSheet.create({
     backgroundColor: palette.surfaceStrong, borderWidth: 1, borderColor: palette.border,
     borderRadius: 12, paddingHorizontal: 12, paddingVertical: 8
   },
+  stopPillDisabled: {
+    backgroundColor: palette.surfaceMuted,
+    borderColor: 'rgba(16, 36, 60, 0.08)',
+    opacity: 0.55,
+  },
   stopPillSelectedFrom: { backgroundColor: palette.accentDeep, borderColor: palette.accent },
   stopPillSelectedTo: { backgroundColor: palette.blue, borderColor: palette.blue },
   stopText: { color: palette.textMuted, fontSize: 13, fontWeight: '600' },
+  stopTextDisabled: { color: palette.textFaint },
   stopTextSelectedFrom: { color: '#fff', fontWeight: '800' },
   stopTextSelectedTo: { color: '#fff', fontWeight: '800' },
 

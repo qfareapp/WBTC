@@ -24,4 +24,4 @@ apply plugin: "expo-root-project"
 apply plugin: "com.facebook.react.rootproject"
 
 // Force NDK 26 for all modules — NDK 27 breaks libc++ linking with this RN version
-rootProject.ext.ndkVersion = "26.1.10909125"
+rootProject.ext.ndkVersion = "28.0.13004108"

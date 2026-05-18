@@ -1,8 +1,11 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
-const STORAGE_KEY = 'qfare_ticket_history';
+const STORAGE_KEY_PREFIX = 'qfare_ticket_history';
+
+const getStorageKey = (userId: string) => `${STORAGE_KEY_PREFIX}:${userId}`;
 
 export type StoredTicket = {
+  ownerUserId: string;
   bookingId: string;
   tripInstanceId: string | null;
   busNumber: string;
@@ -18,9 +21,9 @@ export type StoredTicket = {
   expiredAt: string | null;
 };
 
-export const saveTicket = async (ticket: StoredTicket): Promise<void> => {
+export const saveTicket = async (userId: string, ticket: StoredTicket): Promise<void> => {
   try {
-    const raw = await AsyncStorage.getItem(STORAGE_KEY);
+    const raw = await AsyncStorage.getItem(getStorageKey(userId));
     const list: StoredTicket[] = raw ? JSON.parse(raw) : [];
     const idx = list.findIndex(t => t.bookingId === ticket.bookingId);
     if (idx >= 0) {
@@ -28,26 +31,30 @@ export const saveTicket = async (ticket: StoredTicket): Promise<void> => {
     } else {
       list.unshift(ticket);
     }
-    await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(list));
+    await AsyncStorage.setItem(getStorageKey(userId), JSON.stringify(list));
   } catch { /* non-fatal */ }
 };
 
-export const markTicketExpired = async (bookingId: string, expiredAt: string): Promise<void> => {
+export const markTicketExpired = async (
+  userId: string,
+  bookingId: string,
+  expiredAt: string
+): Promise<void> => {
   try {
-    const raw = await AsyncStorage.getItem(STORAGE_KEY);
+    const raw = await AsyncStorage.getItem(getStorageKey(userId));
     if (!raw) return;
     const list: StoredTicket[] = JSON.parse(raw);
     const idx = list.findIndex(t => t.bookingId === bookingId);
     if (idx >= 0) {
       list[idx] = { ...list[idx], ticketStatus: 'expired', expiredAt };
-      await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(list));
+      await AsyncStorage.setItem(getStorageKey(userId), JSON.stringify(list));
     }
   } catch { /* non-fatal */ }
 };
 
-export const getTickets = async (): Promise<StoredTicket[]> => {
+export const getTickets = async (userId: string): Promise<StoredTicket[]> => {
   try {
-    const raw = await AsyncStorage.getItem(STORAGE_KEY);
+    const raw = await AsyncStorage.getItem(getStorageKey(userId));
     return raw ? JSON.parse(raw) : [];
   } catch {
     return [];

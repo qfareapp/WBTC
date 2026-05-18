@@ -5,6 +5,7 @@ import { ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-nati
 import { Ionicons } from '@expo/vector-icons';
 import { RootStackParamList } from '../navigation/AppNavigator';
 import { apiGet } from '../lib/api';
+import { useAuth } from '../lib/auth';
 import { markTicketExpired } from '../lib/ticketStorage';
 import { palette } from '../lib/theme';
 
@@ -26,6 +27,7 @@ const Perf = () => (
 type TripStatus = 'Active' | 'Completed' | 'Cancelled' | 'Scheduled' | null;
 
 const TicketScreen: React.FC<Props> = ({ route, navigation }) => {
+  const { user } = useAuth();
   const {
     source, destination, fare, passengerCount,
     busNumber, routeCode, routeName, bookingId, bookedAt, tripInstanceId,
@@ -37,7 +39,7 @@ const TicketScreen: React.FC<Props> = ({ route, navigation }) => {
 
   // Poll validity every 12 seconds while ticket is active
   useEffect(() => {
-    if (!bookingId) return;
+    if (!bookingId || !user?.id) return;
 
     const check = async () => {
       try {
@@ -49,7 +51,7 @@ const TicketScreen: React.FC<Props> = ({ route, navigation }) => {
         if (!data.valid && !hasExpired.current) {
           hasExpired.current = true;
           const expiredAt = data.tripEndedAt ?? new Date().toISOString();
-          void markTicketExpired(bookingId, expiredAt);
+          void markTicketExpired(user.id, bookingId, expiredAt);
         }
       } catch { /* non-fatal — keep showing last known state */ }
     };
@@ -57,7 +59,7 @@ const TicketScreen: React.FC<Props> = ({ route, navigation }) => {
     void check();
     const interval = setInterval(() => { void check(); }, 12000);
     return () => clearInterval(interval);
-  }, [bookingId]);
+  }, [bookingId, user?.id]);
 
   const ticketId = bookingId || `TKT-${busNumber}-${Date.now()}`;
   const farePerPerson = passengerCount > 1 ? fare / passengerCount : null;

@@ -1,5 +1,5 @@
 import React, { useCallback, useState } from 'react';
-import { ActivityIndicator, Alert, Linking, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { ActivityIndicator, Alert, Linking, Platform, ScrollView, StatusBar, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
 import { CompositeNavigationProp } from '@react-navigation/native';
 import { BottomTabNavigationProp, useBottomTabBarHeight } from '@react-navigation/bottom-tabs';
@@ -10,6 +10,7 @@ import { useAuth } from '../lib/auth';
 import { BottomTabParamList, RootStackParamList } from '../navigation/AppNavigator';
 import { getTickets, markTicketExpired, StoredTicket } from '../lib/ticketStorage';
 import { palette } from '../lib/theme';
+import QfareLogo from '../components/QfareLogo';
 
 type Props = {
   navigation: CompositeNavigationProp<
@@ -19,6 +20,7 @@ type Props = {
 };
 
 const PRIVACY_POLICY_URL = 'https://wbtc-rose.vercel.app/qfare-privacy-policy';
+const topInset = Platform.OS === 'android' ? (StatusBar.currentHeight ?? 0) + 14 : 20;
 
 const ProfileScreen: React.FC<Props> = ({ navigation }) => {
   const { user, logout } = useAuth();
@@ -36,9 +38,15 @@ const ProfileScreen: React.FC<Props> = ({ navigation }) => {
   useFocusEffect(
     useCallback(() => {
       let cancelled = false;
+      const userId = user?.id;
 
       const load = async () => {
-        const stored = await getTickets();
+        if (!userId) {
+          if (!cancelled) setTickets([]);
+          return;
+        }
+
+        const stored = await getTickets(userId);
         if (!cancelled) setTickets(stored);
 
         // Re-validate any locally-active tickets against the backend
@@ -53,14 +61,14 @@ const ProfileScreen: React.FC<Props> = ({ navigation }) => {
                 `/api/public/bookings/${encodeURIComponent(t.bookingId)}/status`
               );
               if (!data.valid) {
-                await markTicketExpired(t.bookingId, data.tripEndedAt ?? new Date().toISOString());
+                await markTicketExpired(userId, t.bookingId, data.tripEndedAt ?? new Date().toISOString());
               }
             } catch { /* non-fatal */ }
           })
         );
 
         if (!cancelled) {
-          const refreshed = await getTickets();
+          const refreshed = await getTickets(userId);
           setTickets(refreshed);
         }
         if (!cancelled) setValidating(false);
@@ -68,7 +76,7 @@ const ProfileScreen: React.FC<Props> = ({ navigation }) => {
 
       void load();
       return () => { cancelled = true; };
-    }, [])
+    }, [user?.id])
   );
 
   const liveTickets   = tickets.filter(t => t.ticketStatus === 'active');
@@ -195,10 +203,12 @@ const ProfileScreen: React.FC<Props> = ({ navigation }) => {
     >
       {/* Top bar */}
       <View style={styles.topBar}>
-        <View style={styles.brandPill}>
-          <Text style={styles.brandQ}>q</Text>
-          <Text style={styles.brandFare}>fare</Text>
-        </View>
+        <QfareLogo
+          width={120}
+          height={28}
+          imageStyle={{ marginLeft: -18 }}
+          containerStyle={{ marginLeft: 0 }}
+        />
         <TouchableOpacity style={styles.logoutBtn} onPress={handleLogout} activeOpacity={0.7}>
           <Ionicons name="log-out-outline" size={18} color={palette.danger} />
         </TouchableOpacity>
@@ -335,14 +345,7 @@ const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: palette.bg },
   content: { padding: 20, paddingBottom: 32 },
 
-  topBar: { marginBottom: 24, paddingTop: 8, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
-  brandPill: {
-    alignSelf: 'flex-start', backgroundColor: palette.surfaceMuted, borderWidth: 1,
-    borderColor: palette.border, borderRadius: 14, paddingHorizontal: 16,
-    paddingVertical: 8, flexDirection: 'row', alignItems: 'center', gap: 1,
-  },
-  brandQ: { color: palette.accent, fontSize: 20, fontWeight: '900' },
-  brandFare: { color: palette.text, fontSize: 20, fontWeight: '900' },
+  topBar: { marginBottom: 24, paddingTop: topInset, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   logoutBtn: {
     width: 40, height: 40, borderRadius: 12,
     backgroundColor: palette.surface, borderWidth: 1, borderColor: palette.border,

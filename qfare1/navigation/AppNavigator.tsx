@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { StyleSheet, View } from 'react-native';
+import { StyleSheet, Text, View } from 'react-native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { Ionicons } from '@expo/vector-icons';
@@ -55,8 +55,11 @@ type TabIconProps = {
 const TabIcon = ({ icon, iconActive, color, focused, isScan }: TabIconProps) => {
   if (isScan) {
     return (
-      <View style={[styles.scanTabIcon, focused && styles.scanTabIconActive]}>
-        <Ionicons name={focused ? iconActive : icon} size={22} color={focused ? '#fff' : palette.textFaint} />
+      <View style={styles.scanTabWrap}>
+        <View style={[styles.scanTabIcon, focused && styles.scanTabIconActive]}>
+          <Ionicons name={focused ? iconActive : icon} size={22} color={focused ? '#fff' : palette.textFaint} />
+        </View>
+        <Text style={[styles.scanTabLabel, focused && styles.scanTabLabelActive]}>Scan</Text>
       </View>
     );
   }
@@ -115,10 +118,13 @@ const TabsNavigator = () => (
       name="Scan"
       component={QRScannerScreen}
       options={{
-        tabBarLabel: 'Scan',
+        tabBarLabel: '',
         tabBarIcon: ({ color, focused }) => (
           <TabIcon icon="scan-outline" iconActive="scan" color={color} focused={focused} isScan />
-        )
+        ),
+        tabBarItemStyle: {
+          paddingTop: 0
+        }
       }}
     />
     <Tab.Screen
@@ -218,6 +224,21 @@ const styles = StyleSheet.create({
     backgroundColor: palette.cta,
     borderWidth: 1,
     borderColor: palette.ctaSoft
+  },
+  scanTabWrap: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginTop: -2
+  },
+  scanTabLabel: {
+    marginTop: 5,
+    fontSize: 11,
+    fontWeight: '700',
+    letterSpacing: 0.3,
+    color: palette.textFaint
+  },
+  scanTabLabelActive: {
+    color: palette.accent
   },
   scanTabIconActive: {
     backgroundColor: palette.accent,
