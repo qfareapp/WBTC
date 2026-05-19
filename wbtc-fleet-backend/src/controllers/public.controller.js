@@ -194,26 +194,38 @@ const issuePassengerTicketBooking = async ({
 
 /**
  * Returns the best available bus location for a trip.
- * Prefer conductor GPS and fall back to driver GPS when needed.
+ * Choose the freshest live GPS update between conductor and driver.
  */
 const resolveBestLocation = (trip) => {
-  if (typeof trip.lastLatitude === "number" && typeof trip.lastLongitude === "number") {
-    return {
-      lat: trip.lastLatitude,
-      lng: trip.lastLongitude,
-      at: trip.lastLocationAt,
-      name: trip.lastLocationName || null,
-    };
-  }
-  if (typeof trip.driverLastLatitude === "number" && typeof trip.driverLastLongitude === "number") {
-    return {
-      lat: trip.driverLastLatitude,
-      lng: trip.driverLastLongitude,
-      at: trip.driverLastLocationAt,
-      name: trip.lastLocationName || null,
-    };
-  }
-  return null;
+  const conductorLocation =
+    typeof trip.lastLatitude === "number" && typeof trip.lastLongitude === "number"
+      ? {
+          lat: trip.lastLatitude,
+          lng: trip.lastLongitude,
+          at: trip.lastLocationAt,
+          name: trip.lastLocationName || null,
+          source: "conductor",
+        }
+      : null;
+
+  const driverLocation =
+    typeof trip.driverLastLatitude === "number" && typeof trip.driverLastLongitude === "number"
+      ? {
+          lat: trip.driverLastLatitude,
+          lng: trip.driverLastLongitude,
+          at: trip.driverLastLocationAt,
+          name: trip.lastLocationName || null,
+          source: "driver",
+        }
+      : null;
+
+  if (!conductorLocation) return driverLocation;
+  if (!driverLocation) return conductorLocation;
+
+  const conductorAt = conductorLocation.at ? new Date(conductorLocation.at).getTime() : 0;
+  const driverAt = driverLocation.at ? new Date(driverLocation.at).getTime() : 0;
+
+  return conductorAt >= driverAt ? conductorLocation : driverLocation;
 };
 
 const addUtcDays = (date, days) => {
