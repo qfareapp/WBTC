@@ -14,6 +14,7 @@ import OwnerDashboard from "./pages/OwnerDashboard.jsx";
 import OwnerAssignCrew from "./pages/OwnerAssignCrew.jsx";
 import OwnersOverview from "./pages/OwnersOverview.jsx";
 import PaymentsOverview from "./pages/PaymentsOverview.jsx";
+import PassengerUsersOverview from "./pages/PassengerUsersOverview.jsx";
 import Login from "./pages/Login.jsx";
 import Register from "./pages/Register.jsx";
 import PrivacyPolicy from "./pages/PrivacyPolicy.jsx";
@@ -198,6 +199,20 @@ function App() {
                 <Navigate to="/owner" replace />
               ) : (
                 <PaymentsOverview apiBase={apiBase} token={token} />
+              )
+            ) : (
+              <Navigate to="/" replace />
+            )
+          }
+        />
+        <Route
+          path="/passengers"
+          element={
+            token ? (
+              user?.role === "OWNER" ? (
+                <Navigate to="/owner" replace />
+              ) : (
+                <PassengerUsersOverview apiBase={apiBase} token={token} />
               )
             ) : (
               <Navigate to="/" replace />

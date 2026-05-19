@@ -17,7 +17,8 @@ const {
   verifyPassengerPaymentAndCreateBooking,
   handleRazorpayWebhook,
   getBookingStatus,
-  getBookingAnalytics
+  getBookingAnalytics,
+  getPassengerRegistry,
 } = require("../controllers/public.controller");
 
 router.get("/scan", getBusRouteByQr);
@@ -35,5 +36,6 @@ router.post("/payments/razorpay/webhook", handleRazorpayWebhook);
 router.post("/bookings/demo", createDemoBooking);
 router.get("/bookings/:bookingId/status", getBookingStatus);
 router.get("/bookings/analytics", auth, requireRole("ADMIN", "DEPOT_MANAGER", "SCHEDULER", "VIEWER"), getBookingAnalytics);
+router.get("/bookings/users", auth, requireRole("ADMIN", "DEPOT_MANAGER", "SCHEDULER", "VIEWER"), getPassengerRegistry);
 
 module.exports = router;

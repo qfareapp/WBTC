@@ -1,6 +1,7 @@
 const crypto = require("crypto");
 const Razorpay = require("razorpay");
 const Bus = require("../models/Bus");
+const PassengerUser = require("../models/PassengerUser");
 const TripInstance = require("../models/TripInstance");
 const Route = require("../models/Route");
 const RouteStop = require("../models/RouteStop");
@@ -1248,5 +1249,223 @@ exports.getBookingAnalytics = asyncHandler(async (req, res) => {
     monthly: monthlyWithGrowth,
     monthlyGrowthPct: currentMonth?.growthPct ?? null,
     currentMonthPassengers: currentMonth?.passengers ?? 0,
+  });
+});
+
+exports.getPassengerRegistry = asyncHandler(async (req, res) => {
+  const requestedDepotId = req.query.depotId ? String(req.query.depotId) : null;
+  const scopeDepotId = req.user?.role === "ADMIN" ? null : req.user?.depotId || null;
+  const depotFilter = scopeDepotId || requestedDepotId || null;
+  const q = String(req.query.q || "").trim();
+  const liveOnly = String(req.query.liveOnly || "").toLowerCase() === "true";
+  const limit = Math.max(1, Math.min(500, Number(req.query.limit) || 200));
+  const operatorType = req.query.operatorType ? String(req.query.operatorType) : null;
+
+  const bookingScope = {
+    issuedByRole: "PASSENGER_APP",
+    ...(depotFilter ? { depotId: depotFilter } : {}),
+  };
+
+  if (operatorType) {
+    const scopedBuses = await Bus.find({
+      ...(depotFilter ? { depotId: depotFilter } : {}),
+      $or: [{ operatorType }, ...(operatorType === "WBTC" ? [{ operatorType: { $exists: false } }] : [])],
+    }).select("busNumber");
+    bookingScope.busNumber = { $in: scopedBuses.map((row) => row.busNumber) };
+  }
+
+  let scopedPassengerIds = null;
+  if (depotFilter || operatorType) {
+    const rows = await TicketBooking.find({
+      ...bookingScope,
+      issuedById: { $ne: null },
+    })
+      .select("issuedById")
+      .lean();
+    scopedPassengerIds = Array.from(
+      new Set(rows.map((row) => String(row.issuedById || "")).filter(Boolean))
+    );
+    if (!scopedPassengerIds.length) {
+      return res.json({
+        ok: true,
+        summary: {
+          totalUsers: 0,
+          usersWithBookings: 0,
+          profileCompleteUsers: 0,
+          activeLiveBookings: 0,
+          totalBookings: 0,
+          totalRevenue: 0,
+        },
+        users: [],
+      });
+    }
+  }
+
+  const passengerFilter = {
+    ...(scopedPassengerIds ? { _id: { $in: scopedPassengerIds } } : {}),
+    ...(q
+      ? {
+          $or: [
+            { email: { $regex: q, $options: "i" } },
+            { name: { $regex: q, $options: "i" } },
+            { phone: { $regex: q, $options: "i" } },
+          ],
+        }
+      : {}),
+  };
+
+  const passengers = await PassengerUser.find(passengerFilter)
+    .select("email name phone profileComplete createdAt updatedAt")
+    .sort({ createdAt: -1 })
+    .limit(limit)
+    .lean();
+
+  if (!passengers.length) {
+    return res.json({
+      ok: true,
+      summary: {
+        totalUsers: 0,
+        usersWithBookings: 0,
+        profileCompleteUsers: 0,
+        activeLiveBookings: 0,
+        totalBookings: 0,
+        totalRevenue: 0,
+      },
+      users: [],
+    });
+  }
+
+  const passengerIds = passengers.map((row) => row._id);
+  const bookings = await TicketBooking.find({
+    ...bookingScope,
+    issuedById: { $in: passengerIds },
+  })
+    .select(
+      "bookingId issuedById busNumber routeId tripInstanceId source destination fare passengerCount paymentMode status paymentStatus bookedAt createdAt"
+    )
+    .sort({ bookedAt: -1, createdAt: -1 })
+    .lean();
+
+  const tripIds = Array.from(
+    new Set(bookings.map((row) => String(row.tripInstanceId || "")).filter(Boolean))
+  );
+  const trips = tripIds.length
+    ? await TripInstance.find({ _id: { $in: tripIds } })
+        .select("status conductorEndedAt actualEndTime date startTime endTime routeId busId")
+        .populate("routeId", "routeCode routeName source destination")
+        .populate("busId", "busNumber")
+        .lean()
+    : [];
+  const tripById = new Map(trips.map((trip) => [String(trip._id), trip]));
+
+  const users = passengers.map((passenger) => ({
+    id: String(passenger._id),
+    email: passenger.email || "--",
+    name: passenger.name || "--",
+    phone: passenger.phone || "--",
+    profileComplete: Boolean(passenger.profileComplete),
+    createdAt: passenger.createdAt,
+    updatedAt: passenger.updatedAt,
+    stats: {
+      totalBookings: 0,
+      totalPassengers: 0,
+      totalSpent: 0,
+      onlineBookings: 0,
+      cashBookings: 0,
+      activeLiveBookings: 0,
+      lastBookingAt: null,
+    },
+    liveBookings: [],
+    recentHistory: [],
+  }));
+  const userById = new Map(users.map((row) => [row.id, row]));
+
+  for (const booking of bookings) {
+    const userId = String(booking.issuedById || "");
+    const bucket = userById.get(userId);
+    if (!bucket) continue;
+
+    const trip = tripById.get(String(booking.tripInstanceId || "")) || null;
+    const isLive =
+      trip &&
+      String(trip.status || "") === "Active" &&
+      !trip.conductorEndedAt &&
+      String(booking.status || "") === "PAID";
+    const pax = Number(booking.passengerCount) || 1;
+    const fare = Number(booking.fare) || 0;
+
+    bucket.stats.totalBookings += 1;
+    bucket.stats.totalPassengers += pax;
+    bucket.stats.totalSpent = Number((bucket.stats.totalSpent + fare).toFixed(2));
+    if (String(booking.paymentMode || "") === "ONLINE") bucket.stats.onlineBookings += 1;
+    if (String(booking.paymentMode || "") === "CASH") bucket.stats.cashBookings += 1;
+    if (!bucket.stats.lastBookingAt || new Date(booking.bookedAt) > new Date(bucket.stats.lastBookingAt)) {
+      bucket.stats.lastBookingAt = booking.bookedAt;
+    }
+
+    const entry = {
+      bookingId: booking.bookingId,
+      busNumber: trip?.busId?.busNumber || booking.busNumber || "--",
+      routeCode: trip?.routeId?.routeCode || "--",
+      routeName: trip?.routeId?.routeName || "--",
+      source: booking.source,
+      destination: booking.destination,
+      fare,
+      passengerCount: pax,
+      paymentMode: booking.paymentMode,
+      status: booking.status,
+      paymentStatus: booking.paymentStatus,
+      bookedAt: booking.bookedAt,
+      tripStatus: trip?.status || null,
+      tripDate: trip?.date || null,
+      tripWindow: trip ? `${trip.startTime || "--"} - ${trip.endTime || "--"}` : null,
+    };
+
+    if (isLive) {
+      bucket.stats.activeLiveBookings += 1;
+      bucket.liveBookings.push(entry);
+    }
+    if (bucket.recentHistory.length < 6) {
+      bucket.recentHistory.push(entry);
+    }
+  }
+
+  const filteredUsers = (liveOnly ? users.filter((row) => row.stats.activeLiveBookings > 0) : users).sort((a, b) => {
+    const liveDiff = b.stats.activeLiveBookings - a.stats.activeLiveBookings;
+    if (liveDiff !== 0) return liveDiff;
+    return new Date(b.stats.lastBookingAt || b.createdAt).getTime() - new Date(a.stats.lastBookingAt || a.createdAt).getTime();
+  });
+
+  const summary = filteredUsers.reduce(
+    (acc, row) => {
+      acc.totalUsers += 1;
+      if (row.profileComplete) acc.profileCompleteUsers += 1;
+      if (row.stats.totalBookings > 0) acc.usersWithBookings += 1;
+      acc.activeLiveBookings += row.stats.activeLiveBookings;
+      acc.totalBookings += row.stats.totalBookings;
+      acc.totalRevenue = Number((acc.totalRevenue + row.stats.totalSpent).toFixed(2));
+      return acc;
+    },
+    {
+      totalUsers: 0,
+      usersWithBookings: 0,
+      profileCompleteUsers: 0,
+      activeLiveBookings: 0,
+      totalBookings: 0,
+      totalRevenue: 0,
+    }
+  );
+
+  res.json({
+    ok: true,
+    summary,
+    users: filteredUsers,
+    filters: {
+      depotId: depotFilter,
+      operatorType,
+      q,
+      liveOnly,
+      limit,
+    },
   });
 });

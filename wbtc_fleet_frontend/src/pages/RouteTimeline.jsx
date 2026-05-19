@@ -771,6 +771,7 @@ function RouteTimeline({ apiBase, token }) {
           <nav className="nav">
             <Link className="nav-item" to="/dashboard">Dashboard</Link>
             <Link className="nav-item" to="/owners">Owners</Link>
+            <Link className="nav-item" to="/passengers">Passengers</Link>
             <Link className="nav-item" to="/scheduling">Trip scheduling</Link>
             <Link className="nav-item" to="/routes">Route entry</Link>
             <Link className="nav-item" to="/payments">Payment</Link>

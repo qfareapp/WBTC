@@ -370,6 +370,7 @@ function Dashboard({ apiBase, setApiBase, token, setToken, user, setUser, operat
           <nav className="nav">
             <button className="nav-item" type="button">Overview</button>
             <Link className="nav-item" to="/owners">Owners</Link>
+            <Link className="nav-item" to="/passengers">Passengers</Link>
             <Link className="nav-item" to="/buses">Bus</Link>
             <Link className="nav-item" to="/depots">Depot</Link>
             <Link className="nav-item" to="/drivers">Driver</Link>

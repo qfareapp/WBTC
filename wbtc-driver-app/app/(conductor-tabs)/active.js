@@ -3,6 +3,7 @@ import { View, Text, StyleSheet, TouchableOpacity, ScrollView, RefreshControl, M
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { useRouter } from "expo-router";
 import * as Location from "expo-location";
+import QRCode from "react-native-qrcode-svg";
 import { useConductorLanguage } from "../../contexts/conductor-language";
 import useOfferAlert from "../../hooks/use-offer-alert";
 import { getOpsDate } from "../../utils/opsTime";
@@ -48,10 +49,9 @@ const sanitizePrint = (value) => String(value ?? "--").replace(/\s+/g, " ").trim
 const toAscii = (value) => String(value || "").replace(/[^\x20-\x7E]/g, "");
 const buildTicketPrintPayload = ({ trip, ticket, src, dst, fareValue }) => {
   const lines = [
-    "WBTC BUS TICKET",
-    "Passenger Copy",
+    `Route no: ${sanitizePrint(trip?.route?.routeCode)}`,
+    `Bus no: ${sanitizePrint(trip?.bus?.busNumber)}`,
     "------------------------------",
-    `Route: ${sanitizePrint(trip?.route?.routeCode)}`,
     `Ticket: ${sanitizePrint(ticket?.bookingId)}`,
     `Time: ${sanitizePrint(formatDateTime(ticket?.bookedAt))}`,
     `Source: ${sanitizePrint(ticket?.source || src)}`,
@@ -63,7 +63,7 @@ const buildTicketPrintPayload = ({ trip, ticket, src, dst, fareValue }) => {
     "1. Valid only for this journey.",
     "2. Keep till end of trip.",
     "3. Subject to transport rules.",
-    "Thank you for traveling with WBTC",
+    "Thank you for traveling with us",
     "",
     "",
     "",
@@ -83,6 +83,7 @@ export default function ConductorActive() {
   const [dutyUpdating, setDutyUpdating] = useState(false);
   const [activeTrip, setActiveTrip] = useState(null);
   const [stops, setStops] = useState([]);
+  const [stopsExpanded, setStopsExpanded] = useState(false);
   const [source, setSource] = useState("");
   const [destination, setDestination] = useState("");
   const [passengerCount, setPassengerCount] = useState(1);
@@ -90,6 +91,7 @@ export default function ConductorActive() {
   const [issuing, setIssuing] = useState(false);
   const [lastTicket, setLastTicket] = useState(null);
   const [ticketModalOpen, setTicketModalOpen] = useState(false);
+  const [busQrOpen, setBusQrOpen] = useState(false);
   const [endTripModalOpen, setEndTripModalOpen] = useState(false);
   const [endingTrip, setEndingTrip] = useState(false);
   const [snoozedTripId, setSnoozedTripId] = useState("");
@@ -104,6 +106,20 @@ export default function ConductorActive() {
   });
 
   const isOnDuty = (conductor?.status || "Available") === "Available";
+  const sourceIndex = stops.findIndex((stop) => stop === source);
+  const destinationIndex = stops.findIndex((stop) => stop === destination);
+  const hasValidDirection =
+    sourceIndex >= 0 &&
+    destinationIndex >= 0 &&
+    destinationIndex > sourceIndex;
+  const liveBusQrValue = activeTrip?.bus?.busNumber
+    ? JSON.stringify({
+        busNumber: String(activeTrip.bus.busNumber).trim(),
+        depotId: activeTrip.bus?.depotId?._id || activeTrip.bus?.depotId || activeTrip?.depotId || null,
+        busType: activeTrip.bus?.busType || null,
+        fuelType: activeTrip.bus?.fuelType || null,
+      })
+    : "";
 
   useOfferAlert(offers, isOnDuty);
 
@@ -197,6 +213,8 @@ export default function ConductorActive() {
       }
       setStops((data.stops || []).map((stop) => stop.name));
       if (!trip) {
+        setStopsExpanded(false);
+        setBusQrOpen(false);
         setSource("");
         setDestination("");
         setPassengerCount(1);
@@ -462,12 +480,27 @@ export default function ConductorActive() {
       setFare(null);
       return;
     }
+    if (!hasValidDirection) {
+      setFare(null);
+      return;
+    }
     fetchFare();
-  }, [activeTrip?.tripInstanceId, source, destination]);
+  }, [activeTrip?.tripInstanceId, source, destination, hasValidDirection]);
+
+  useEffect(() => {
+    if (!destination) return;
+    if (sourceIndex < 0 || destinationIndex < 0 || destinationIndex > sourceIndex) return;
+    setDestination("");
+    setFare(null);
+  }, [sourceIndex, destinationIndex, destination]);
 
   const issueTicket = async () => {
     if (!activeTrip || !source || !destination) {
       setNotice("Select source and destination first.");
+      return;
+    }
+    if (!hasValidDirection) {
+      setNotice("Destination must be after the selected source stop.");
       return;
     }
     if (!activeTrip?.ticketingEnabled) {
@@ -693,6 +726,13 @@ export default function ConductorActive() {
                   <Text style={styles.tripBannerLocationPending}>📡 Acquiring GPS…</Text>
                 ) : null}
               </View>
+              <TouchableOpacity
+                style={styles.qrLaunchBtn}
+                onPress={() => setBusQrOpen(true)}
+                disabled={!liveBusQrValue}
+              >
+                <Text style={styles.qrLaunchBtnText}>Show bus QR for passengers</Text>
+              </TouchableOpacity>
               <Text style={styles.cardRowStrong}>Passengers waiting</Text>
               {(activeTrip.waitingSummary?.stops || []).length ? (
                 <View style={styles.waitingListWrap}>
@@ -708,39 +748,83 @@ export default function ConductorActive() {
               ) : (
                 <Text style={styles.helper}>No passengers have marked themselves waiting yet.</Text>
               )}
-              <Text style={styles.cardRowStrong}>{t("active", "stops")}</Text>
-              <View style={styles.stopListWrap}>
-                {stops.map((stop, stopIndex) => (
-                  <View key={`stop-${stop || "na"}-${stopIndex}`} style={styles.stopChip}>
-                    <Text style={styles.stopChipText}>{stop}</Text>
-                  </View>
-                ))}
-              </View>
+              <TouchableOpacity
+                style={styles.stopsToggle}
+                onPress={() => setStopsExpanded((current) => !current)}
+                activeOpacity={0.85}
+              >
+                <Text style={styles.cardRowStrong}>{t("active", "stops")}</Text>
+                <Text style={styles.stopsToggleText}>
+                  {stopsExpanded ? "Hide route stops" : `Show route stops (${stops.length})`}
+                </Text>
+              </TouchableOpacity>
+              {stopsExpanded ? (
+                <View style={styles.stopListWrap}>
+                  {stops.map((stop, stopIndex) => (
+                    <View key={`stop-${stop || "na"}-${stopIndex}`} style={styles.stopChip}>
+                      <Text style={styles.stopChipText}>{stop}</Text>
+                    </View>
+                  ))}
+                </View>
+              ) : null}
 
               <Text style={styles.fieldLabel}>{t("active", "source")}</Text>
               <View style={styles.selectionWrap}>
                 {stops.map((stop, stopIndex) => (
                   <TouchableOpacity
                     key={`src-${stop || "na"}-${stopIndex}`}
-                    style={[styles.choice, source === stop ? styles.choiceActive : null]}
-                    onPress={() => setSource(stop)}
+                    style={[
+                      styles.choice,
+                      source === stop ? styles.sourceChoiceActive : null,
+                    ]}
+                    onPress={() => {
+                      setSource(stop);
+                      setNotice("");
+                    }}
                   >
-                    <Text style={[styles.choiceText, source === stop ? styles.choiceTextActive : null]}>{stop}</Text>
+                    <Text
+                      style={[
+                        styles.choiceText,
+                        source === stop ? styles.sourceChoiceTextActive : null,
+                      ]}
+                    >
+                      {stop}
+                    </Text>
                   </TouchableOpacity>
                 ))}
               </View>
 
               <Text style={styles.fieldLabel}>{t("active", "destination")}</Text>
               <View style={styles.selectionWrap}>
-                {stops.map((stop, stopIndex) => (
+                {stops.map((stop, stopIndex) => {
+                  const disabled = sourceIndex >= 0 && stopIndex <= sourceIndex;
+                  return (
                   <TouchableOpacity
                     key={`dst-${stop || "na"}-${stopIndex}`}
-                    style={[styles.choice, destination === stop ? styles.choiceActive : null]}
-                    onPress={() => setDestination(stop)}
+                    style={[
+                      styles.choice,
+                      destination === stop ? styles.destinationChoiceActive : null,
+                      disabled ? styles.choiceDisabled : null,
+                    ]}
+                    onPress={() => {
+                      if (disabled) return;
+                      setDestination(stop);
+                      setNotice("");
+                    }}
+                    disabled={disabled}
                   >
-                    <Text style={[styles.choiceText, destination === stop ? styles.choiceTextActive : null]}>{stop}</Text>
+                    <Text
+                      style={[
+                        styles.choiceText,
+                        destination === stop ? styles.destinationChoiceTextActive : null,
+                        disabled ? styles.choiceTextDisabled : null,
+                      ]}
+                    >
+                      {stop}
+                    </Text>
                   </TouchableOpacity>
-                ))}
+                  );
+                })}
               </View>
 
               <Text style={styles.fieldLabel}>{t("active", "passengersMax")}</Text>
@@ -748,10 +832,18 @@ export default function ConductorActive() {
                 {[1, 2, 3, 4, 5].map((count) => (
                   <TouchableOpacity
                     key={`pax-${count}`}
-                    style={[styles.choice, passengerCount === count ? styles.choiceActive : null]}
+                    style={[
+                      styles.choice,
+                      passengerCount === count ? styles.passengerChoiceActive : null,
+                    ]}
                     onPress={() => setPassengerCount(count)}
                   >
-                    <Text style={[styles.choiceText, passengerCount === count ? styles.choiceTextActive : null]}>
+                    <Text
+                      style={[
+                        styles.choiceText,
+                        passengerCount === count ? styles.passengerChoiceTextActive : null,
+                      ]}
+                    >
                       {count}
                     </Text>
                   </TouchableOpacity>
@@ -803,8 +895,8 @@ export default function ConductorActive() {
         <View style={styles.modalBackdrop}>
           <View style={styles.ticketModalCard}>
             <View style={styles.ticketHead}>
-              <Text style={styles.ticketBrand}>WBTC BUS TICKET</Text>
-              <Text style={styles.ticketSubBrand}>{t("active", "passengerCopy")}</Text>
+              <Text style={styles.ticketBrand}>Route no: {activeTrip?.route?.routeCode || "--"}</Text>
+              <Text style={styles.ticketSubBrand}>Bus no: {activeTrip?.bus?.busNumber || "--"}</Text>
             </View>
 
             <View style={styles.ticketSeparator} />
@@ -850,11 +942,51 @@ export default function ConductorActive() {
             <Text style={styles.ticketFooter}>{t("active", "thanks")}</Text>
 
             <View style={styles.modalActions}>
-              <TouchableOpacity style={styles.secondary} onPress={() => setTicketModalOpen(false)}>
-                <Text style={styles.secondaryText}>{t("common", "close")}</Text>
+              <TouchableOpacity style={styles.ticketCloseBtn} onPress={() => setTicketModalOpen(false)}>
+                <Text style={styles.ticketCloseBtnText}>{t("common", "close")}</Text>
               </TouchableOpacity>
               <TouchableOpacity style={styles.printBtn} onPress={handlePrint} disabled={printing}>
                 <Text style={styles.printBtnText}>{printing ? t("common", "printing") : t("common", "print")}</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      <Modal transparent visible={busQrOpen} animationType="fade" onRequestClose={() => setBusQrOpen(false)}>
+        <View style={styles.modalBackdrop}>
+          <View style={styles.busQrModalCard}>
+            <View style={styles.ticketHead}>
+              <Text style={styles.ticketBrand}>Scan to book in qfare</Text>
+              <Text style={styles.ticketSubBrand}>Bus no: {activeTrip?.bus?.busNumber || "--"}</Text>
+            </View>
+
+            <View style={styles.ticketSeparator} />
+
+            <View style={styles.busQrShell}>
+              {liveBusQrValue ? (
+                <QRCode value={liveBusQrValue} size={220} backgroundColor="#FFFFFF" color="#111827" />
+              ) : (
+                <Text style={styles.busQrFallback}>QR payload unavailable for this bus.</Text>
+              )}
+            </View>
+
+            <Text style={styles.busQrHelp}>
+              Ask passengers to scan this QR in the qfare app to load the live bus and continue ticket booking online.
+            </Text>
+
+            <View style={styles.ticketLine}>
+              <Text style={styles.ticketLineKey}>{t("active", "routeNo")}</Text>
+              <Text style={styles.ticketLineValue}>{activeTrip?.route?.routeCode || "--"}</Text>
+            </View>
+            <View style={styles.ticketLine}>
+              <Text style={styles.ticketLineKey}>{t("active", "bus")}</Text>
+              <Text style={styles.ticketLineValue}>{activeTrip?.bus?.busNumber || "--"}</Text>
+            </View>
+
+            <View style={styles.modalActions}>
+              <TouchableOpacity style={styles.ticketCloseBtn} onPress={() => setBusQrOpen(false)}>
+                <Text style={styles.ticketCloseBtnText}>{t("common", "close")}</Text>
               </TouchableOpacity>
             </View>
           </View>
@@ -1147,6 +1279,18 @@ const styles = StyleSheet.create({
     flexWrap: "wrap",
     gap: 8,
   },
+  stopsToggle: {
+    marginTop: 12,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 12,
+  },
+  stopsToggleText: {
+    color: "#7DD3FC",
+    fontSize: 12,
+    fontWeight: "700",
+  },
   waitingListWrap: {
     marginTop: 6,
     gap: 8,
@@ -1208,17 +1352,42 @@ const styles = StyleSheet.create({
     borderColor: "rgba(255,255,255,0.14)",
     backgroundColor: "rgba(255,255,255,0.05)",
   },
-  choiceActive: {
-    borderColor: "rgba(0,144,224,0.4)",
-    backgroundColor: "rgba(0,144,224,0.2)",
+  sourceChoiceActive: {
+    borderColor: "rgba(34,197,94,0.45)",
+    backgroundColor: "rgba(34,197,94,0.18)",
+  },
+  destinationChoiceActive: {
+    borderColor: "rgba(249,115,22,0.45)",
+    backgroundColor: "rgba(249,115,22,0.18)",
+  },
+  choiceDisabled: {
+    borderColor: "rgba(148,163,184,0.12)",
+    backgroundColor: "rgba(148,163,184,0.06)",
+    opacity: 0.45,
   },
   choiceText: {
     color: "rgba(226,232,240,0.85)",
     fontSize: 12,
   },
-  choiceTextActive: {
-    color: "#BAE6FD",
+  sourceChoiceTextActive: {
+    color: "#BBF7D0",
     fontWeight: "700",
+  },
+  destinationChoiceTextActive: {
+    color: "#FED7AA",
+    fontWeight: "700",
+  },
+  passengerChoiceActive: {
+    borderColor: "rgba(168,85,247,0.48)",
+    backgroundColor: "rgba(168,85,247,0.22)",
+    transform: [{ scale: 1.04 }],
+  },
+  passengerChoiceTextActive: {
+    color: "#E9D5FF",
+    fontWeight: "800",
+  },
+  choiceTextDisabled: {
+    color: "rgba(148,163,184,0.9)",
   },
   fareText: {
     marginTop: 4,
@@ -1253,6 +1422,27 @@ const styles = StyleSheet.create({
     paddingVertical: 12,
     borderRadius: 14,
     alignItems: "center",
+  },
+  qrLaunchBtn: {
+    marginTop: 12,
+    backgroundColor: "#F97316",
+    borderWidth: 1,
+    borderColor: "#FDBA74",
+    paddingVertical: 13,
+    borderRadius: 14,
+    alignItems: "center",
+    justifyContent: "center",
+    shadowColor: "#F97316",
+    shadowOpacity: 0.28,
+    shadowRadius: 14,
+    shadowOffset: { width: 0, height: 6 },
+    elevation: 4,
+  },
+  qrLaunchBtnText: {
+    color: "#FFFFFF",
+    fontWeight: "800",
+    fontSize: 14,
+    letterSpacing: 0.35,
   },
   ticketBox: {
     marginTop: 12,
@@ -1306,6 +1496,15 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: "#0F172A",
   },
+  busQrModalCard: {
+    width: "92%",
+    maxWidth: 380,
+    backgroundColor: "#FFFFFF",
+    borderRadius: 12,
+    padding: 18,
+    borderWidth: 1,
+    borderColor: "#0F172A",
+  },
   ticketHead: {
     alignItems: "center",
   },
@@ -1327,6 +1526,24 @@ const styles = StyleSheet.create({
     borderTopWidth: 1,
     borderTopColor: "#111827",
     borderStyle: "dashed",
+  },
+  busQrShell: {
+    alignItems: "center",
+    justifyContent: "center",
+    paddingVertical: 12,
+  },
+  busQrHelp: {
+    marginTop: 10,
+    marginBottom: 14,
+    color: "#334155",
+    fontSize: 13,
+    textAlign: "center",
+    lineHeight: 19,
+  },
+  busQrFallback: {
+    color: "#475569",
+    fontSize: 13,
+    textAlign: "center",
   },
   ticketLine: {
     marginTop: 6,
@@ -1368,13 +1585,29 @@ const styles = StyleSheet.create({
     textAlign: "center",
     fontWeight: "600",
   },
+  ticketCloseBtn: {
+    backgroundColor: "#E5E7EB",
+    paddingVertical: 14,
+    borderRadius: 12,
+    alignItems: "center",
+    justifyContent: "center",
+    minWidth: 140,
+    flex: 1,
+  },
+  ticketCloseBtnText: {
+    color: "#111827",
+    fontWeight: "800",
+    fontSize: 16,
+    letterSpacing: 0.4,
+  },
   printBtn: {
-    marginTop: 12,
     backgroundColor: "#111827",
     paddingVertical: 14,
     borderRadius: 12,
     alignItems: "center",
+    justifyContent: "center",
     minWidth: 140,
+    flex: 1,
   },
   printBtnText: {
     color: "#FFFFFF",

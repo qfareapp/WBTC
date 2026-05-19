@@ -60,7 +60,7 @@ const translations = {
       term1: "1. Valid only for this journey.",
       term2: "2. Keep till end of trip.",
       term3: "3. Subject to transport rules.",
-      thanks: "Thank you for traveling with WBTC",
+      thanks: "Thank you for traveling with us",
       endTripPrompt: "End conductor trip?",
       endTripSubtitle: "Driver completed this trip. You can snooze if you still need to issue pending tickets.",
       snooze: "Snooze",

@@ -149,6 +149,7 @@ function PaymentsOverview({ apiBase, token }) {
           <nav className="nav">
             <Link className="nav-item" to="/dashboard">Dashboard</Link>
             <Link className="nav-item" to="/owners">Owners</Link>
+            <Link className="nav-item" to="/passengers">Passengers</Link>
             <Link className="nav-item" to="/payments">Payment</Link>
             <Link className="nav-item" to="/buses">Bus entry</Link>
             <Link className="nav-item" to="/depots">Depot entry</Link>
