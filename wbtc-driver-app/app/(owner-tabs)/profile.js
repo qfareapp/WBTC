@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { ActivityIndicator, ScrollView, StyleSheet, Text, TouchableOpacity, View, Linking } from "react-native";
+import { ActivityIndicator, Linking, ScrollView, StyleSheet, Text, TouchableOpacity, View } from "react-native";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { useRouter } from "expo-router";
 import { Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
@@ -30,6 +30,13 @@ export default function OwnerProfile() {
   const { t } = useAppLanguage();
   const [owner, setOwner] = useState(null);
   const [paymentSummary, setPaymentSummary] = useState(null);
+  const [billingDetails, setBillingDetails] = useState({
+    dateRows: [],
+    tripRows: [],
+    settlementHistory: [],
+    period: null,
+  });
+  const [breakdownOpen, setBreakdownOpen] = useState(false);
   const [notice, setNotice] = useState("");
   const [refreshing, setRefreshing] = useState(false);
 
@@ -42,13 +49,19 @@ export default function OwnerProfile() {
     try {
       setRefreshing(true);
       const month = getOpsDate().slice(0, 7);
-      const response = await fetch(`${apiBase}/api/owner/payment-summary?mode=monthly&month=${month}`, {
+      const response = await fetch(`${apiBase}/api/owner/billing?mode=monthly&month=${month}`, {
         headers: { Authorization: `Bearer ${token}` },
       });
       const text = await response.text();
       const data = text ? JSON.parse(text) : {};
       if (!response.ok) throw new Error(data.message || t("ownerProfile", "failedLoadPaymentSummary"));
       setPaymentSummary(data.summary || null);
+      setBillingDetails({
+        dateRows: data.dateRows || [],
+        tripRows: data.tripRows || [],
+        settlementHistory: data.settlementHistory || [],
+        period: data.period || null,
+      });
       setNotice("");
     } catch (err) {
       setNotice(err.message);
@@ -126,6 +139,11 @@ export default function OwnerProfile() {
           <View style={styles.billingAccent} />
           <Text style={styles.billingTitle}>{t("ownerProfile", "billingThisMonth")}</Text>
         </View>
+        <Text style={styles.billingRange}>
+          {billingDetails.period
+            ? `${billingDetails.period.startDate} - ${billingDetails.period.endDate}`
+            : t("ownerProfile", "currentMonthRange")}
+        </Text>
 
         <View style={styles.row}>
           <View style={styles.payLabelWrap}>
@@ -156,19 +174,140 @@ export default function OwnerProfile() {
         </View>
       </View>
 
+      <View style={styles.card}>
+        <View style={styles.cardStripBillingDetail} />
+        <TouchableOpacity
+          style={styles.collapseToggle}
+          onPress={() => setBreakdownOpen((prev) => !prev)}
+          activeOpacity={0.85}
+        >
+          <View style={styles.billingHead}>
+            <View style={[styles.billingAccent, { backgroundColor: "#FB923C" }]} />
+            <Text style={styles.billingTitle}>{t("ownerProfile", "collectionBreakdown")}</Text>
+          </View>
+          <Ionicons
+            name={breakdownOpen ? "chevron-up-outline" : "chevron-down-outline"}
+            size={18}
+            color="rgba(255,255,255,0.75)"
+          />
+        </TouchableOpacity>
+
+        {breakdownOpen ? (
+          <>
+            <View style={styles.metricsGrid}>
+              <View style={styles.metricCard}>
+                <Text style={styles.metricLabel}>{t("ownerProfile", "onlineCollection")}</Text>
+                <Text style={styles.metricValue}>{t("common", "rs")} {formatMoney(paymentSummary?.onlineAmount || 0)}</Text>
+              </View>
+              <View style={styles.metricCard}>
+                <Text style={styles.metricLabel}>{t("ownerProfile", "offlineCollection")}</Text>
+                <Text style={styles.metricValue}>{t("common", "rs")} {formatMoney(paymentSummary?.cashAmount || 0)}</Text>
+              </View>
+              <View style={styles.metricCard}>
+                <Text style={styles.metricLabel}>{t("ownerProfile", "totalCollection")}</Text>
+                <Text style={styles.metricValue}>{t("common", "rs")} {formatMoney(paymentSummary?.totalAmount || 0)}</Text>
+              </View>
+              <View style={styles.metricCard}>
+                <Text style={styles.metricLabel}>{t("ownerProfile", "tripsCovered")}</Text>
+                <Text style={styles.metricValue}>{billingDetails.tripRows.length}</Text>
+              </View>
+            </View>
+
+            <View style={styles.sectionBlock}>
+              <View style={styles.billingHead}>
+                <View style={[styles.billingAccent, { backgroundColor: "#00C87A" }]} />
+                <Text style={styles.billingTitle}>{t("ownerProfile", "dateWiseBilling")}</Text>
+              </View>
+              {billingDetails.dateRows.length === 0 ? (
+                <Text style={styles.emptyText}>{t("ownerProfile", "noBillingRows")}</Text>
+              ) : (
+                billingDetails.dateRows.map((row) => (
+                  <View key={row.date} style={styles.listRow}>
+                    <View style={styles.listMain}>
+                      <Text style={styles.listTitle}>{row.date}</Text>
+                      <Text style={styles.listMeta}>
+                        {row.tripCount ?? 0} {t("ownerProfile", "tripsLabel")} - {t("ownerProfile", "onlineLabel")} {row.onlinePassengersCount ?? 0} - {t("ownerProfile", "offlineLabel")} {row.cashPassengersCount ?? 0}
+                      </Text>
+                    </View>
+                    <Text style={styles.listAmount}>{t("common", "rs")} {formatMoney(row.totalAmount)}</Text>
+                  </View>
+                ))
+              )}
+            </View>
+
+            <View style={styles.sectionBlock}>
+              <View style={styles.billingHead}>
+                <View style={[styles.billingAccent, { backgroundColor: "#A78BFA" }]} />
+                <Text style={styles.billingTitle}>{t("ownerProfile", "tripWiseBilling")}</Text>
+              </View>
+              {billingDetails.tripRows.length === 0 ? (
+                <Text style={styles.emptyText}>{t("ownerProfile", "noTripBillingRows")}</Text>
+              ) : (
+                billingDetails.tripRows.map((row, index) => (
+                  <View key={row.tripInstanceId || `${row.tripDate}-${index}`} style={styles.tripCard}>
+                    <View style={styles.tripHeader}>
+                      <Text style={styles.tripTitle}>{row.busNumber || "--"} - {row.routeCode || "--"}</Text>
+                      <Text style={styles.tripAmount}>{t("common", "rs")} {formatMoney(row.totalAmount)}</Text>
+                    </View>
+                    <Text style={styles.tripMeta}>
+                      {(row.tripDate || "--")} - {(row.tripWindow || "--")} - {(row.direction || "--")}
+                    </Text>
+                    <Text style={styles.tripMeta}>
+                      {t("ownerProfile", "onlineLabel")} {row.onlinePassengersCount ?? 0} / {t("common", "rs")} {formatMoney(row.onlineAmount)} - {t("ownerProfile", "offlineLabel")} {row.cashPassengersCount ?? 0} / {t("common", "rs")} {formatMoney(row.cashAmount)}
+                    </Text>
+                  </View>
+                ))
+              )}
+            </View>
+
+            <View style={styles.sectionBlock}>
+              <View style={styles.billingHead}>
+                <View style={[styles.billingAccent, { backgroundColor: "#0090E0" }]} />
+                <Text style={styles.billingTitle}>{t("ownerProfile", "settlementHistory")}</Text>
+              </View>
+              {billingDetails.settlementHistory.length === 0 ? (
+                <Text style={styles.emptyText}>{t("ownerProfile", "noSettlements")}</Text>
+              ) : (
+                billingDetails.settlementHistory.map((row) => (
+                  <View key={row.id} style={styles.listRow}>
+                    <View style={styles.listMain}>
+                      <Text style={styles.listTitle}>{row.periodStart} - {row.periodEnd}</Text>
+                      <Text style={styles.listMeta}>
+                        {t("ownerProfile", "commission")} {t("common", "rs")} {formatMoney(row.commissionAmount)} - {row.gatewayTxnRef || "--"}
+                      </Text>
+                    </View>
+                    <Text style={styles.listAmount}>{t("common", "rs")} {formatMoney(row.netPaidAmount)}</Text>
+                  </View>
+                ))
+              )}
+            </View>
+          </>
+        ) : null}
+      </View>
+
       <TouchableOpacity style={styles.refresh} onPress={loadPaymentSummary} disabled={refreshing}>
-        {refreshing ? <ActivityIndicator color="rgba(255,255,255,0.85)" size="small" /> : <Ionicons name="refresh" size={16} color="rgba(255,255,255,0.85)" />}
+        {refreshing ? (
+          <ActivityIndicator color="rgba(255,255,255,0.85)" size="small" />
+        ) : (
+          <Ionicons name="refresh" size={16} color="rgba(255,255,255,0.85)" />
+        )}
         <Text style={styles.refreshText}>{refreshing ? t("common", "refreshing") : t("ownerProfile", "refreshPayment")}</Text>
       </TouchableOpacity>
 
       {notice ? <Text style={styles.error}>{notice}</Text> : null}
 
-      <TouchableOpacity style={styles.secondaryAction} onPress={() => Linking.openURL(PRIVACY_POLICY_URL).catch(() => setNotice("Unable to open privacy policy."))}>
+      <TouchableOpacity
+        style={styles.secondaryAction}
+        onPress={() => Linking.openURL(PRIVACY_POLICY_URL).catch(() => setNotice("Unable to open privacy policy."))}
+      >
         <Ionicons name="document-text-outline" size={16} color="#9CCBFF" />
         <Text style={styles.secondaryActionText}>Privacy Policy</Text>
       </TouchableOpacity>
 
-      <TouchableOpacity style={styles.secondaryAction} onPress={() => Linking.openURL(FAQS_URL).catch(() => setNotice("Unable to open FAQs."))}>
+      <TouchableOpacity
+        style={styles.secondaryAction}
+        onPress={() => Linking.openURL(FAQS_URL).catch(() => setNotice("Unable to open FAQs."))}
+      >
         <Ionicons name="help-circle-outline" size={16} color="#9CCBFF" />
         <Text style={styles.secondaryActionText}>FAQs</Text>
       </TouchableOpacity>
@@ -268,6 +407,14 @@ const styles = StyleSheet.create({
     height: 4,
     backgroundColor: "#0090E0",
   },
+  cardStripBillingDetail: {
+    position: "absolute",
+    top: 0,
+    left: 0,
+    right: 0,
+    height: 4,
+    backgroundColor: "#FB923C",
+  },
   identityRow: {
     marginTop: 8,
     marginBottom: 8,
@@ -345,8 +492,27 @@ const styles = StyleSheet.create({
     fontWeight: "800",
     letterSpacing: 0.8,
   },
-  billingHead: { marginTop: 4, marginBottom: 8, flexDirection: "row", alignItems: "center", gap: 8 },
-  billingAccent: { width: 3, height: 16, borderRadius: 2, backgroundColor: "#00C87A" },
+  billingHead: {
+    marginTop: 4,
+    marginBottom: 8,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+  },
+  collapseToggle: {
+    marginTop: 4,
+    marginBottom: 8,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 12,
+  },
+  billingAccent: {
+    width: 3,
+    height: 16,
+    borderRadius: 2,
+    backgroundColor: "#00C87A",
+  },
   billingTitle: {
     color: "rgba(255,255,255,0.5)",
     textTransform: "uppercase",
@@ -354,7 +520,16 @@ const styles = StyleSheet.create({
     letterSpacing: 0.9,
     fontWeight: "700",
   },
-  payLabelWrap: { flexDirection: "row", alignItems: "center", gap: 10 },
+  billingRange: {
+    marginBottom: 10,
+    color: "rgba(255,255,255,0.38)",
+    fontSize: 12,
+  },
+  payLabelWrap: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+  },
   payIconWrap: {
     width: 32,
     height: 32,
@@ -363,9 +538,109 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
   },
-  payLabel: { color: "rgba(255,255,255,0.5)", fontSize: 13, fontWeight: "600" },
-  valueGreen: { color: "#00C87A", fontWeight: "800" },
-  valueBlue: { color: "#0090E0", fontWeight: "800" },
+  payLabel: {
+    color: "rgba(255,255,255,0.5)",
+    fontSize: 13,
+    fontWeight: "600",
+  },
+  valueGreen: {
+    color: "#00C87A",
+    fontWeight: "800",
+  },
+  valueBlue: {
+    color: "#0090E0",
+    fontWeight: "800",
+  },
+  metricsGrid: {
+    marginTop: 4,
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 10,
+  },
+  metricCard: {
+    width: "48%",
+    backgroundColor: "rgba(255,255,255,0.04)",
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.08)",
+    borderRadius: 14,
+    padding: 12,
+  },
+  metricLabel: {
+    color: "rgba(255,255,255,0.42)",
+    fontSize: 11,
+    textTransform: "uppercase",
+    letterSpacing: 0.8,
+  },
+  metricValue: {
+    marginTop: 6,
+    color: "#FFFFFF",
+    fontSize: 16,
+    fontWeight: "800",
+  },
+  sectionBlock: {
+    marginTop: 14,
+  },
+  emptyText: {
+    color: "rgba(255,255,255,0.45)",
+    fontSize: 13,
+  },
+  listRow: {
+    paddingVertical: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: "rgba(255,255,255,0.06)",
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 12,
+  },
+  listMain: {
+    flex: 1,
+  },
+  listTitle: {
+    color: "#FFFFFF",
+    fontWeight: "700",
+    fontSize: 14,
+  },
+  listMeta: {
+    marginTop: 4,
+    color: "rgba(255,255,255,0.45)",
+    fontSize: 12,
+  },
+  listAmount: {
+    color: "#00C87A",
+    fontWeight: "800",
+    fontSize: 14,
+  },
+  tripCard: {
+    marginTop: 10,
+    backgroundColor: "rgba(255,255,255,0.04)",
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.08)",
+    borderRadius: 14,
+    padding: 12,
+  },
+  tripHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 12,
+  },
+  tripTitle: {
+    flex: 1,
+    color: "#FFFFFF",
+    fontWeight: "800",
+    fontSize: 14,
+  },
+  tripAmount: {
+    color: "#FB923C",
+    fontWeight: "800",
+    fontSize: 14,
+  },
+  tripMeta: {
+    marginTop: 6,
+    color: "rgba(255,255,255,0.48)",
+    fontSize: 12,
+  },
   logout: {
     marginTop: 14,
     backgroundColor: "#DC2626",

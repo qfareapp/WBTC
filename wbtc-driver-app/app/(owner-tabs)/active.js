@@ -371,6 +371,7 @@ export default function OwnerActive() {
           const expanded = !!expandedBuses[bus.id];
           const busId = String(bus.id);
           const hasAssignedCrew = Boolean(toId(bus.assignedDriver) && toId(bus.assignedConductor));
+          const isOnLiveTrip = Boolean(bus.liveRoute);
 
           const availableDrivers = drivers.filter((driver) => {
             const id = String(driver._id || "");
@@ -435,12 +436,17 @@ export default function OwnerActive() {
                         <Text style={styles.endpointText}>
                           {t("ownerActive", "route")}: {bus.attachedRoute.source} {"<->"} {bus.attachedRoute.destination}
                         </Text>
+                        {isOnLiveTrip ? (
+                          <Text style={styles.noCrewText}>Start point cannot be changed while the bus is on a live trip.</Text>
+                        ) : null}
                         <View style={styles.startPointChoices}>
                           <TouchableOpacity
                             style={[
                               styles.choice,
+                              isOnLiveTrip ? styles.choiceDisabled : null,
                               locationDraft[bus.id] === bus.attachedRoute.source ? styles.choiceActive : null,
                             ]}
+                            disabled={isOnLiveTrip}
                             onPress={() =>
                               setLocationDraft((prev) => ({ ...prev, [bus.id]: bus.attachedRoute.source }))
                             }
@@ -450,8 +456,10 @@ export default function OwnerActive() {
                           <TouchableOpacity
                             style={[
                               styles.choice,
+                              isOnLiveTrip ? styles.choiceDisabled : null,
                               locationDraft[bus.id] === bus.attachedRoute.destination ? styles.choiceActive : null,
                             ]}
+                            disabled={isOnLiveTrip}
                             onPress={() =>
                               setLocationDraft((prev) => ({ ...prev, [bus.id]: bus.attachedRoute.destination }))
                             }
@@ -460,9 +468,9 @@ export default function OwnerActive() {
                           </TouchableOpacity>
                         </View>
                         <TouchableOpacity
-                          style={styles.actionBtn}
+                          style={[styles.actionBtn, isOnLiveTrip ? styles.actionBtnDisabled : null]}
                           onPress={() => setBusStartPoint(bus)}
-                          disabled={locationSavingBusId === String(bus.id)}
+                          disabled={isOnLiveTrip || locationSavingBusId === String(bus.id)}
                         >
                           <Text style={styles.actionText}>
                             {locationSavingBusId === String(bus.id) ? t("common", "saving") : t("ownerActive", "setStartPoint")}
@@ -563,6 +571,7 @@ const styles = StyleSheet.create({
   chipLabel: { marginTop: 10, color: "rgba(255,255,255,0.3)", fontSize: 10.5, textTransform: "uppercase", fontWeight: "700" },
   choice: { marginTop: 6, marginRight: 8, paddingHorizontal: 14, paddingVertical: 8, borderRadius: 999, borderWidth: 1, borderColor: "rgba(255,255,255,0.09)", backgroundColor: "rgba(255,255,255,0.05)" },
   choiceActive: { borderColor: "rgba(0,144,224,0.5)", backgroundColor: "rgba(0,144,224,0.18)" },
+  choiceDisabled: { opacity: 0.45 },
   choiceText: { color: "rgba(255,255,255,0.8)", fontSize: 13, fontWeight: "600" },
   noCrewText: { marginTop: 12, color: "rgba(255,255,255,0.45)", fontSize: 12 },
   locationControlWrap: { marginTop: 12, gap: 8 },
@@ -570,6 +579,7 @@ const styles = StyleSheet.create({
   startPointChoices: { flexDirection: "row", flexWrap: "wrap", gap: 8 },
   actions: { flexDirection: "row", gap: 8, marginTop: 12 },
   actionBtn: { flex: 1, paddingVertical: 12, borderRadius: 14, alignItems: "center", backgroundColor: "rgba(255,255,255,0.07)", borderWidth: 1, borderColor: "rgba(255,255,255,0.12)" },
+  actionBtnDisabled: { opacity: 0.45 },
   halfActionBtn: { flex: 1 },
   actionText: { color: "rgba(255,255,255,0.85)", fontWeight: "800", fontSize: 12 },
   resetBtn: { backgroundColor: "rgba(239,68,68,0.1)", borderColor: "rgba(239,68,68,0.2)" },

@@ -3,6 +3,8 @@ const auth = require("../middleware/auth");
 const requireRole = require("../middleware/requireRole");
 const {
   listConductorOffers,
+  registerPushToken,
+  unregisterPushToken,
   acceptConductorOffer,
   rejectConductorOffer,
   getCurrentConductorTrip,
@@ -19,6 +21,8 @@ const {
 
 router.use(auth, requireRole("CONDUCTOR"));
 
+router.post("/push-token", registerPushToken);
+router.delete("/push-token", unregisterPushToken);
 router.get("/offers", listConductorOffers);
 router.post("/offers/accept", acceptConductorOffer);
 router.post("/offers/reject", rejectConductorOffer);

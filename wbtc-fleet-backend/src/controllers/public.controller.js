@@ -66,6 +66,36 @@ const mapRazorpayError = (error, fallbackMessage) => {
 
 const createBookingId = () => `QF-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
 
+const getTravelOrderedStops = (routeStops = [], direction = "UP") => {
+  const normalizedDirection = String(direction || "UP").toUpperCase();
+  const sorted = [...routeStops].sort((left, right) => Number(left.index || 0) - Number(right.index || 0));
+  return normalizedDirection === "DOWN" ? sorted.reverse() : sorted;
+};
+
+const resolveDestinationExpiryState = ({ trip, routeStops, destination }) => {
+  const orderedStops = getTravelOrderedStops(routeStops, trip?.direction);
+  const destinationNorm = normalizeStopName(destination);
+  if (!destinationNorm || !orderedStops.length) {
+    return { destinationReached: false, destinationIsTerminal: false };
+  }
+
+  const destinationStop =
+    orderedStops.find((stop) => normalizeStopName(stop.name) === destinationNorm) || null;
+  if (!destinationStop) {
+    return { destinationReached: false, destinationIsTerminal: false };
+  }
+
+  const terminalStop = orderedStops[orderedStops.length - 1] || null;
+  const destinationIsTerminal =
+    terminalStop != null && normalizeStopName(terminalStop.name) === destinationNorm;
+  const passedSet = new Set((trip?.passedStops || []).map(normalizeStopName));
+
+  return {
+    destinationReached: passedSet.has(destinationNorm),
+    destinationIsTerminal,
+  };
+};
+
 const resolvePassengerBookingContext = async ({
   busNumber,
   routeId,
@@ -90,7 +120,7 @@ const resolvePassengerBookingContext = async ({
     throw new ApiError(400, "Maximum 5 passengers allowed per ticket.");
   }
 
-  const bus = await Bus.findOne({ busNumber: normalizedBusNumber }).select("_id depotId status");
+  const bus = await Bus.findOne({ busNumber: normalizedBusNumber }).select("_id depotId ownerId status");
   if (!bus) throw new ApiError(404, "Bus not found");
   if (bus.status !== "Active") {
     throw new ApiError(409, "This bus is not active right now.");
@@ -171,7 +201,9 @@ const issuePassengerTicketBooking = async ({
 
   return TicketBooking.create({
     bookingId: createBookingId(),
+    busId: bus?._id || null,
     busNumber: normalizedBusNumber,
+    ownerId: bus?.ownerId || null,
     routeId: String(liveTrip.routeId?._id || liveTrip.routeId),
     depotId: bus?.depotId || null,
     tripInstanceId: liveTrip._id,
@@ -712,7 +744,7 @@ exports.createDemoBooking = asyncHandler(async (req, res) => {
 
   const bookingId = `QF-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
   const normalizedBusNumber = String(busNumber);
-  const bus = await Bus.findOne({ busNumber: normalizedBusNumber }).select("_id depotId status");
+  const bus = await Bus.findOne({ busNumber: normalizedBusNumber }).select("_id depotId ownerId status");
   if (!bus) throw new ApiError(404, "Bus not found");
   if (bus.status !== "Active") {
     throw new ApiError(409, "This bus is not active right now.");
@@ -724,7 +756,9 @@ exports.createDemoBooking = asyncHandler(async (req, res) => {
 
   const booking = await TicketBooking.create({
     bookingId,
+    busId: bus?._id || null,
     busNumber: normalizedBusNumber,
+    ownerId: bus?.ownerId || null,
     routeId: String(routeId),
     depotId: bus?.depotId || null,
     tripInstanceId: liveTrip._id,
@@ -947,14 +981,18 @@ exports.handleRazorpayWebhook = asyncHandler(async (req, res) => {
  */
 exports.getBookingStatus = asyncHandler(async (req, res) => {
   const { bookingId } = req.params;
-  const booking = await TicketBooking.findOne({ bookingId }).select("tripInstanceId status");
+  const booking = await TicketBooking.findOne({ bookingId }).select(
+    "tripInstanceId status routeId destination"
+  );
   if (!booking) throw new ApiError(404, "Booking not found");
 
   if (!booking.tripInstanceId) {
     return res.json({ ok: true, valid: false, tripStatus: null });
   }
 
-  const trip = await TripInstance.findById(booking.tripInstanceId).select("status conductorEndedAt actualEndTime");
+  const trip = await TripInstance.findById(booking.tripInstanceId).select(
+    "status conductorEndedAt actualEndTime direction routeId passedStops lastLocationAt driverLastLocationAt"
+  );
   if (!trip) {
     return res.json({ ok: true, valid: false, tripStatus: null });
   }
@@ -964,13 +1002,38 @@ exports.getBookingStatus = asyncHandler(async (req, res) => {
   // the conductor must also call completeConductorTrip which sets conductorEndedAt.
   const conductorEnded = trip.conductorEndedAt != null;
   const cancelled = trip.status === "Cancelled";
-  const valid = !conductorEnded && !cancelled;
+  let destinationReached = false;
+  let destinationIsTerminal = false;
+
+  if (!conductorEnded && !cancelled && booking.destination && (trip.routeId || booking.routeId)) {
+    const routeStops = await RouteStop.find({
+      routeId: String(trip.routeId || booking.routeId),
+    })
+      .sort({ index: 1 })
+      .select("name index")
+      .lean();
+
+    ({ destinationReached, destinationIsTerminal } = resolveDestinationExpiryState({
+      trip,
+      routeStops,
+      destination: booking.destination,
+    }));
+  }
+
+  const valid =
+    !cancelled &&
+    !conductorEnded &&
+    !(destinationReached && !destinationIsTerminal);
+  const reachedDestinationAt =
+    !valid && destinationReached && !destinationIsTerminal
+      ? trip.lastLocationAt ?? trip.driverLastLocationAt ?? new Date()
+      : null;
 
   res.json({
     ok: true,
     valid,
     tripStatus: trip.status,
-    tripEndedAt: trip.conductorEndedAt ?? trip.actualEndTime ?? null,
+    tripEndedAt: reachedDestinationAt ?? trip.conductorEndedAt ?? trip.actualEndTime ?? null,
   });
 });
 
@@ -1003,7 +1066,9 @@ exports.getTripLoad = asyncHandler(async (req, res) => {
 
   const trip = await TripInstance.findById(tripId)
     .populate("busId", "busNumber seatingCapacity")
-    .select("routeId busId direction lastLatitude lastLongitude lastLocationAt lastLocationName driverLastLatitude driverLastLongitude driverLastLocationAt status");
+    .select(
+      "routeId busId direction lastLatitude lastLongitude lastLocationAt lastLocationName driverLastLatitude driverLastLongitude driverLastLocationAt status passedStops approachingStop"
+    );
   if (!trip) throw new ApiError(404, "Trip not found");
 
   const capacity = Number(trip.busId?.seatingCapacity) || 0;
@@ -1090,6 +1155,9 @@ exports.getTripLoad = asyncHandler(async (req, res) => {
   const stopIndexByName = new Map(
     allStops.map((s) => [s.name.toLowerCase().trim(), s.index])
   );
+  const passedSet = new Set(
+    (trip.passedStops || []).map((stop) => String(stop || "").toLowerCase().trim())
+  );
 
   const direction = trip.direction;
   let onboard = 0;
@@ -1104,10 +1172,12 @@ exports.getTripLoad = asyncHandler(async (req, res) => {
     if (srcIdx === undefined || dstIdx === undefined) continue;
 
     // UP: bus travels low → high index; DOWN: bus travels high → low index
+    const sourcePassed = passedSet.has(srcKey);
+    const destinationPassed = passedSet.has(dstKey);
     const isOnboard =
       direction === "UP"
-        ? currentStopIdx >= srcIdx && currentStopIdx < dstIdx
-        : currentStopIdx <= srcIdx && currentStopIdx > dstIdx;
+        ? (sourcePassed || currentStopIdx >= srcIdx) && !(destinationPassed || currentStopIdx >= dstIdx)
+        : (sourcePassed || currentStopIdx <= srcIdx) && !(destinationPassed || currentStopIdx <= dstIdx);
 
     console.log(`[getTripLoad] isOnboard=${isOnboard} (currentStop=${currentStopIdx} >= src=${srcIdx} && < dst=${dstIdx})`);
     if (isOnboard) onboard += Number(ticket.passengerCount) || 1;

@@ -1,12 +1,15 @@
 import { useEffect, useState } from "react";
 import { View, Text, TextInput, TouchableOpacity, StyleSheet, ScrollView } from "react-native";
 import AsyncStorage from "@react-native-async-storage/async-storage";
+import Constants from "expo-constants";
 import { useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import QfareLogo from "../components/QfareLogo";
 import {
   getStoredPushRegistrationError,
+  syncConductorPushTokenRegistration,
   syncDriverPushTokenRegistration,
+  unregisterStoredConductorPushToken,
   unregisterStoredDriverPushToken,
 } from "../utils/pushNotifications";
 
@@ -18,6 +21,31 @@ const OWNER_KEY = "wbtc_owner_profile";
 const USER_ROLE_KEY = "wbtc_user_role";
 const MUST_CHANGE_PASSWORD_KEY = "wbtc_must_change_password";
 const PRODUCTION_API_BASE = "https://wbtc-aduk.onrender.com";
+const LOCAL_API_HOST = "192.168.1.39";
+const LOCAL_API_PORT = "5000";
+
+const getExpoHostUri = () => {
+  const candidates = [
+    Constants.expoConfig?.hostUri,
+    Constants.expoGoConfig?.debuggerHost,
+    Constants.manifest2?.extra?.expoClient?.hostUri,
+    Constants.manifest?.debuggerHost,
+  ];
+  return candidates.find((value) => typeof value === "string" && value.trim()) || "";
+};
+
+const resolveApiBase = () => {
+  if (!__DEV__) return PRODUCTION_API_BASE;
+
+  const hostUri = getExpoHostUri();
+  if (!hostUri) return `http://${LOCAL_API_HOST}:${LOCAL_API_PORT}`;
+
+  const host = String(hostUri).split(":")[0]?.trim();
+  if (!host) return `http://${LOCAL_API_HOST}:${LOCAL_API_PORT}`;
+
+  return `http://${host}:${LOCAL_API_PORT}`;
+};
+
 const roleMeta = {
   DRIVER: { label: "Driver", icon: "car-sport-outline", accent: "#0090E0" },
   CONDUCTOR: { label: "Conductor", icon: "ticket-outline", accent: "#00C87A" },
@@ -35,10 +63,11 @@ export default function Login() {
 
   useEffect(() => {
     const loadSaved = async () => {
+      const activeApiBase = resolveApiBase();
       const token = await AsyncStorage.getItem(TOKEN_KEY);
       const savedRole = await AsyncStorage.getItem(USER_ROLE_KEY);
       const mustChangePassword = await AsyncStorage.getItem(MUST_CHANGE_PASSWORD_KEY);
-      await AsyncStorage.setItem(API_BASE_KEY, PRODUCTION_API_BASE);
+      await AsyncStorage.setItem(API_BASE_KEY, activeApiBase);
       if (savedRole === "CONDUCTOR") setRole("CONDUCTOR");
       if (savedRole === "OWNER") setRole("OWNER");
       if (token) {
@@ -59,7 +88,7 @@ export default function Login() {
   }, [router]);
 
   const handleLogin = async () => {
-    const activeApiBase = PRODUCTION_API_BASE;
+    const activeApiBase = resolveApiBase();
     if (role === "OWNER") {
       if (!username.trim() || !password.trim()) {
         setError("Username and password are required.");
@@ -114,6 +143,12 @@ export default function Login() {
           authToken: previousAuthToken,
           role: "DRIVER",
         });
+      } else if (previousRole === "CONDUCTOR" && previousApiBase && previousAuthToken) {
+        await unregisterStoredConductorPushToken({
+          apiBase: previousApiBase,
+          authToken: previousAuthToken,
+          role: "CONDUCTOR",
+        });
       }
 
       await AsyncStorage.setItem(API_BASE_KEY, activeApiBase);
@@ -124,6 +159,19 @@ export default function Login() {
         await AsyncStorage.removeItem(DRIVER_KEY);
         await AsyncStorage.removeItem(OWNER_KEY);
         await AsyncStorage.setItem(CONDUCTOR_KEY, JSON.stringify(data.conductor || {}));
+        if (!data.mustChangePassword) {
+          const pushToken = await syncConductorPushTokenRegistration({
+            apiBase: activeApiBase,
+            authToken: data.token,
+            role: "CONDUCTOR",
+          });
+          if (!pushToken) {
+            const pushError = await getStoredPushRegistrationError();
+            if (pushError) {
+              throw new Error(pushError);
+            }
+          }
+        }
         router.replace(data.mustChangePassword ? "/change-password" : "/(conductor-tabs)/active");
       } else if (role === "OWNER") {
         if (data.user?.role !== "OWNER") {

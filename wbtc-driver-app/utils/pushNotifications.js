@@ -109,11 +109,18 @@ const getStoredDriverAuth = async (overrides = {}) => {
   return { apiBase, authToken, role };
 };
 
-export const syncDriverPushTokenRegistration = async (overrides = {}) => {
+const getPushTokenEndpointForRole = (role) => {
+  if (role === "DRIVER") return "/api/driver-trips/push-token";
+  if (role === "CONDUCTOR") return "/api/conductor-trips/push-token";
+  return null;
+};
+
+export const syncPushTokenRegistration = async (overrides = {}) => {
   try {
     await AsyncStorage.removeItem(PUSH_REGISTRATION_ERROR_KEY);
     const { apiBase, authToken, role } = await getStoredDriverAuth(overrides);
-    if (!apiBase || !authToken || role !== "DRIVER") return null;
+    const endpoint = getPushTokenEndpointForRole(role);
+    if (!apiBase || !authToken || !endpoint) return null;
 
     const registration = await getPushRegistration();
     if (!registration?.token) return null;
@@ -121,7 +128,7 @@ export const syncDriverPushTokenRegistration = async (overrides = {}) => {
     await AsyncStorage.setItem(PUSH_TOKEN_KEY, registration.token);
     await AsyncStorage.removeItem(PUSH_REGISTRATION_ERROR_KEY);
 
-    await fetch(`${apiBase}/api/driver-trips/push-token`, {
+    await fetch(`${apiBase}${endpoint}`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -144,16 +151,17 @@ export const syncDriverPushTokenRegistration = async (overrides = {}) => {
   }
 };
 
-export const unregisterStoredDriverPushToken = async (overrides = {}) => {
+export const unregisterStoredPushToken = async (overrides = {}) => {
   try {
     const [storedToken, auth] = await Promise.all([
       overrides.pushToken ? Promise.resolve(overrides.pushToken) : AsyncStorage.getItem(PUSH_TOKEN_KEY),
       getStoredDriverAuth(overrides),
     ]);
 
-    if (!storedToken || !auth.apiBase || !auth.authToken) return;
+    const endpoint = getPushTokenEndpointForRole(auth.role);
+    if (!storedToken || !auth.apiBase || !auth.authToken || !endpoint) return;
 
-    await fetch(`${auth.apiBase}/api/driver-trips/push-token`, {
+    await fetch(`${auth.apiBase}${endpoint}`, {
       method: "DELETE",
       headers: {
         "Content-Type": "application/json",
@@ -165,6 +173,18 @@ export const unregisterStoredDriverPushToken = async (overrides = {}) => {
     await AsyncStorage.removeItem(PUSH_TOKEN_KEY);
   }
 };
+
+export const syncDriverPushTokenRegistration = async (overrides = {}) =>
+  syncPushTokenRegistration({ ...overrides, role: "DRIVER" });
+
+export const syncConductorPushTokenRegistration = async (overrides = {}) =>
+  syncPushTokenRegistration({ ...overrides, role: "CONDUCTOR" });
+
+export const unregisterStoredDriverPushToken = async (overrides = {}) =>
+  unregisterStoredPushToken({ ...overrides, role: "DRIVER" });
+
+export const unregisterStoredConductorPushToken = async (overrides = {}) =>
+  unregisterStoredPushToken({ ...overrides, role: "CONDUCTOR" });
 
 export const getOfferNotificationChannelId = () => OFFER_CHANNEL_ID;
 export const getStoredPushRegistrationError = async () => AsyncStorage.getItem(PUSH_REGISTRATION_ERROR_KEY);

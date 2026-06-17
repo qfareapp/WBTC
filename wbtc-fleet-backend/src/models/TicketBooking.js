@@ -3,7 +3,9 @@ const mongoose = require("mongoose");
 const TicketBookingSchema = new mongoose.Schema(
   {
     bookingId: { type: String, required: true, unique: true, index: true },
+    busId: { type: mongoose.Schema.Types.ObjectId, ref: "Bus", default: null, index: true },
     busNumber: { type: String, required: true, index: true },
+    ownerId: { type: mongoose.Schema.Types.ObjectId, ref: "User", default: null, index: true },
     routeId: { type: String, required: true, index: true },
     depotId: { type: mongoose.Schema.Types.ObjectId, ref: "Depot", default: null, index: true },
     tripInstanceId: { type: mongoose.Schema.Types.ObjectId, ref: "TripInstance", default: null, index: true },
@@ -27,5 +29,6 @@ const TicketBookingSchema = new mongoose.Schema(
 );
 
 TicketBookingSchema.index({ bookedAt: 1, status: 1 });
+TicketBookingSchema.index({ ownerId: 1, bookedAt: 1, status: 1, paymentMode: 1 });
 
 module.exports = mongoose.model("TicketBooking", TicketBookingSchema);

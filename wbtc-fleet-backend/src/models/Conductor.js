@@ -15,6 +15,14 @@ const ConductorSchema = new mongoose.Schema(
     mustChangePassword: { type: Boolean, default: true, index: true },
     passwordUpdatedAt: { type: Date, default: null },
     passwordResetAt: { type: Date, default: null },
+    pushTokens: [
+      {
+        token: { type: String, required: true },
+        platform: { type: String, default: null },
+        provider: { type: String, enum: ["expo", "fcm"], default: "expo" },
+        updatedAt: { type: Date, default: Date.now },
+      },
+    ],
   },
   { timestamps: true }
 );

@@ -7,6 +7,7 @@ const {
   getBusAttachedRoutes,
   tagBusToOwner,
   listOwnerDuePayments,
+  getOwnerPaymentBreakdown,
   virtualPayOwnerDue,
   resetOwnerPassword,
 } = require("../controllers/ownerAdmin.controller");
@@ -15,6 +16,7 @@ router.use(auth, requireRole("ADMIN", "DEPOT_MANAGER", "SCHEDULER", "VIEWER"));
 
 router.get("/", listOwnersOverview);
 router.get("/payments", listOwnerDuePayments);
+router.get("/:ownerId/payments/details", getOwnerPaymentBreakdown);
 router.post("/:ownerId/payments/virtual-pay", requireRole("ADMIN", "DEPOT_MANAGER"), virtualPayOwnerDue);
 router.get("/tag-context", getOwnerTagContext);
 router.get("/buses/:busId/routes", getBusAttachedRoutes);

@@ -397,9 +397,10 @@ export default function OwnerCrewScreen() {
                   <View style={[styles.miniAvatar, { backgroundColor: avatarPalette[index % avatarPalette.length] }]}>
                     <Text style={styles.avatarText}>{getInitial(item.driver?.name)}</Text>
                   </View>
-                  <View>
+                  <View style={styles.assignmentPersonInfo}>
                     <Text style={styles.metaCaption}>{t("ownerActive", "driver")}</Text>
                     <Text style={styles.assignmentLine}>{item.driver?.name || "--"}</Text>
+                    <Text style={styles.assignmentMeta}>{item.driver?.empId || "--"}</Text>
                   </View>
                 </View>
                 <View style={styles.assignmentPerson}>
@@ -411,9 +412,10 @@ export default function OwnerCrewScreen() {
                   >
                     <Text style={styles.avatarText}>{getInitial(item.conductor?.name)}</Text>
                   </View>
-                  <View>
+                  <View style={styles.assignmentPersonInfo}>
                     <Text style={styles.metaCaption}>{t("ownerActive", "conductor")}</Text>
                     <Text style={styles.assignmentLine}>{item.conductor?.name || "--"}</Text>
+                    <Text style={styles.assignmentMeta}>{item.conductor?.empId || "--"}</Text>
                   </View>
                 </View>
               </View>
@@ -673,11 +675,13 @@ const styles = StyleSheet.create({
   assignmentBus: { color: "#FFFFFF", fontSize: 16, fontWeight: "800", letterSpacing: 0.8 },
   assignmentLineWrap: { marginTop: 10, gap: 8 },
   assignmentPerson: { flexDirection: "row", alignItems: "center", gap: 8 },
+  assignmentPersonInfo: { gap: 1 },
   miniAvatar: { width: 28, height: 28, borderRadius: 8, alignItems: "center", justifyContent: "center" },
   avatar: { width: 38, height: 38, borderRadius: 12, alignItems: "center", justifyContent: "center" },
   avatarText: { color: "#FFFFFF", fontSize: 12, fontWeight: "800" },
   metaCaption: { color: "rgba(255,255,255,0.35)", fontSize: 10, letterSpacing: 0.5, textTransform: "uppercase" },
   assignmentLine: { color: "rgba(255,255,255,0.85)", fontSize: 13, fontWeight: "600" },
+  assignmentMeta: { color: "rgba(255,255,255,0.55)", fontSize: 11, fontWeight: "600" },
   segmentWrap: {
     marginTop: 10,
     flexDirection: "row",

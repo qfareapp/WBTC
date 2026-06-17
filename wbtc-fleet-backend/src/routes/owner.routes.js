@@ -10,6 +10,7 @@ const {
   getOwnerAssignCrewContext,
   assignOwnerDailyCrew,
   getOwnerPaymentSummary,
+  getOwnerBilling,
   updateOwnerBusLocation,
 } = require("../controllers/owner.controller");
 
@@ -17,6 +18,7 @@ router.use(auth, requireRole("OWNER"));
 
 router.get("/dashboard", getOwnerFleetDashboard);
 router.get("/payment-summary", getOwnerPaymentSummary);
+router.get("/billing", getOwnerBilling);
 router.get("/personnel", listOwnerPersonnel);
 router.get("/assign-crew", getOwnerAssignCrewContext);
 router.post("/assign-crew", assignOwnerDailyCrew);

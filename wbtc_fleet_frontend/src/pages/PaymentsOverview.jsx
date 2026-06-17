@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import "../App.css";
 import { getOpsDate } from "../utils/opsTime.js";
@@ -13,6 +13,9 @@ const formatMoney = (value) => {
   return num.toFixed(2);
 };
 
+const formatDateRange = (period) =>
+  period ? `${period.startDate || "--"} to ${period.endDate || "--"}` : "Period pending";
+
 function PaymentsOverview({ apiBase, token }) {
   const [mode, setMode] = useState("monthly");
   const [date, setDate] = useState(today());
@@ -24,47 +27,145 @@ function PaymentsOverview({ apiBase, token }) {
   const [period, setPeriod] = useState(null);
   const [notice, setNotice] = useState(null);
   const [loading, setLoading] = useState(false);
+  const [selectedOwnerId, setSelectedOwnerId] = useState("");
+  const [ownerSearch, setOwnerSearch] = useState("");
+  const [ownerDetails, setOwnerDetails] = useState(null);
+  const [detailsLoading, setDetailsLoading] = useState(false);
   const [activePaymentRow, setActivePaymentRow] = useState(null);
   const [commissionInput, setCommissionInput] = useState("0");
   const [gatewayStage, setGatewayStage] = useState("form");
   const [paying, setPaying] = useState(false);
+  const noticeTimerRef = useRef(null);
 
-  const showNotice = (type, message) => {
+  const showNotice = useCallback((type, message) => {
     setNotice({ type, message });
-    setTimeout(() => setNotice(null), 4000);
-  };
+    window.clearTimeout(noticeTimerRef.current);
+    noticeTimerRef.current = window.setTimeout(() => setNotice(null), 4000);
+  }, []);
+
+  const buildPeriodParams = useCallback(() => {
+    const params = new URLSearchParams({ mode });
+    if (mode === "daily") params.set("date", date);
+    if (mode === "monthly") params.set("month", month);
+    if (mode === "custom") {
+      params.set("startDate", startDate);
+      params.set("endDate", endDate);
+    }
+    return params;
+  }, [date, endDate, mode, month, startDate]);
 
   const loadPayments = useCallback(async () => {
     setLoading(true);
     try {
-      const params = new URLSearchParams({ mode });
-      if (mode === "daily") params.set("date", date);
-      if (mode === "monthly") params.set("month", month);
-      if (mode === "custom") {
-        params.set("startDate", startDate);
-        params.set("endDate", endDate);
-      }
-
-      const response = await fetch(`${apiBase}/api/admin/owners/payments?${params.toString()}`, {
+      const response = await fetch(`${apiBase}/api/admin/owners/payments?${buildPeriodParams().toString()}`, {
         headers: { Authorization: `Bearer ${token}` },
       });
       const text = await response.text();
       const data = text ? JSON.parse(text) : {};
-      if (!response.ok) throw new Error(data.message || "Failed to load owner due payments");
+      if (!response.ok) throw new Error(data.message || "Failed to load owner payment report");
 
+      const rows = data.payments || [];
       setSummary(data.summary || null);
-      setPayments(data.payments || []);
+      setPayments(rows);
       setPeriod(data.period || null);
+      setSelectedOwnerId((current) => {
+        if (current && rows.some((row) => String(row.owner?.id) === String(current))) return current;
+        return rows[0]?.owner?.id ? String(rows[0].owner.id) : "";
+      });
     } catch (error) {
       showNotice("error", error.message);
     } finally {
       setLoading(false);
     }
-  }, [apiBase, date, endDate, mode, month, startDate, token]);
+  }, [apiBase, buildPeriodParams, showNotice, token]);
+
+  const loadOwnerDetails = useCallback(
+    async (ownerId) => {
+      if (!ownerId) {
+        setOwnerDetails(null);
+        return;
+      }
+
+      setDetailsLoading(true);
+      try {
+        const response = await fetch(
+          `${apiBase}/api/admin/owners/${ownerId}/payments/details?${buildPeriodParams().toString()}`,
+          {
+            headers: { Authorization: `Bearer ${token}` },
+          }
+        );
+        const text = await response.text();
+        const data = text ? JSON.parse(text) : {};
+        if (!response.ok) throw new Error(data.message || "Failed to load owner payment breakdown");
+        setOwnerDetails(data);
+      } catch (error) {
+        setOwnerDetails(null);
+        showNotice("error", error.message);
+      } finally {
+        setDetailsLoading(false);
+      }
+    },
+    [apiBase, buildPeriodParams, showNotice, token]
+  );
 
   useEffect(() => {
     loadPayments();
   }, [loadPayments]);
+
+  useEffect(
+    () => () => {
+      window.clearTimeout(noticeTimerRef.current);
+    },
+    []
+  );
+
+  useEffect(() => {
+    loadOwnerDetails(selectedOwnerId);
+  }, [loadOwnerDetails, selectedOwnerId]);
+
+  const filteredPayments = useMemo(() => {
+    const needle = ownerSearch.trim().toLowerCase();
+    if (!needle) return payments;
+    return payments.filter((row) => {
+      const name = String(row.owner?.name || "").toLowerCase();
+      const username = String(row.owner?.username || "").toLowerCase();
+      return name.includes(needle) || username.includes(needle);
+    });
+  }, [ownerSearch, payments]);
+
+  const selectedPaymentRow =
+    payments.find((row) => String(row.owner?.id) === String(selectedOwnerId)) || activePaymentRow || null;
+
+  const dateTotals = useMemo(() => {
+    const rows = ownerDetails?.dateRows || [];
+    return rows.reduce(
+      (acc, row) => {
+        acc.trips += Number(row.tripCount || 0);
+        acc.onlinePax += Number(row.onlinePassengersCount || 0);
+        acc.onlineAmount += Number(row.onlineAmount || 0);
+        acc.cashPax += Number(row.cashPassengersCount || 0);
+        acc.cashAmount += Number(row.cashAmount || 0);
+        acc.totalAmount += Number(row.totalAmount || 0);
+        return acc;
+      },
+      { trips: 0, onlinePax: 0, onlineAmount: 0, cashPax: 0, cashAmount: 0, totalAmount: 0 }
+    );
+  }, [ownerDetails]);
+
+  const tripTotals = useMemo(() => {
+    const rows = ownerDetails?.tripRows || [];
+    return rows.reduce(
+      (acc, row) => {
+        acc.onlinePax += Number(row.onlinePassengersCount || 0);
+        acc.onlineAmount += Number(row.onlineAmount || 0);
+        acc.cashPax += Number(row.cashPassengersCount || 0);
+        acc.cashAmount += Number(row.cashAmount || 0);
+        acc.totalAmount += Number(row.totalAmount || 0);
+        return acc;
+      },
+      { onlinePax: 0, onlineAmount: 0, cashPax: 0, cashAmount: 0, totalAmount: 0 }
+    );
+  }, [ownerDetails]);
 
   const currentDue = Number(activePaymentRow?.dueAmount || 0);
   const commissionAmount = Number(commissionInput || 0);
@@ -90,7 +191,7 @@ function PaymentsOverview({ apiBase, token }) {
       return;
     }
     if (commissionAmount > currentDue) {
-      showNotice("error", "Commission cannot be greater than due amount.");
+      showNotice("error", "Commission cannot be greater than pending online payout.");
       return;
     }
     setGatewayStage("gateway");
@@ -122,6 +223,7 @@ function PaymentsOverview({ apiBase, token }) {
       showNotice("success", `Virtual payment completed. Txn: ${data.settlement?.gatewayTxnRef || "--"}`);
       closePaymentPopup();
       await loadPayments();
+      await loadOwnerDetails(activePaymentRow.owner.id);
     } catch (error) {
       showNotice("error", error.message);
     } finally {
@@ -170,10 +272,8 @@ function PaymentsOverview({ apiBase, token }) {
             <div className="brand">
               <div className="brand-mark" />
               <div>
-                <h1>Owner Due Payments</h1>
-                <span className="pill">
-                  {period ? `${period.startDate} to ${period.endDate}` : "Period pending"}
-                </span>
+                <h1>Owner Payment Console</h1>
+                <span className="pill">{formatDateRange(period)}</span>
               </div>
             </div>
             <div className="topbar-actions">
@@ -189,7 +289,7 @@ function PaymentsOverview({ apiBase, token }) {
             <section className="panel">
               <div className="panel-header">
                 <h3>Filters</h3>
-                <span className="pill">Owner payout period</span>
+                <span className="pill">Owner, date, trip reconciliation</span>
               </div>
               <div className="inline">
                 <label className="field">
@@ -224,43 +324,67 @@ function PaymentsOverview({ apiBase, token }) {
                     </label>
                   </>
                 )}
+                <label className="field">
+                  Search owner
+                  <input
+                    type="text"
+                    value={ownerSearch}
+                    onChange={(event) => setOwnerSearch(event.target.value)}
+                    placeholder="Owner name or username"
+                  />
+                </label>
                 <button className="btn primary" type="button" onClick={loadPayments}>
-                  Load dues
+                  Load report
                 </button>
               </div>
             </section>
 
             <section className="grid three">
+              <div className="stat stat-up">
+                <span>Online collections</span>
+                <strong>Rs {formatMoney(summary?.onlineAmount ?? 0)}</strong>
+              </div>
+              <div className="stat stat-down">
+                <span>Offline collections</span>
+                <strong>Rs {formatMoney(summary?.cashAmount ?? 0)}</strong>
+              </div>
+              <div className="stat stat-live">
+                <span>Pending owner payout</span>
+                <strong>Rs {formatMoney(summary?.dueAmount ?? 0)}</strong>
+              </div>
+            </section>
+
+            <section className="grid three">
               <div className="stat">
-                <span>Owners with dues</span>
+                <span>Owners in period</span>
                 <strong>{summary?.owners ?? 0}</strong>
               </div>
               <div className="stat">
-                <span>Tickets</span>
+                <span>Passengers counted</span>
                 <strong>{summary?.tickets ?? 0}</strong>
               </div>
               <div className="stat">
-                <span>Total due amount</span>
-                <strong>Rs {formatMoney(summary?.dueAmount ?? 0)}</strong>
+                <span>Total collections</span>
+                <strong>Rs {formatMoney(summary?.totalAmount ?? 0)}</strong>
               </div>
             </section>
 
             <section className="panel">
               <div className="panel-header">
-                <h3>Due payment table</h3>
-                <span className="pill">{payments.length} owners</span>
+                <h3>Owner-wise collections</h3>
+                <span className="pill">{filteredPayments.length} owners</span>
               </div>
               {loading ? (
                 <div className="list-item">
                   <div>
-                    <strong>Loading due payments...</strong>
+                    <strong>Loading payment report...</strong>
                   </div>
                 </div>
-              ) : payments.length === 0 ? (
+              ) : filteredPayments.length === 0 ? (
                 <div className="list-item">
                   <div>
-                    <strong>No due payment rows found</strong>
-                    <span>Try another period or verify owner ticket transactions exist.</span>
+                    <strong>No payment rows found</strong>
+                    <span>Try another period or verify ticket ownership snapshots exist.</span>
                   </div>
                 </div>
               ) : (
@@ -270,59 +394,317 @@ function PaymentsOverview({ apiBase, token }) {
                       <th>Owner</th>
                       <th>Username</th>
                       <th>Buses</th>
-                      <th>Tickets</th>
-                      <th>Payable (Rs)</th>
-                      <th>Commission (Rs)</th>
-                      <th>Paid (Rs)</th>
-                      <th>Due (Rs)</th>
+                      <th>Online pax</th>
+                      <th>Online (Rs)</th>
+                      <th>Offline pax</th>
+                      <th>Offline (Rs)</th>
+                      <th>Total (Rs)</th>
+                      <th>Paid online (Rs)</th>
+                      <th>Pending online (Rs)</th>
                       <th>Action</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {payments.map((row) => (
-                      <tr key={row.owner?.id}>
-                        <td>{row.owner?.name || "--"}</td>
-                        <td>{row.owner?.username || "--"}</td>
-                        <td>{row.totalBuses ?? 0}</td>
-                        <td>{row.ticketsGenerated ?? 0}</td>
-                        <td>{formatMoney(row.payableAmount)}</td>
-                        <td>{formatMoney(row.commissionAmount)}</td>
-                        <td>{formatMoney(row.paidAmount)}</td>
-                        <td>{formatMoney(row.dueAmount)}</td>
-                        <td>
-                          <button
-                            className="btn primary"
-                            type="button"
-                            onClick={() => openPaymentPopup(row)}
-                            disabled={Number(row.dueAmount || 0) <= 0}
-                          >
-                            Pay now
-                          </button>
-                        </td>
-                      </tr>
-                    ))}
+                    {filteredPayments.map((row) => {
+                      const isActive = String(row.owner?.id) === String(selectedOwnerId);
+                      return (
+                        <tr
+                          key={row.owner?.id}
+                          onClick={() => setSelectedOwnerId(String(row.owner?.id || ""))}
+                          style={isActive ? { background: "rgba(27, 154, 170, 0.08)" } : undefined}
+                        >
+                          <td>{row.owner?.name || "--"}</td>
+                          <td>{row.owner?.username || "--"}</td>
+                          <td>{row.totalBuses ?? 0}</td>
+                          <td>{row.onlineTicketsGenerated ?? 0}</td>
+                          <td>{formatMoney(row.onlineAmount)}</td>
+                          <td>{row.cashTicketsGenerated ?? 0}</td>
+                          <td>{formatMoney(row.cashAmount)}</td>
+                          <td>{formatMoney(row.totalAmount)}</td>
+                          <td>{formatMoney(row.paidAmount)}</td>
+                          <td>{formatMoney(row.dueAmount)}</td>
+                          <td>
+                            <div className="row-actions">
+                              <button
+                                className="btn ghost"
+                                type="button"
+                                onClick={(event) => {
+                                  event.stopPropagation();
+                                  setSelectedOwnerId(String(row.owner?.id || ""));
+                                }}
+                              >
+                                View
+                              </button>
+                              <button
+                                className="btn primary"
+                                type="button"
+                                onClick={(event) => {
+                                  event.stopPropagation();
+                                  openPaymentPopup(row);
+                                }}
+                                disabled={Number(row.dueAmount || 0) <= 0}
+                              >
+                                Pay
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
+                      );
+                    })}
                   </tbody>
                 </table>
+              )}
+            </section>
+
+            <section className="panel owner-breakdown">
+              <div className="panel-header">
+                <h3>Selected owner breakdown</h3>
+                {ownerDetails?.owner?.name || selectedPaymentRow?.owner?.name ? (
+                  <span className="owner-chip">
+                    <span className="owner-avatar">
+                      {(ownerDetails?.owner?.name || selectedPaymentRow?.owner?.name || "?").charAt(0).toUpperCase()}
+                    </span>
+                    {ownerDetails?.owner?.name || selectedPaymentRow?.owner?.name}
+                  </span>
+                ) : (
+                  <span className="pill">Choose an owner</span>
+                )}
+              </div>
+
+              {!selectedOwnerId ? (
+                <div className="list-item">
+                  <div>
+                    <strong>No owner selected</strong>
+                    <span>Select a row from the owner-wise table to inspect date-wise and trip-wise collections.</span>
+                  </div>
+                </div>
+              ) : detailsLoading ? (
+                <div className="list-item">
+                  <div>
+                    <strong>Loading owner breakdown...</strong>
+                  </div>
+                </div>
+              ) : !ownerDetails ? (
+                <div className="list-item">
+                  <div>
+                    <strong>Owner details unavailable</strong>
+                    <span>Refresh the report and try again.</span>
+                  </div>
+                </div>
+              ) : (
+                <div className="grid" style={{ gap: 20 }}>
+                  <div className="grid three">
+                    <div className="stat stat-up">
+                      <span>Owner total collection</span>
+                      <strong>Rs {formatMoney(ownerDetails.summary?.totalAmount ?? 0)}</strong>
+                    </div>
+                    <div className={`stat ${Number(ownerDetails.summary?.dueAmount ?? 0) > 0 ? "stat-down" : "stat-live"}`}>
+                      <span>Owner online payout due</span>
+                      <strong>
+                        Rs {formatMoney(ownerDetails.summary?.dueAmount ?? 0)}
+                        {Number(ownerDetails.summary?.dueAmount ?? 0) > 0 ? (
+                          <span className="due-flag pending">Pending</span>
+                        ) : (
+                          <span className="due-flag settled">Settled</span>
+                        )}
+                      </strong>
+                    </div>
+                    <div className="stat">
+                      <span>Owner passengers</span>
+                      <strong>{ownerDetails.summary?.ticketsGenerated ?? 0}</strong>
+                    </div>
+                  </div>
+
+                  <div className="grid two">
+                    <section className="panel" style={{ padding: 0, boxShadow: "none" }}>
+                      <div className="panel-header" style={{ padding: "20px 22px 0" }}>
+                        <h3>Date-wise collections</h3>
+                        <span className="pill">{ownerDetails.dateRows?.length ?? 0} days</span>
+                      </div>
+                      {ownerDetails.dateRows?.length ? (
+                        <table className="table">
+                          <thead>
+                            <tr>
+                              <th>Date</th>
+                              <th>Trips</th>
+                              <th>Online pax</th>
+                              <th>Online (Rs)</th>
+                              <th>Offline pax</th>
+                              <th>Offline (Rs)</th>
+                              <th>Total (Rs)</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {ownerDetails.dateRows.map((row) => (
+                              <tr key={row.date}>
+                                <td>{row.date}</td>
+                                <td>{row.tripCount ?? 0}</td>
+                                <td>{row.onlinePassengersCount ?? 0}</td>
+                                <td>{formatMoney(row.onlineAmount)}</td>
+                                <td>{row.cashPassengersCount ?? 0}</td>
+                                <td>{formatMoney(row.cashAmount)}</td>
+                                <td>{formatMoney(row.totalAmount)}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                          <tfoot>
+                            <tr>
+                              <td>Total</td>
+                              <td>{dateTotals.trips}</td>
+                              <td>{dateTotals.onlinePax}</td>
+                              <td>{formatMoney(dateTotals.onlineAmount)}</td>
+                              <td>{dateTotals.cashPax}</td>
+                              <td>{formatMoney(dateTotals.cashAmount)}</td>
+                              <td>{formatMoney(dateTotals.totalAmount)}</td>
+                            </tr>
+                          </tfoot>
+                        </table>
+                      ) : (
+                        <div className="list-item" style={{ margin: 22 }}>
+                          <div>
+                            <strong>No date-wise collections</strong>
+                          </div>
+                        </div>
+                      )}
+                    </section>
+
+                    <section className="panel" style={{ padding: 0, boxShadow: "none" }}>
+                      <div className="panel-header" style={{ padding: "20px 22px 0" }}>
+                        <h3>Payout history</h3>
+                        <span className="pill">{ownerDetails.settlementHistory?.length ?? 0} settlements</span>
+                      </div>
+                      {ownerDetails.settlementHistory?.length ? (
+                        <table className="table">
+                          <thead>
+                            <tr>
+                              <th>Paid at</th>
+                              <th>Window</th>
+                              <th>Gross (Rs)</th>
+                              <th>Commission (Rs)</th>
+                              <th>Net (Rs)</th>
+                              <th>Txn</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {ownerDetails.settlementHistory.map((row) => (
+                              <tr key={row.id}>
+                                <td>{row.createdAt ? new Date(row.createdAt).toLocaleString() : "--"}</td>
+                                <td>{row.periodStart} to {row.periodEnd}</td>
+                                <td>{formatMoney(row.grossDueAmount)}</td>
+                                <td>{formatMoney(row.commissionAmount)}</td>
+                                <td>
+                                  <strong>Rs {formatMoney(row.netPaidAmount)}</strong>
+                                  <span className="due-flag settled" style={{ marginLeft: 8 }}>
+                                    Paid
+                                  </span>
+                                </td>
+                                <td>{row.gatewayTxnRef || "--"}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      ) : (
+                        <div className="list-item" style={{ margin: 22 }}>
+                          <div>
+                            <strong>No payout history in selected period</strong>
+                          </div>
+                        </div>
+                      )}
+                    </section>
+                  </div>
+
+                  <section className="panel" style={{ padding: 0, boxShadow: "none" }}>
+                    <div className="panel-header" style={{ padding: "20px 22px 0" }}>
+                      <h3>Trip-wise collections</h3>
+                      <span className="pill">{ownerDetails.tripRows?.length ?? 0} trips</span>
+                    </div>
+                    {ownerDetails.tripRows?.length ? (
+                      <table className="table">
+                        <thead>
+                          <tr>
+                            <th>Date</th>
+                            <th>Time</th>
+                            <th>Bus</th>
+                            <th>Route</th>
+                            <th>Direction</th>
+                            <th>Online pax</th>
+                            <th>Online (Rs)</th>
+                            <th>Offline pax</th>
+                            <th>Offline (Rs)</th>
+                            <th>Total (Rs)</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {ownerDetails.tripRows.map((row) => {
+                            const directionLower = String(row.direction || "").toLowerCase();
+                            return (
+                              <tr key={row.tripInstanceId || `${row.tripDate}-${row.busNumber}-${row.routeCode}`}>
+                                <td>{row.tripDate || "--"}</td>
+                                <td>{row.tripWindow || "--"}</td>
+                                <td>{row.busNumber || "--"}</td>
+                                <td>{row.routeCode || "--"} · {row.routeName || "Route"}</td>
+                                <td>
+                                  {row.direction ? (
+                                    <span className={`direction-chip ${directionLower === "down" ? "down" : "up"}`}>
+                                      {row.direction}
+                                    </span>
+                                  ) : (
+                                    "--"
+                                  )}
+                                </td>
+                                <td>{row.onlinePassengersCount ?? 0}</td>
+                                <td>{formatMoney(row.onlineAmount)}</td>
+                                <td>{row.cashPassengersCount ?? 0}</td>
+                                <td>{formatMoney(row.cashAmount)}</td>
+                                <td>{formatMoney(row.totalAmount)}</td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                        <tfoot>
+                          <tr>
+                            <td colSpan={5}>Total</td>
+                            <td>{tripTotals.onlinePax}</td>
+                            <td>{formatMoney(tripTotals.onlineAmount)}</td>
+                            <td>{tripTotals.cashPax}</td>
+                            <td>{formatMoney(tripTotals.cashAmount)}</td>
+                            <td>{formatMoney(tripTotals.totalAmount)}</td>
+                          </tr>
+                        </tfoot>
+                      </table>
+                    ) : (
+                      <div className="list-item" style={{ margin: 22 }}>
+                        <div>
+                          <strong>No trip-wise collections</strong>
+                        </div>
+                      </div>
+                    )}
+                  </section>
+                </div>
               )}
             </section>
           </main>
         </div>
       </div>
+
       {activePaymentRow && (
         <div className="modal-backdrop" role="dialog" aria-modal="true">
           <div className="modal-card">
             <div className="panel-header">
-              <h3>Owner Payment Gateway</h3>
+              <h3>Owner Payout</h3>
               <button className="btn ghost" type="button" onClick={closePaymentPopup}>
                 Close
               </button>
             </div>
             {gatewayStage === "form" ? (
-              <div style={{ display: "grid", gap: "12px" }}>
+              <div style={{ display: "grid", gap: 12 }}>
                 <div className="list-item">
                   <div>
                     <strong>{activePaymentRow.owner?.name || "--"}</strong>
-                    <span>Current due: Rs {formatMoney(activePaymentRow.dueAmount)}</span>
+                    <span>
+                      Online collected Rs {formatMoney(activePaymentRow.onlineAmount)} | pending payout Rs{" "}
+                      {formatMoney(activePaymentRow.dueAmount)}
+                    </span>
                   </div>
                 </div>
                 <label className="field">
@@ -346,13 +728,13 @@ function PaymentsOverview({ apiBase, token }) {
                 </button>
               </div>
             ) : (
-              <div style={{ display: "grid", gap: "12px" }}>
+              <div style={{ display: "grid", gap: 12 }}>
                 <div className="list-item">
                   <div>
                     <strong>Virtual Payment Gateway</strong>
                     <span>
-                      Pay Rs {formatMoney(netPayout)} to {activePaymentRow.owner?.name || "--"} (commission Rs{" "}
-                      {formatMoney(commissionAmount)})
+                      Pay Rs {formatMoney(netPayout)} to {activePaymentRow.owner?.name || "--"} against online ticket
+                      collections.
                     </span>
                   </div>
                 </div>

@@ -10,7 +10,7 @@ const ConductorAssignment = require("../models/ConductorAssignment");
 const BusCrewMapping = require("../models/BusCrewMapping");
 const ApiError = require("../utils/ApiError");
 const asyncHandler = require("../utils/asyncHandler");
-const { computeOwnerPaymentRows } = require("../utils/ownerPayments");
+const { computeOwnerPaymentRows, computeOwnerPaymentDetails } = require("../utils/ownerPayments");
 const { getOpsDate, getOpsMonth, toOpsIsoDay, getOpsDayWindow, getOpsPeriodWindow } = require("../utils/opsTime");
 const { getStopFieldsForDirection, hasCoords } = require("../utils/routeStopDirection");
 
@@ -427,6 +427,15 @@ exports.updateOwnerBusLocation = asyncHandler(async (req, res) => {
   if (!bus) throw new ApiError(404, "Bus not found in your fleet");
   if (!bus.attachedRouteId) throw new ApiError(400, "Attach this bus to a route before setting start location");
 
+  const activeAssignment = await DriverAssignment.findOne({
+    busId: bus._id,
+    date: getOpsDate(),
+    status: "Active",
+  }).select("_id");
+  if (activeAssignment) {
+    throw new ApiError(409, "Cannot change start point while the bus is on a live trip");
+  }
+
   const source = String(bus.attachedRouteId.source || "").trim();
   const destination = String(bus.attachedRouteId.destination || "").trim();
   const sourceNorm = source.toLowerCase();
@@ -705,11 +714,6 @@ exports.assignOwnerDailyCrew = asyncHandler(async (req, res) => {
 
   await deactivateExpiredCrewMappings(start, { busId: bus._id });
 
-  const depotId = String(bus.depotId || "");
-  if (depotId && (String(driver.depotId || "") !== depotId || String(conductor.depotId || "") !== depotId)) {
-    throw new ApiError(400, "Driver and conductor must belong to bus depot");
-  }
-
   const [driverConflict, conductorConflict] = await Promise.all([
     BusCrewMapping.findOne({
       busId: { $ne: bus._id },
@@ -799,5 +803,24 @@ exports.getOwnerPaymentSummary = asyncHandler(async (req, res) => {
     mode,
     period,
     summary,
+  });
+});
+
+exports.getOwnerBilling = asyncHandler(async (req, res) => {
+  const ownerId = req.user.userId;
+  const mode = String(req.query.mode || "monthly").toLowerCase();
+  const { start, end } = getPeriodWindow(mode, req.query);
+  const period = {
+    startDate: toOpsIsoDay(start),
+    endDate: toOpsIsoDay(new Date(end.getTime() - 1)),
+  };
+
+  const breakdown = await computeOwnerPaymentDetails({ ownerId, start, end });
+
+  res.json({
+    ok: true,
+    mode,
+    period,
+    ...breakdown,
   });
 });

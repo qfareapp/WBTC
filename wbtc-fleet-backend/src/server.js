@@ -4,6 +4,7 @@ const dotenv = require("dotenv");
 const app = require("./app");
 const connectDB = require("./config/db");
 const { startDriverOfferNotifier } = require("./services/driverOfferNotifier");
+const { startConductorOfferNotifier } = require("./services/conductorOfferNotifier");
 
 const envPath = path.resolve(process.cwd(), ".env");
 const localEnvPath = path.resolve(process.cwd(), ".env.local");
@@ -21,5 +22,6 @@ const PORT = process.env.PORT || 5000;
 (async () => {
   await connectDB();
   startDriverOfferNotifier();
+  startConductorOfferNotifier();
   app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
 })();

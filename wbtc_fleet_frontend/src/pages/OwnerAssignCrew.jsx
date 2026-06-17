@@ -120,6 +120,7 @@ function OwnerAssignCrew({ apiBase, token, user, setToken, setUser }) {
           <nav className="nav">
             <Link className="nav-item" to="/owner">Fleet KPI</Link>
             <Link className="nav-item live-nav" to="/owner/assign-crew">Assign crew</Link>
+            <Link className="nav-item" to="/owner/billing">Billing</Link>
           </nav>
           <div className="sidebar-footer">
             <span className="pill">API: {apiBase}</span>

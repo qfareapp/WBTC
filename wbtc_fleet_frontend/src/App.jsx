@@ -12,6 +12,7 @@ import RouteTimeline from "./pages/RouteTimeline.jsx";
 import LiveTrips from "./pages/LiveTrips.jsx";
 import OwnerDashboard from "./pages/OwnerDashboard.jsx";
 import OwnerAssignCrew from "./pages/OwnerAssignCrew.jsx";
+import OwnerBilling from "./pages/OwnerBilling.jsx";
 import OwnersOverview from "./pages/OwnersOverview.jsx";
 import PaymentsOverview from "./pages/PaymentsOverview.jsx";
 import PassengerUsersOverview from "./pages/PassengerUsersOverview.jsx";
@@ -108,6 +109,20 @@ function App() {
             token ? (
               user?.role === "OWNER" ? (
                 <OwnerAssignCrew apiBase={apiBase} token={token} user={user} setToken={setToken} setUser={setUser} />
+              ) : (
+                <Navigate to="/dashboard" replace />
+              )
+            ) : (
+              <Navigate to="/" replace />
+            )
+          }
+        />
+        <Route
+          path="/owner/billing"
+          element={
+            token ? (
+              user?.role === "OWNER" ? (
+                <OwnerBilling apiBase={apiBase} token={token} user={user} setToken={setToken} setUser={setUser} />
               ) : (
                 <Navigate to="/dashboard" replace />
               )

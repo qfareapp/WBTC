@@ -15,6 +15,7 @@ import { Ionicons } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
 import ConductorLanguageToggle from "../../components/ConductorLanguageToggle";
 import { useConductorLanguage } from "../../contexts/conductor-language";
+import { unregisterStoredConductorPushToken } from "../../utils/pushNotifications";
 
 const TOKEN_KEY = "wbtc_driver_token";
 const CONDUCTOR_KEY = "wbtc_conductor_profile";
@@ -256,6 +257,7 @@ export default function ConductorProfile() {
   };
 
   const handleLogout = async () => {
+    await unregisterStoredConductorPushToken({ role: "CONDUCTOR" });
     await AsyncStorage.multiRemove([TOKEN_KEY, USER_ROLE_KEY, CONDUCTOR_KEY, API_BASE_KEY, PRINTER_KEY, MUST_CHANGE_PASSWORD_KEY]);
     router.replace("/login");
   };

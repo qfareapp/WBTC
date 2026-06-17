@@ -189,33 +189,30 @@ const cleanupStaleConductorAssignments = async ({ conductorId, date }) => {
   );
 };
 
-exports.listConductorOffers = asyncHandler(async (req, res) => {
-  const conductorId = req.user.userId;
-  const date = req.query.date || today();
-  const debug = String(req.query.debug || "").toLowerCase() === "true";
-  const debugNoOffers = (reason, extra = {}) => {
-    if (!debug) return { ok: true, date, offers: [] };
-    return {
-      ok: true,
-      date,
-      offers: [],
-      debug: {
-        enabled: true,
-        totalCandidates: 0,
-        skippedCount: 1,
-        summary: { [reason]: 1 },
-        skipped: [{ tripInstanceId: null, routeCode: null, startTime: null, reason }],
-        ...extra,
-      },
-    };
+const buildConductorNoOffersResult = ({ date, debug, reason, extra = {} }) => {
+  if (!debug) return { date, offers: [] };
+  return {
+    date,
+    offers: [],
+    debug: {
+      enabled: true,
+      totalCandidates: 0,
+      skippedCount: 1,
+      summary: { [reason]: 1 },
+      skipped: [{ tripInstanceId: null, routeCode: null, startTime: null, reason }],
+      ...extra,
+    },
   };
+};
+
+const collectEligibleTripOffersForConductor = async ({ conductorId, date = today(), debug = false }) => {
   const conductor = await Conductor.findById(conductorId);
   if (!conductor) throw new ApiError(404, "Conductor not found");
 
   await cleanupStaleConductorAssignments({ conductorId, date });
 
   if (conductor.status !== "Available") {
-    return res.json(debugNoOffers("conductor_not_available"));
+    return buildConductorNoOffersResult({ date, debug, reason: "conductor_not_available" });
   }
 
   const activeAssignment = await ConductorAssignment.findOne({
@@ -224,7 +221,7 @@ exports.listConductorOffers = asyncHandler(async (req, res) => {
     status: { $in: ["Scheduled", "Active"] },
   }).select("_id");
   if (activeAssignment) {
-    return res.json(debugNoOffers("conductor_has_active_assignment"));
+    return buildConductorNoOffersResult({ date, debug, reason: "conductor_has_active_assignment" });
   }
 
   const mappedRows = await BusCrewMapping.find({
@@ -236,10 +233,9 @@ exports.listConductorOffers = asyncHandler(async (req, res) => {
     .select("busId driverId")
     .lean();
   if (!mappedRows.length) {
-    return res.json(debugNoOffers("no_active_crew_mapping"));
+    return buildConductorNoOffersResult({ date, debug, reason: "no_active_crew_mapping" });
   }
   const mappedBusDocs = mappedRows.map((row) => row.busId).filter(Boolean);
-  const mappedBusIds = new Set(mappedBusDocs.map((bus) => String(bus._id)));
   const mappedBusById = new Map(mappedBusDocs.map((bus) => [String(bus._id), bus]));
   const mappedPairSet = new Set(
     mappedRows
@@ -248,9 +244,6 @@ exports.listConductorOffers = asyncHandler(async (req, res) => {
   );
   const mappedDriverIds = Array.from(
     new Set(mappedRows.map((row) => String(row.driverId || "")).filter(Boolean))
-  );
-  const mappedBusIdList = Array.from(
-    new Set(mappedRows.map((row) => String(row.busId?._id || row.busId || "")).filter(Boolean))
   );
   const { nowMinutes } = getOpsNowParts();
 
@@ -261,14 +254,14 @@ exports.listConductorOffers = asyncHandler(async (req, res) => {
   })
     .select("tripInstanceId driverId busId startTime");
   if (!driverAcceptedRows.length) {
-    return res.json(debugNoOffers("mapped_driver_has_no_accepted_trip"));
+    return buildConductorNoOffersResult({ date, debug, reason: "mapped_driver_has_no_accepted_trip" });
   }
 
   const eligibleDriverAcceptedRows = driverAcceptedRows.filter((row) =>
     mappedPairSet.has(`${String(row.driverId || "")}:${String(row.busId || "")}`)
   );
   if (!eligibleDriverAcceptedRows.length) {
-    return res.json(debugNoOffers("driver_assignment_not_mapped_to_conductor"));
+    return buildConductorNoOffersResult({ date, debug, reason: "driver_assignment_not_mapped_to_conductor" });
   }
 
   const driverAcceptedByTripId = new Map(
@@ -284,7 +277,7 @@ exports.listConductorOffers = asyncHandler(async (req, res) => {
     .populate("busId", "busNumber busType")
     .sort({ startTime: 1 });
   if (!trips.length) {
-    return res.json(debugNoOffers("mapped_driver_trip_not_available"));
+    return buildConductorNoOffersResult({ date, debug, reason: "mapped_driver_trip_not_available" });
   }
 
   const [assignments, rejects] = await Promise.all([
@@ -319,10 +312,6 @@ exports.listConductorOffers = asyncHandler(async (req, res) => {
     }
     if (route.assignmentMode !== "AUTO") {
       trackSkip(trip, "route_not_auto");
-      continue;
-    }
-    if (String(route.depotId) !== String(conductor.depotId)) {
-      trackSkip(trip, "depot_mismatch");
       continue;
     }
     if (assignedSet.has(String(trip._id))) {
@@ -376,18 +365,14 @@ exports.listConductorOffers = asyncHandler(async (req, res) => {
     });
   }
 
-  res.set("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate");
-  res.set("Pragma", "no-cache");
-  res.set("Expires", "0");
-  if (!debug) {
-    return res.json({ ok: true, date, offers });
-  }
+  if (!debug) return { date, offers };
+
   const summary = skipped.reduce((acc, item) => {
     acc[item.reason] = (acc[item.reason] || 0) + 1;
     return acc;
   }, {});
-  return res.json({
-    ok: true,
+
+  return {
     date,
     offers,
     debug: {
@@ -397,7 +382,69 @@ exports.listConductorOffers = asyncHandler(async (req, res) => {
       summary,
       skipped,
     },
-  });
+  };
+};
+
+exports.listConductorOffers = asyncHandler(async (req, res) => {
+  const conductorId = req.user.userId;
+  const date = req.query.date || today();
+  const debug = String(req.query.debug || "").toLowerCase() === "true";
+  const result = await collectEligibleTripOffersForConductor({ conductorId, date, debug });
+
+  res.set("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate");
+  res.set("Pragma", "no-cache");
+  res.set("Expires", "0");
+  if (!debug) return res.json({ ok: true, date: result.date, offers: result.offers });
+  return res.json({ ok: true, date: result.date, offers: result.offers, debug: result.debug });
+});
+
+exports.registerPushToken = asyncHandler(async (req, res) => {
+  const conductorId = req.user.userId;
+  const normalizedToken = String(req.body?.token || "").trim();
+  const normalizedPlatform = String(req.body?.platform || "").trim() || null;
+  const requestedProvider = String(req.body?.provider || "").trim().toLowerCase();
+  const normalizedProvider = requestedProvider === "fcm" ? "fcm" : "expo";
+
+  if (!normalizedToken) throw new ApiError(400, "token required");
+
+  const conductor = await Conductor.findById(conductorId);
+  if (!conductor) throw new ApiError(404, "Conductor not found");
+
+  const existingTokens = Array.isArray(conductor.pushTokens) ? conductor.pushTokens : [];
+  conductor.pushTokens = [
+    {
+      token: normalizedToken,
+      platform: normalizedPlatform,
+      provider: normalizedProvider,
+      updatedAt: new Date(),
+    },
+    ...existingTokens.filter((item) => {
+      const itemToken = String(item?.token || "").trim();
+      const itemPlatform = String(item?.platform || "").trim() || null;
+      if (itemToken === normalizedToken) return false;
+      if (normalizedPlatform && itemPlatform === normalizedPlatform) return false;
+      return true;
+    }),
+  ].slice(0, 5);
+  await conductor.save();
+
+  res.json({ ok: true, tokens: conductor.pushTokens.length });
+});
+
+exports.unregisterPushToken = asyncHandler(async (req, res) => {
+  const conductorId = req.user.userId;
+  const normalizedToken = String(req.body?.token || "").trim();
+
+  const conductor = await Conductor.findById(conductorId);
+  if (!conductor) throw new ApiError(404, "Conductor not found");
+
+  const existingTokens = Array.isArray(conductor.pushTokens) ? conductor.pushTokens : [];
+  conductor.pushTokens = normalizedToken
+    ? existingTokens.filter((item) => String(item?.token || "") !== normalizedToken)
+    : [];
+  await conductor.save();
+
+  res.json({ ok: true, tokens: conductor.pushTokens.length });
 });
 
 exports.acceptConductorOffer = asyncHandler(async (req, res) => {
@@ -649,7 +696,9 @@ exports.issueConductorTicket = asyncHandler(async (req, res) => {
 
   const booking = await TicketBooking.create({
     bookingId,
+    busId: trip.busId?._id || trip.busId || null,
     busNumber: trip.busId?.busNumber || "NA",
+    ownerId: assignment.ownerId || null,
     routeId: String(trip.routeId),
     depotId: trip.depotId || null,
     tripInstanceId: trip._id,
@@ -1098,3 +1147,5 @@ exports.getConductorSummary = asyncHandler(async (req, res) => {
     },
   });
 });
+
+exports.collectEligibleTripOffersForConductor = collectEligibleTripOffersForConductor;

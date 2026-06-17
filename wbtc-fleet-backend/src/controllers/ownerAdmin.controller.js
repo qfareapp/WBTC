@@ -5,7 +5,12 @@ const TripInstance = require("../models/TripInstance");
 const OwnerPaymentSettlement = require("../models/OwnerPaymentSettlement");
 const ApiError = require("../utils/ApiError");
 const asyncHandler = require("../utils/asyncHandler");
-const { toIsoDay, getPeriodWindow, computeOwnerPaymentRows } = require("../utils/ownerPayments");
+const {
+  toIsoDay,
+  getPeriodWindow,
+  computeOwnerPaymentRows,
+  computeOwnerPaymentDetails,
+} = require("../utils/ownerPayments");
 const { generateTemporaryPassword, hashPassword } = require("../utils/crewPassword");
 
 exports.listOwnersOverview = asyncHandler(async (req, res) => {
@@ -152,7 +157,19 @@ exports.listOwnerDuePayments = asyncHandler(async (req, res) => {
       ok: true,
       mode,
       period,
-      summary: { owners: 0, tickets: 0, payableAmount: 0, paidAmount: 0, dueAmount: 0 },
+      summary: {
+        owners: 0,
+        tickets: 0,
+        bookings: 0,
+        onlineTickets: 0,
+        cashTickets: 0,
+        onlineAmount: 0,
+        cashAmount: 0,
+        totalAmount: 0,
+        payableAmount: 0,
+        paidAmount: 0,
+        dueAmount: 0,
+      },
       payments: [],
     });
   }
@@ -184,6 +201,14 @@ exports.listOwnerDuePayments = asyncHandler(async (req, res) => {
         },
         totalBuses: row.totalBuses,
         ticketsGenerated: row.ticketsGenerated,
+        bookingsCount: row.bookingsCount,
+        onlineTicketsGenerated: row.onlineTicketsGenerated,
+        onlineBookingsCount: row.onlineBookingsCount,
+        onlineAmount: row.onlineAmount,
+        cashTicketsGenerated: row.cashTicketsGenerated,
+        cashBookingsCount: row.cashBookingsCount,
+        cashAmount: row.cashAmount,
+        totalAmount: row.totalAmount,
         payableAmount: row.payableAmount,
         commissionAmount: row.commissionAmount,
         paidAmount: row.paidAmount,
@@ -198,14 +223,35 @@ exports.listOwnerDuePayments = asyncHandler(async (req, res) => {
     (acc, item) => {
       acc.owners += 1;
       acc.tickets += item.ticketsGenerated || 0;
+      acc.bookings += item.bookingsCount || 0;
+      acc.onlineTickets += item.onlineTicketsGenerated || 0;
+      acc.cashTickets += item.cashTicketsGenerated || 0;
+      acc.onlineAmount += item.onlineAmount || 0;
+      acc.cashAmount += item.cashAmount || 0;
+      acc.totalAmount += item.totalAmount || 0;
       acc.payableAmount += item.payableAmount || 0;
       acc.paidAmount += item.paidAmount || 0;
       acc.dueAmount += item.dueAmount || 0;
       return acc;
     },
-    { owners: 0, tickets: 0, payableAmount: 0, paidAmount: 0, dueAmount: 0 }
+    {
+      owners: 0,
+      tickets: 0,
+      bookings: 0,
+      onlineTickets: 0,
+      cashTickets: 0,
+      onlineAmount: 0,
+      cashAmount: 0,
+      totalAmount: 0,
+      payableAmount: 0,
+      paidAmount: 0,
+      dueAmount: 0,
+    }
   );
 
+  summary.onlineAmount = Number(summary.onlineAmount.toFixed(2));
+  summary.cashAmount = Number(summary.cashAmount.toFixed(2));
+  summary.totalAmount = Number(summary.totalAmount.toFixed(2));
   summary.payableAmount = Number(summary.payableAmount.toFixed(2));
   summary.paidAmount = Number(summary.paidAmount.toFixed(2));
   summary.dueAmount = Number(summary.dueAmount.toFixed(2));
@@ -216,6 +262,32 @@ exports.listOwnerDuePayments = asyncHandler(async (req, res) => {
     period,
     summary,
     payments,
+  });
+});
+
+exports.getOwnerPaymentBreakdown = asyncHandler(async (req, res) => {
+  const { ownerId } = req.params;
+  const mode = String(req.query.mode || "monthly").toLowerCase();
+  const { start, end } = getPeriodWindow(mode, req.query);
+
+  const owner = await User.findOne({ _id: ownerId, role: "OWNER" }).select("name username").lean();
+  if (!owner) throw new ApiError(404, "Owner not found");
+
+  const breakdown = await computeOwnerPaymentDetails({ ownerId, start, end });
+
+  res.json({
+    ok: true,
+    mode,
+    period: {
+      startDate: toIsoDay(start),
+      endDate: toIsoDay(new Date(end.getTime() - 1)),
+    },
+    owner: {
+      id: owner._id,
+      name: owner.name,
+      username: owner.username,
+    },
+    ...breakdown,
   });
 });
 

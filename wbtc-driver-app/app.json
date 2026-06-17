@@ -35,7 +35,7 @@
       ]
     ],
     "android": {
-      "package": "com.qfare.partner",
+      "package": "com.qfare.driver",
       "googleServicesFile": "./google-services.json",
       "versionCode": 2,
       "blockedPermissions": [
@@ -67,9 +67,9 @@
     "extra": {
       "router": {},
       "eas": {
-        "projectId": "15d0ecb2-a61b-4af2-ab05-f77499acedbf"
+        "projectId": "987c4a82-351a-4bea-b0dd-10b9397b23c7"
       }
     },
-    "owner": "pmullick"
+    "owner": "qfareindia"
   }
 }
