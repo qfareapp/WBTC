@@ -1153,10 +1153,10 @@ exports.getTripLoad = asyncHandler(async (req, res) => {
 
   // Build name → index map (case-insensitive)
   const stopIndexByName = new Map(
-    allStops.map((s) => [s.name.toLowerCase().trim(), s.index])
+    allStops.map((s) => [normalizeStopName(s.name), s.index])
   );
   const passedSet = new Set(
-    (trip.passedStops || []).map((stop) => String(stop || "").toLowerCase().trim())
+    (trip.passedStops || []).map((stop) => normalizeStopName(stop))
   );
 
   const direction = trip.direction;
@@ -1164,8 +1164,8 @@ exports.getTripLoad = asyncHandler(async (req, res) => {
 
   console.log(`[getTripLoad] direction=${direction} currentStopIdx=${currentStopIdx} nearestStop=${nearestStop.name}`);
   for (const ticket of tickets) {
-    const srcKey = String(ticket.source || "").toLowerCase().trim();
-    const dstKey = String(ticket.destination || "").toLowerCase().trim();
+    const srcKey = normalizeStopName(ticket.source);
+    const dstKey = normalizeStopName(ticket.destination);
     const srcIdx = stopIndexByName.get(srcKey);
     const dstIdx = stopIndexByName.get(dstKey);
     console.log(`[getTripLoad] ticket src="${ticket.source}"(${srcIdx}) dst="${ticket.destination}"(${dstIdx}) pax=${ticket.passengerCount}`);
