@@ -1,9 +1,11 @@
 const Conductor = require("../models/Conductor");
+const ConductorAssignment = require("../models/ConductorAssignment");
 const Depot = require("../models/Depot");
 const User = require("../models/User");
 const ApiError = require("../utils/ApiError");
 const asyncHandler = require("../utils/asyncHandler");
 const { generateTemporaryPassword, hashPassword } = require("../utils/crewPassword");
+const { getOpsDate } = require("../utils/opsTime");
 
 const normalizeDepotScope = (req) => {
   if (req.user.role === "ADMIN") return null;
@@ -117,7 +119,37 @@ exports.listConductors = asyncHandler(async (req, res) => {
     .populate("ownerId", "name username")
     .sort({ name: 1 });
 
-  res.json({ ok: true, conductors: conductors.map((conductor) => serializeConductor(conductor)) });
+  const conductorIds = conductors.map((c) => c._id);
+  const todayAssignments = await ConductorAssignment.find({
+    date: getOpsDate(),
+    conductorId: { $in: conductorIds },
+    status: { $in: ["Scheduled", "Active"] },
+  })
+    .populate("busId", "busNumber")
+    .populate("routeId", "routeCode routeName")
+    .lean();
+
+  const assignmentByConductor = {};
+  for (const a of todayAssignments) {
+    const key = String(a.conductorId);
+    if (!assignmentByConductor[key] || a.status === "Active") {
+      assignmentByConductor[key] = {
+        status: a.status,
+        busNumber: a.busId?.busNumber || null,
+        routeCode: a.routeId?.routeCode || null,
+        routeName: a.routeId?.routeName || null,
+        startTime: a.startTime || null,
+        endTime: a.endTime || null,
+      };
+    }
+  }
+
+  const serialized = conductors.map((conductor) => ({
+    ...serializeConductor(conductor),
+    todayAssignment: assignmentByConductor[String(conductor._id)] || null,
+  }));
+
+  res.json({ ok: true, conductors: serialized });
 });
 
 exports.updateConductor = asyncHandler(async (req, res) => {

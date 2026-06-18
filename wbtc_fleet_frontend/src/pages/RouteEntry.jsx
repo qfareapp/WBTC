@@ -112,6 +112,8 @@ function RouteEntry({ apiBase, token, operatorScope, setOperatorScope }) {
   const [stopSuggestions, setStopSuggestions] = useState({});
   const [boardingPointOptions, setBoardingPointOptions] = useState({});
   const [stopFocused, setStopFocused] = useState({});
+  const [formOpen, setFormOpen] = useState(false);
+  const [searchQuery, setSearchQuery] = useState("");
   const stopTimers = useRef({});
   const stopRequestSeq = useRef({});
 
@@ -517,6 +519,7 @@ function RouteEntry({ apiBase, token, operatorScope, setOperatorScope }) {
         showNotice("success", "Route saved.");
       }
       setEditingRouteId(null);
+      setFormOpen(false);
     } catch (error) {
       showNotice("error", error.message);
     }
@@ -534,6 +537,7 @@ function RouteEntry({ apiBase, token, operatorScope, setOperatorScope }) {
       if (!response.ok) throw new Error(data.message || "Failed to load route");
 
       setEditingRouteId(routeId);
+      setFormOpen(true);
       setRoute({
         routeNo: data.route.routeCode || "",
         routeName: data.route.routeName || "",
@@ -591,6 +595,7 @@ function RouteEntry({ apiBase, token, operatorScope, setOperatorScope }) {
 
   const handleCancelEdit = () => {
     setEditingRouteId(null);
+    setFormOpen(false);
     setRoute(initialRoute);
     setStops([{ ...initialStop }, { ...initialStop }]);
     setFareSlabs([{ ...initialSlab }]);
@@ -774,7 +779,39 @@ function RouteEntry({ apiBase, token, operatorScope, setOperatorScope }) {
           <main className="main">
             {notice && <div className={`notice ${notice.type}`}>{notice.message}</div>}
 
-            <section className="grid two">
+            {/* Action bar */}
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "16px", gap: "12px", flexWrap: "wrap" }}>
+              <div>
+                <div style={{ fontSize: "17px", fontWeight: "700" }}>
+                  {visibleRoutes.length > 0 ? `${visibleRoutes.length} route${visibleRoutes.length === 1 ? "" : "s"}` : "No routes yet"}
+                </div>
+                <div style={{ fontSize: "12px", opacity: 0.45, marginTop: "2px", textTransform: "uppercase", letterSpacing: "0.5px" }}>
+                  {operatorScope}
+                </div>
+              </div>
+              <div style={{ display: "flex", gap: "8px", alignItems: "center", flexWrap: "wrap" }}>
+                <input
+                  type="search"
+                  placeholder="Search route number…"
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  style={{ padding: "7px 12px", borderRadius: "8px", border: "1px solid var(--border, rgba(255,255,255,0.12))", background: "var(--panel-strong, rgba(255,255,255,0.05))", fontSize: "13px", minWidth: "180px" }}
+                />
+                <button className="btn ghost" type="button" onClick={loadRoutes}>Refresh</button>
+                <button
+                  className="btn primary"
+                  type="button"
+                  onClick={() => {
+                    if (editingRouteId) handleCancelEdit();
+                    else setFormOpen((prev) => !prev);
+                  }}
+                >
+                  {formOpen ? "Close form" : "+ Add route"}
+                </button>
+              </div>
+            </div>
+
+            {formOpen && <section className="grid two">
               <div className="panel" style={{ overflow: "visible" }}>
                 <div className="panel-header">
                   <h3>Route basic details</h3>
@@ -1317,11 +1354,9 @@ function RouteEntry({ apiBase, token, operatorScope, setOperatorScope }) {
                   <button className="btn primary" type="button" onClick={handleSave}>
                     {editingRouteId ? "Update route" : "Save route"}
                   </button>
-                  {editingRouteId && (
-                    <button className="btn ghost" type="button" onClick={handleCancelEdit}>
-                      Cancel edit
-                    </button>
-                  )}
+                  <button className="btn ghost" type="button" onClick={handleCancelEdit}>
+                    Cancel
+                  </button>
                 </div>
               </div>
 
@@ -1345,9 +1380,7 @@ function RouteEntry({ apiBase, token, operatorScope, setOperatorScope }) {
                         <tr key={`row-${rowIdx}`}>
                           <td>{rowIdx}</td>
                           {row.map((cell, colIdx) => (
-                            <td key={`cell-${rowIdx}-${colIdx}`}>
-                              {cell}
-                            </td>
+                            <td key={`cell-${rowIdx}-${colIdx}`}>{cell}</td>
                           ))}
                         </tr>
                       ))}
@@ -1355,7 +1388,8 @@ function RouteEntry({ apiBase, token, operatorScope, setOperatorScope }) {
                   </table>
                 </div>
               </div>
-            </section>
+            </section>}
+
             <section className="panel">
               <div className="panel-header">
                 <h3>Entered routes</h3>
@@ -1365,56 +1399,79 @@ function RouteEntry({ apiBase, token, operatorScope, setOperatorScope }) {
                 <div className="list-item">
                   <div>
                     <strong>No routes yet</strong>
-                    <span>Save a route to see it listed here.</span>
+                    <span>Click "+ Add route" above to create the first route.</span>
                   </div>
                 </div>
               ) : (
-                <table className="table">
-                  <thead>
-                    <tr>
-                      <th>Route No</th>
-                      <th>Route Name</th>
-                      <th>Depot</th>
-                      <th>Source</th>
-                      <th>Destination</th>
-                      <th>Mode</th>
-                      <th>Actions</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {visibleRoutes.map((item) => (
-                      <tr key={item._id || item.routeCode}>
-                        <td>
-                          <button
-                            className="btn ghost"
-                            type="button"
-                            onClick={() => openRouteMatrix(item)}
-                          >
-                            {item.routeCode}
-                          </button>
-                        </td>
-                        <td>{item.routeName}</td>
-                        <td>{item.depotId?.depotName || item.depotId}</td>
-                        <td>{item.source}</td>
-                        <td>{item.destination}</td>
-                        <td>
+                <div style={{ display: "grid", gap: "10px" }}>
+                  {visibleRoutes.filter((item) => {
+                    const q = searchQuery.trim().toLowerCase();
+                    if (!q) return true;
+                    return item.routeCode?.toLowerCase().includes(q);
+                  }).map((item) => (
+                    <div
+                      key={item._id || item.routeCode}
+                      style={{
+                        background: "var(--panel-bg, rgba(255,255,255,0.03))",
+                        border: "1px solid var(--border, rgba(255,255,255,0.08))",
+                        borderRadius: "14px",
+                        padding: "14px 16px",
+                        display: "grid",
+                        gap: "10px",
+                      }}
+                    >
+                      {/* Header row */}
+                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: "12px", flexWrap: "wrap" }}>
+                        <div>
+                          <div style={{ fontSize: "16px", fontWeight: "700" }}>{item.routeCode}</div>
+                          <div style={{ fontSize: "13px", opacity: 0.7, marginTop: "2px" }}>{item.routeName}</div>
+                        </div>
+                        <div style={{ display: "flex", gap: "8px", alignItems: "center", flexWrap: "wrap" }}>
                           <button
                             className={`btn ${item.assignmentMode === "AUTO" ? "outline" : "ghost"}`}
                             type="button"
                             onClick={() => toggleAssignmentMode(item)}
+                            style={{ fontSize: "11px" }}
                           >
                             {item.assignmentMode || "MANUAL"}
                           </button>
-                        </td>
-                        <td>
+                          <button className="btn ghost" type="button" onClick={() => openRouteMatrix(item)}>
+                            Fare matrix
+                          </button>
                           <button className="btn ghost" type="button" onClick={() => loadRouteDetails(item._id)}>
                             Edit
                           </button>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
+                        </div>
+                      </div>
+
+                      {/* Metadata tags */}
+                      <div style={{ display: "flex", flexWrap: "wrap", gap: "8px" }}>
+                        {[
+                          ["Depot", item.depotId?.depotName || item.depotId],
+                          item.source && ["From", item.source],
+                          item.destination && ["To", item.destination],
+                        ].filter(Boolean).map(([label, value]) => (
+                          <span
+                            key={label}
+                            style={{
+                              display: "inline-flex",
+                              gap: "6px",
+                              alignItems: "center",
+                              background: "var(--panel-strong, rgba(255,255,255,0.04))",
+                              border: "1px solid var(--border, rgba(255,255,255,0.08))",
+                              borderRadius: "999px",
+                              padding: "3px 10px",
+                              fontSize: "12px",
+                            }}
+                          >
+                            <span style={{ opacity: 0.45, textTransform: "uppercase", letterSpacing: "0.5px", fontSize: "10px" }}>{label}</span>
+                            {value}
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  ))}
+                </div>
               )}
             </section>
           </main>

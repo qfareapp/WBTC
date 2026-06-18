@@ -1,9 +1,11 @@
 const Driver = require("../models/Driver");
+const DriverAssignment = require("../models/DriverAssignment");
 const Depot = require("../models/Depot");
 const User = require("../models/User");
 const ApiError = require("../utils/ApiError");
 const asyncHandler = require("../utils/asyncHandler");
 const { generateTemporaryPassword, hashPassword } = require("../utils/crewPassword");
+const { getOpsDate } = require("../utils/opsTime");
 
 const normalizeDepotScope = (req) => {
   if (req.user.role === "ADMIN") return null;
@@ -123,7 +125,37 @@ exports.listDrivers = asyncHandler(async (req, res) => {
     .populate("ownerId", "name username")
     .sort({ name: 1 });
 
-  res.json({ ok: true, drivers: drivers.map((driver) => serializeDriver(driver)) });
+  const driverIds = drivers.map((d) => d._id);
+  const todayAssignments = await DriverAssignment.find({
+    date: getOpsDate(),
+    driverId: { $in: driverIds },
+    status: { $in: ["Scheduled", "Active"] },
+  })
+    .populate("busId", "busNumber")
+    .populate("routeId", "routeCode routeName")
+    .lean();
+
+  const assignmentByDriver = {};
+  for (const a of todayAssignments) {
+    const key = String(a.driverId);
+    if (!assignmentByDriver[key] || a.status === "Active") {
+      assignmentByDriver[key] = {
+        status: a.status,
+        busNumber: a.busId?.busNumber || null,
+        routeCode: a.routeId?.routeCode || null,
+        routeName: a.routeId?.routeName || null,
+        startTime: a.startTime || null,
+        endTime: a.endTime || null,
+      };
+    }
+  }
+
+  const serialized = drivers.map((driver) => ({
+    ...serializeDriver(driver),
+    todayAssignment: assignmentByDriver[String(driver._id)] || null,
+  }));
+
+  res.json({ ok: true, drivers: serialized });
 });
 
 exports.updateDriver = asyncHandler(async (req, res) => {

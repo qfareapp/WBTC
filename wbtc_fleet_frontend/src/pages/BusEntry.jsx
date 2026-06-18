@@ -30,6 +30,9 @@ function BusEntry({ apiBase, token, operatorScope, setOperatorScope }) {
   const [routeSelectionByBus, setRouteSelectionByBus] = useState({});
   const [activeRouteSelectionByBus, setActiveRouteSelectionByBus] = useState({});
   const [attachBusyByBus, setAttachBusyByBus] = useState({});
+  const [expandedBus, setExpandedBus] = useState(null);
+  const [formOpen, setFormOpen] = useState(false);
+  const [searchQuery, setSearchQuery] = useState("");
   const [notice, setNotice] = useState(null);
   const [qrValue, setQrValue] = useState("");
   const [activeQr, setActiveQr] = useState(null);
@@ -170,6 +173,7 @@ function BusEntry({ apiBase, token, operatorScope, setOperatorScope }) {
 
   const startEditBus = (bus) => {
     setEditingBusId(bus._id);
+    setFormOpen(true);
     setForm({
       busNumber: bus.busNumber || "",
       depotId: bus.depotId?._id || bus.depotId || "",
@@ -185,6 +189,7 @@ function BusEntry({ apiBase, token, operatorScope, setOperatorScope }) {
 
   const cancelEdit = () => {
     setEditingBusId(null);
+    setFormOpen(false);
     setForm({
       ...initialForm,
       operatorType: operatorScope,
@@ -245,6 +250,7 @@ function BusEntry({ apiBase, token, operatorScope, setOperatorScope }) {
         setQrValue(JSON.stringify({ busNumber: payload.busNumber, depotId: payload.depotId }));
       }
       setEditingBusId(null);
+      setFormOpen(false);
       setForm({
         ...initialForm,
         operatorType: operatorScope,
@@ -386,219 +392,243 @@ function BusEntry({ apiBase, token, operatorScope, setOperatorScope }) {
           <main className="main">
             {notice && <div className={`notice ${notice.type}`}>{notice.message}</div>}
 
-            <section className="grid two">
-              <div className="panel">
-                <div className="panel-header">
-                  <h3>Bus details</h3>
-                  <span className="pill">/api/buses</span>
+            {/* Action bar */}
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "16px", gap: "12px", flexWrap: "wrap" }}>
+              <div>
+                <div style={{ fontSize: "17px", fontWeight: "700" }}>
+                  {buses.length > 0 ? `${buses.length} bus${buses.length === 1 ? "" : "es"}` : "No buses yet"}
                 </div>
-                <form className="form" onSubmit={handleSubmit}>
-                  <label className="field">
-                    Bus number
-                    <input
-                      value={form.busNumber}
-                      onChange={(event) => setForm({ ...form, busNumber: event.target.value })}
-                      placeholder="WBTC-2026-014"
-                    />
-                  </label>
-                  <label className="field">
-                    Depot
-                    <select
-                      value={form.depotId}
-                      onChange={(event) => setForm({ ...form, depotId: event.target.value })}
-                    >
-                      <option value="">Select depot</option>
-                      {depots.map((depot) => (
-                        <option key={depot._id} value={depot._id}>
-                          {depot.depotName} ({depot.depotCode})
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                  <label className="field">
-                    Owner
-                    <select
-                      value={form.ownerId}
-                      onChange={(event) => setForm({ ...form, ownerId: event.target.value })}
-                    >
-                      <option value="">Select owner (optional)</option>
-                      {owners.map((owner) => (
-                        <option key={owner.id} value={owner.id}>
-                          {owner.name} ({owner.username})
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                  <div className="inline">
+                <div style={{ fontSize: "12px", opacity: 0.45, marginTop: "2px", textTransform: "uppercase", letterSpacing: "0.5px" }}>
+                  {operatorScope}
+                </div>
+              </div>
+              <div style={{ display: "flex", gap: "8px", alignItems: "center", flexWrap: "wrap" }}>
+                <input
+                  type="search"
+                  placeholder="Search bus number…"
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  style={{ padding: "7px 12px", borderRadius: "8px", border: "1px solid var(--border, rgba(255,255,255,0.12))", background: "var(--panel-strong, rgba(255,255,255,0.05))", fontSize: "13px", minWidth: "180px" }}
+                />
+                <button
+                  className="btn primary"
+                  type="button"
+                  onClick={() => {
+                    if (editingBusId) cancelEdit();
+                    else setFormOpen((prev) => !prev);
+                  }}
+                >
+                  {formOpen ? "Close form" : "+ Add bus"}
+                </button>
+              </div>
+            </div>
+
+            {/* Collapsible form + QR */}
+            {formOpen && (
+              <section className="grid two" style={{ marginBottom: "16px" }}>
+                <div className="panel">
+                  <div className="panel-header">
+                    <h3>{editingBusId ? "Edit bus" : "New bus"}</h3>
+                    <span className="pill">/api/buses</span>
+                  </div>
+                  <form className="form" onSubmit={handleSubmit}>
                     <label className="field">
-                      Bus type
-                      <select
-                        value={form.busType}
-                        onChange={(event) => setForm({ ...form, busType: event.target.value })}
-                      >
-                        {busTypeOptions.map((option) => (
-                          <option key={option} value={option}>
-                            {option}
-                          </option>
-                        ))}
-                      </select>
-                    </label>
-                    <label className="field">
-                      Seating capacity
+                      Bus number
                       <input
-                        type="number"
-                        value={form.seatingCapacity}
-                        onChange={(event) => setForm({ ...form, seatingCapacity: event.target.value })}
-                        placeholder="40"
+                        value={form.busNumber}
+                        onChange={(event) => setForm({ ...form, busNumber: event.target.value })}
+                        placeholder="WBTC-2026-014"
                       />
                     </label>
-                  </div>
-                  <div className="inline">
                     <label className="field">
-                      Fuel type
+                      Depot
                       <select
-                        value={form.fuelType}
-                        onChange={(event) => setForm({ ...form, fuelType: event.target.value })}
+                        value={form.depotId}
+                        onChange={(event) => setForm({ ...form, depotId: event.target.value })}
                       >
-                        {fuelTypeOptions.map((option) => (
-                          <option key={option} value={option}>
-                            {option}
+                        <option value="">Select depot</option>
+                        {depots.map((depot) => (
+                          <option key={depot._id} value={depot._id}>
+                            {depot.depotName} ({depot.depotCode})
                           </option>
                         ))}
                       </select>
                     </label>
                     <label className="field">
-                      Status
+                      Owner
                       <select
-                        value={form.status}
-                        onChange={(event) => setForm({ ...form, status: event.target.value })}
+                        value={form.ownerId}
+                        onChange={(event) => setForm({ ...form, ownerId: event.target.value })}
                       >
-                        {statusOptions.map((option) => (
-                          <option key={option} value={option}>
-                            {option}
+                        <option value="">Select owner (optional)</option>
+                        {owners.map((owner) => (
+                          <option key={owner.id} value={owner.id}>
+                            {owner.name} ({owner.username})
                           </option>
                         ))}
                       </select>
                     </label>
-                  </div>
-                  <div className="inline">
-                    <label className="field">
-                      Operator type
-                      <input value={form.operatorType} readOnly />
-                    </label>
-                    <label className="field">
-                      Crew policy
-                      <select
-                        value={form.crewPolicy}
-                        onChange={(event) => setForm({ ...form, crewPolicy: event.target.value })}
-                        disabled
-                      >
-                        {crewPolicyOptions.map((option) => (
-                          <option key={option} value={option}>
-                            {option}
-                          </option>
-                        ))}
-                      </select>
-                    </label>
-                  </div>
-                  <div className="panel" style={{ background: "var(--panel-strong)" }}>
-                    <div className="panel-header">
-                      <h3>Bus documents</h3>
-                      <span className="pill">Uploads</span>
-                    </div>
                     <div className="inline">
                       <label className="field">
-                        Pollution
-                        <input
-                          type="file"
-                          accept=".pdf,.jpg,.jpeg,.png"
-                          onChange={(event) =>
-                            setDocuments({ ...documents, pollution: event.target.files?.[0] || null })
-                          }
-                        />
+                        Bus type
+                        <select
+                          value={form.busType}
+                          onChange={(event) => setForm({ ...form, busType: event.target.value })}
+                        >
+                          {busTypeOptions.map((option) => (
+                            <option key={option} value={option}>{option}</option>
+                          ))}
+                        </select>
                       </label>
                       <label className="field">
-                        Insurance
+                        Seating capacity
                         <input
-                          type="file"
-                          accept=".pdf,.jpg,.jpeg,.png"
-                          onChange={(event) =>
-                            setDocuments({ ...documents, insurance: event.target.files?.[0] || null })
-                          }
+                          type="number"
+                          value={form.seatingCapacity}
+                          onChange={(event) => setForm({ ...form, seatingCapacity: event.target.value })}
+                          placeholder="40"
                         />
                       </label>
                     </div>
                     <div className="inline">
                       <label className="field">
-                        Permit
-                        <input
-                          type="file"
-                          accept=".pdf,.jpg,.jpeg,.png"
-                          onChange={(event) =>
-                            setDocuments({ ...documents, permit: event.target.files?.[0] || null })
-                          }
-                        />
+                        Fuel type
+                        <select
+                          value={form.fuelType}
+                          onChange={(event) => setForm({ ...form, fuelType: event.target.value })}
+                        >
+                          {fuelTypeOptions.map((option) => (
+                            <option key={option} value={option}>{option}</option>
+                          ))}
+                        </select>
                       </label>
                       <label className="field">
-                        Fitness
-                        <input
-                          type="file"
-                          accept=".pdf,.jpg,.jpeg,.png"
-                          onChange={(event) =>
-                            setDocuments({ ...documents, fitness: event.target.files?.[0] || null })
-                          }
-                        />
+                        Status
+                        <select
+                          value={form.status}
+                          onChange={(event) => setForm({ ...form, status: event.target.value })}
+                        >
+                          {statusOptions.map((option) => (
+                            <option key={option} value={option}>{option}</option>
+                          ))}
+                        </select>
                       </label>
                     </div>
-                    <p className="pill">
-                      Selected:{" "}
-                      {Object.entries(documents)
-                        .filter(([, file]) => file)
-                        .map(([key]) => key)
-                        .join(", ") || "none"}
-                    </p>
-                  </div>
-                  <div className="inline">
-                    <button className="btn outline" type="button" onClick={handleGenerateQr}>
-                      Generate QR
-                    </button>
-                    <button className="btn primary" type="submit">
-                      {editingBusId ? "Update bus" : "Save bus"}
-                    </button>
-                    {editingBusId && (
-                      <button className="btn ghost" type="button" onClick={cancelEdit}>
-                        Cancel edit
+                    <div className="inline">
+                      <label className="field">
+                        Operator type
+                        <input value={form.operatorType} readOnly />
+                      </label>
+                      <label className="field">
+                        Crew policy
+                        <select
+                          value={form.crewPolicy}
+                          onChange={(event) => setForm({ ...form, crewPolicy: event.target.value })}
+                          disabled
+                        >
+                          {crewPolicyOptions.map((option) => (
+                            <option key={option} value={option}>{option}</option>
+                          ))}
+                        </select>
+                      </label>
+                    </div>
+                    <div className="panel" style={{ background: "var(--panel-strong)" }}>
+                      <div className="panel-header">
+                        <h3>Bus documents</h3>
+                        <span className="pill">Uploads</span>
+                      </div>
+                      <div className="inline">
+                        <label className="field">
+                          Pollution
+                          <input
+                            type="file"
+                            accept=".pdf,.jpg,.jpeg,.png"
+                            onChange={(event) =>
+                              setDocuments({ ...documents, pollution: event.target.files?.[0] || null })
+                            }
+                          />
+                        </label>
+                        <label className="field">
+                          Insurance
+                          <input
+                            type="file"
+                            accept=".pdf,.jpg,.jpeg,.png"
+                            onChange={(event) =>
+                              setDocuments({ ...documents, insurance: event.target.files?.[0] || null })
+                            }
+                          />
+                        </label>
+                      </div>
+                      <div className="inline">
+                        <label className="field">
+                          Permit
+                          <input
+                            type="file"
+                            accept=".pdf,.jpg,.jpeg,.png"
+                            onChange={(event) =>
+                              setDocuments({ ...documents, permit: event.target.files?.[0] || null })
+                            }
+                          />
+                        </label>
+                        <label className="field">
+                          Fitness
+                          <input
+                            type="file"
+                            accept=".pdf,.jpg,.jpeg,.png"
+                            onChange={(event) =>
+                              setDocuments({ ...documents, fitness: event.target.files?.[0] || null })
+                            }
+                          />
+                        </label>
+                      </div>
+                      <p className="pill">
+                        Selected:{" "}
+                        {Object.entries(documents)
+                          .filter(([, file]) => file)
+                          .map(([key]) => key)
+                          .join(", ") || "none"}
+                      </p>
+                    </div>
+                    <div className="inline">
+                      <button className="btn outline" type="button" onClick={handleGenerateQr}>
+                        Generate QR
                       </button>
-                    )}
-                  </div>
-                </form>
-              </div>
-
-              <div className="panel">
-                <div className="panel-header">
-                  <h3>Bus QR code</h3>
-                  <span className="pill">Unique code</span>
+                      <button className="btn primary" type="submit">
+                        {editingBusId ? "Update bus" : "Save bus"}
+                      </button>
+                      <button className="btn ghost" type="button" onClick={cancelEdit}>
+                        Cancel
+                      </button>
+                    </div>
+                  </form>
                 </div>
-                {qrUrl ? (
-                  <div style={{ display: "grid", gap: "12px" }}>
-                    <img src={qrUrl} alt="Bus QR code" style={{ width: "220px", borderRadius: "12px" }} />
-                    <div className="list-item">
-                      <div>
-                        <strong>QR payload</strong>
-                        <span style={{ wordBreak: "break-word" }}>{qrValue}</span>
+
+                <div className="panel">
+                  <div className="panel-header">
+                    <h3>Bus QR code</h3>
+                    <span className="pill">Unique code</span>
+                  </div>
+                  {qrUrl ? (
+                    <div style={{ display: "grid", gap: "12px" }}>
+                      <img src={qrUrl} alt="Bus QR code" style={{ width: "220px", borderRadius: "12px" }} />
+                      <div className="list-item">
+                        <div>
+                          <strong>QR payload</strong>
+                          <span style={{ wordBreak: "break-word" }}>{qrValue}</span>
+                        </div>
                       </div>
                     </div>
-                  </div>
-                ) : (
-                  <div className="list-item">
-                    <div>
-                      <strong>No QR generated</strong>
-                      <span>Fill the bus number and click Generate QR.</span>
+                  ) : (
+                    <div className="list-item">
+                      <div>
+                        <strong>No QR generated</strong>
+                        <span>Fill the bus number and click Generate QR.</span>
+                      </div>
                     </div>
-                  </div>
-                )}
-              </div>
-            </section>
+                  )}
+                </div>
+              </section>
+            )}
             <section className="panel">
               <div className="panel-header">
                 <h3>Added buses</h3>
@@ -612,76 +642,122 @@ function BusEntry({ apiBase, token, operatorScope, setOperatorScope }) {
                   </div>
                 </div>
               ) : (
-                <table className="table">
-                  <thead>
-                    <tr>
-                      <th>Bus</th>
-                      <th>Depot</th>
-                      <th>Type</th>
-                      <th>Fuel</th>
-                      <th>Owner</th>
-                      <th>Operator</th>
-                      <th>Crew Policy</th>
-                      <th>Status</th>
-                      <th>Current Route</th>
-                      <th>Attach Route</th>
-                      <th>Actions</th>
-                      <th>QR</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {buses.map((bus) => {
-                      const busId = bus._id;
-                      const busDepotId = getBusDepotId(bus);
-                      const busOperatorType = bus.operatorType || "WBTC";
-                      const routeOptions = routes.filter((route) => {
-                        const routeDepotId = route?.depotId?._id || route?.depotId || "";
-                        const routeOperatorType = route?.operatorType || "WBTC";
-                        return String(routeDepotId) === String(busDepotId) && String(routeOperatorType) === String(busOperatorType);
-                      });
-                      return (
-                      <tr key={busId || bus.busNumber}>
-                        <td>{bus.busNumber}</td>
-                        <td>
-                          {bus.depotId?.depotName ||
-                            depots.find((depot) => depot._id === bus.depotId)?.depotName ||
-                            bus.depotId}
-                        </td>
-                        <td>{bus.busType}</td>
-                        <td>{bus.fuelType}</td>
-                        <td>
-                          {bus.ownerId?.name ||
-                            owners.find((owner) => String(owner.id) === String(bus.ownerId || ""))?.name ||
-                            "--"}
-                        </td>
-                        <td>{bus.operatorType || "WBTC"}</td>
-                        <td>{bus.crewPolicy || "FLEXIBLE"}</td>
-                        <td>
-                          <span className="chip">{bus.status}</span>
-                        </td>
-                        <td>{bus.attachedRouteId ? `${bus.attachedRouteId.routeCode} - ${bus.attachedRouteId.routeName}` : "--"}</td>
-                        <td>
-                          <div style={{ display: "grid", gap: "8px", minWidth: "220px" }}>
+                <div style={{ display: "grid", gap: "12px" }}>
+                  {buses.filter((bus) => {
+                    const q = searchQuery.trim().toLowerCase();
+                    if (!q) return true;
+                    return bus.busNumber?.toLowerCase().includes(q);
+                  }).map((bus) => {
+                    const busId = bus._id;
+                    const busDepotId = getBusDepotId(bus);
+                    const busOperatorType = bus.operatorType || "WBTC";
+                    const routeOptions = routes.filter((route) => {
+                      const routeDepotId = route?.depotId?._id || route?.depotId || "";
+                      const routeOperatorType = route?.operatorType || "WBTC";
+                      return String(routeDepotId) === String(busDepotId) && String(routeOperatorType) === String(busOperatorType);
+                    });
+                    const isExpanded = expandedBus === busId;
+                    const ownerName =
+                      bus.ownerId?.name ||
+                      owners.find((o) => String(o.id) === String(bus.ownerId || ""))?.name ||
+                      "--";
+                    const depotName =
+                      bus.depotId?.depotName ||
+                      depots.find((d) => d._id === bus.depotId)?.depotName ||
+                      bus.depotId ||
+                      "--";
+                    return (
+                      <div
+                        key={busId || bus.busNumber}
+                        style={{
+                          background: "var(--panel-bg, rgba(255,255,255,0.03))",
+                          border: "1px solid var(--border, rgba(255,255,255,0.08))",
+                          borderRadius: "14px",
+                          padding: "16px",
+                          display: "grid",
+                          gap: "12px",
+                        }}
+                      >
+                        {/* Header row */}
+                        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: "12px", flexWrap: "wrap" }}>
+                          <div>
+                            <div style={{ fontSize: "18px", fontWeight: "700" }}>{bus.busNumber}</div>
+                            <div style={{ fontSize: "13px", opacity: 0.55, marginTop: "2px" }}>{depotName}</div>
+                          </div>
+                          <div style={{ display: "flex", gap: "8px", alignItems: "center", flexWrap: "wrap" }}>
+                            <span className="chip">{bus.status}</span>
+                            <button className="btn ghost" type="button" onClick={() => startEditBus(bus)}>Edit</button>
+                            <button className="btn ghost" type="button" onClick={() => openQrModal(bus)}>QR</button>
+                          </div>
+                        </div>
+
+                        {/* Metadata tags */}
+                        <div style={{ display: "flex", flexWrap: "wrap", gap: "8px" }}>
+                          {[
+                            ["Type", bus.busType],
+                            ["Fuel", bus.fuelType],
+                            ["Crew", bus.crewPolicy || "FLEXIBLE"],
+                            ["Operator", bus.operatorType || "WBTC"],
+                            ["Owner", ownerName],
+                          ].map(([label, value]) => (
+                            <span
+                              key={label}
+                              style={{
+                                display: "inline-flex",
+                                gap: "6px",
+                                alignItems: "center",
+                                background: "var(--panel-strong, rgba(255,255,255,0.04))",
+                                border: "1px solid var(--border, rgba(255,255,255,0.08))",
+                                borderRadius: "999px",
+                                padding: "3px 10px",
+                                fontSize: "12px",
+                              }}
+                            >
+                              <span style={{ opacity: 0.45, textTransform: "uppercase", letterSpacing: "0.5px", fontSize: "10px" }}>{label}</span>
+                              {value}
+                            </span>
+                          ))}
+                        </div>
+
+                        {/* Current route row */}
+                        <div style={{ display: "flex", alignItems: "center", gap: "10px", flexWrap: "wrap", paddingTop: "8px", borderTop: "1px solid var(--border, rgba(255,255,255,0.07))" }}>
+                          <span style={{ fontSize: "11px", textTransform: "uppercase", letterSpacing: "0.6px", opacity: 0.45 }}>Route</span>
+                          <span style={{ fontSize: "13px", fontWeight: "600" }}>
+                            {bus.attachedRouteId
+                              ? `${bus.attachedRouteId.routeCode} — ${bus.attachedRouteId.routeName}`
+                              : "—"}
+                          </span>
+                          <button
+                            className="btn ghost"
+                            type="button"
+                            style={{ marginLeft: "auto", fontSize: "12px" }}
+                            onClick={() => setExpandedBus(isExpanded ? null : busId)}
+                          >
+                            {isExpanded ? "Close" : "Manage routes"}
+                          </button>
+                        </div>
+
+                        {/* Expandable route assignment panel */}
+                        {isExpanded && (
+                          <div style={{ display: "grid", gap: "8px", paddingTop: "8px", borderTop: "1px solid var(--border, rgba(255,255,255,0.07))" }}>
+                            <div style={{ fontSize: "11px", textTransform: "uppercase", letterSpacing: "0.6px", opacity: 0.45 }}>Assign routes (multi-select)</div>
                             <select
                               multiple
                               value={routeSelectionByBus[busId] ?? []}
                               onChange={(event) => {
-                                const values = Array.from(event.target.selectedOptions).map((option) => option.value);
+                                const values = Array.from(event.target.selectedOptions).map((o) => o.value);
                                 setRouteSelectionByBus((prev) => ({ ...prev, [busId]: values }));
                                 setActiveRouteSelectionByBus((prev) => {
                                   const current = String(prev[busId] || "");
-                                  return {
-                                    ...prev,
-                                    [busId]: values.includes(current) ? current : values[0] || "",
-                                  };
+                                  return { ...prev, [busId]: values.includes(current) ? current : values[0] || "" };
                                 });
                               }}
                               disabled={!busId}
-                              size={Math.min(Math.max(routeOptions.length, 2), 6)}
+                              size={Math.min(Math.max(routeOptions.length, 2), 5)}
                             >
                               {routeOptions.map((route) => (
                                 <option key={route._id} value={route._id}>
-                                  {route.routeCode} - {route.routeName}
+                                  {route.routeCode} — {route.routeName}
                                 </option>
                               ))}
                             </select>
@@ -692,54 +768,42 @@ function BusEntry({ apiBase, token, operatorScope, setOperatorScope }) {
                               }
                               disabled={!busId || !(routeSelectionByBus[busId] || []).length}
                             >
-                              <option value="">Select current route</option>
+                              <option value="">Set as current route</option>
                               {routeOptions
                                 .filter((route) => (routeSelectionByBus[busId] || []).includes(route._id))
                                 .map((route) => (
                                   <option key={`active-${route._id}`} value={route._id}>
-                                    {route.routeCode} - {route.routeName}
+                                    {route.routeCode} — {route.routeName}
                                   </option>
                                 ))}
                             </select>
-                            <button
-                              className="btn outline"
-                              type="button"
-                              onClick={() => handleAttachRoute(bus)}
-                              disabled={!busId || Boolean(attachBusyByBus[busId])}
-                            >
-                              {attachBusyByBus[busId] ? "Saving..." : "Attach"}
-                            </button>
-                            <button
-                              className="btn ghost"
-                              type="button"
-                              onClick={() => {
-                                setRouteSelectionByBus((prev) => ({ ...prev, [busId]: [] }));
-                                setActiveRouteSelectionByBus((prev) => ({ ...prev, [busId]: "" }));
-                              }}
-                              disabled={!busId || Boolean(attachBusyByBus[busId])}
-                            >
-                              Clear
-                            </button>
+                            <div style={{ display: "flex", gap: "8px" }}>
+                              <button
+                                className="btn outline"
+                                type="button"
+                                onClick={() => handleAttachRoute(bus)}
+                                disabled={!busId || Boolean(attachBusyByBus[busId])}
+                              >
+                                {attachBusyByBus[busId] ? "Saving..." : "Save routes"}
+                              </button>
+                              <button
+                                className="btn ghost"
+                                type="button"
+                                onClick={() => {
+                                  setRouteSelectionByBus((prev) => ({ ...prev, [busId]: [] }));
+                                  setActiveRouteSelectionByBus((prev) => ({ ...prev, [busId]: "" }));
+                                }}
+                                disabled={!busId || Boolean(attachBusyByBus[busId])}
+                              >
+                                Clear
+                              </button>
+                            </div>
                           </div>
-                        </td>
-                        <td>
-                          <button className="btn ghost" type="button" onClick={() => startEditBus(bus)}>
-                            Edit
-                          </button>
-                        </td>
-                        <td>
-                          <button
-                            className="btn ghost"
-                            type="button"
-                            onClick={() => openQrModal(bus)}
-                          >
-                            View QR
-                          </button>
-                        </td>
-                      </tr>
-                    )})}
-                  </tbody>
-                </table>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
               )}
             </section>
           </main>
