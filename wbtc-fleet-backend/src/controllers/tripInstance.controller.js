@@ -446,6 +446,7 @@ exports.activateTrip = asyncHandler(async (req, res) => {
     date,
     busId,
     routeId: { $ne: routeId },
+    status: { $ne: "Cancelled" },
     releasedForReuse: { $ne: true },
   })
     .populate("routeId", "routeCode")

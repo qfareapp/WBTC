@@ -360,13 +360,13 @@ exports.virtualPayOwnerDue = asyncHandler(async (req, res) => {
 
 exports.getBusAttachedRoutes = asyncHandler(async (req, res) => {
   const { busId } = req.params;
-  const bus = await Bus.findById(busId).select("busNumber attachedRouteId");
+  const bus = await Bus.findById(busId).select("busNumber attachedRouteId attachedRouteIds");
   if (!bus) throw new ApiError(404, "Bus not found");
 
   const routeIdsFromTrips = await TripInstance.distinct("routeId", { busId });
   const routeIds = Array.from(
     new Set(
-      [...routeIdsFromTrips, bus.attachedRouteId]
+      [...routeIdsFromTrips, ...(Array.isArray(bus.attachedRouteIds) ? bus.attachedRouteIds : []), bus.attachedRouteId]
         .map((id) => String(id || "").trim())
         .filter(Boolean)
     )

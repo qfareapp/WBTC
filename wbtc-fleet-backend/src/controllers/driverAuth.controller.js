@@ -27,6 +27,9 @@ exports.loginDriver = asyncHandler(async (req, res) => {
 
   const driver = await Driver.findOne({ empId }).select("+passwordHash mustChangePassword");
   if (!driver) throw new ApiError(401, "Invalid credentials");
+  if (!String(driver.passwordHash || "").trim()) {
+    throw new ApiError(409, "Driver password is not initialized. Reset the driver password from the admin or owner panel.");
+  }
   const passwordOk = await comparePassword(password, driver.passwordHash);
   if (!passwordOk) throw new ApiError(401, "Invalid credentials");
 
@@ -58,6 +61,9 @@ exports.changeDriverPassword = asyncHandler(async (req, res) => {
 
   const driver = await Driver.findById(req.user.userId).select("+passwordHash mustChangePassword");
   if (!driver) throw new ApiError(404, "Driver not found");
+  if (!String(driver.passwordHash || "").trim()) {
+    throw new ApiError(409, "Driver password is not initialized. Reset the driver password before changing it.");
+  }
 
   const ok = await comparePassword(currentPassword, driver.passwordHash);
   if (!ok) throw new ApiError(401, "Current password is incorrect");

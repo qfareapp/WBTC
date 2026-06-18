@@ -6,6 +6,10 @@ const BusSchema = new mongoose.Schema(
     depotId: { type: mongoose.Schema.Types.ObjectId, ref: "Depot", required: true, index: true },
     ownerId: { type: mongoose.Schema.Types.ObjectId, ref: "User", default: null, index: true },
     attachedRouteId: { type: mongoose.Schema.Types.ObjectId, ref: "Route", default: null, index: true },
+    attachedRouteIds: {
+      type: [{ type: mongoose.Schema.Types.ObjectId, ref: "Route" }],
+      default: [],
+    },
     currentLocation: { type: String, default: null, index: true },
     busType: { type: String, default: "Non-AC" },
     seatingCapacity: { type: Number, default: 0 },

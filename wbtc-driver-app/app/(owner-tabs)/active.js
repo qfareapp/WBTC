@@ -65,7 +65,9 @@ export default function OwnerActive() {
   const [customEndDate, setCustomEndDate] = useState(today());
   const [crewDraft, setCrewDraft] = useState({});
   const [locationDraft, setLocationDraft] = useState({});
+  const [routeDraft, setRouteDraft] = useState({});
   const [locationSavingBusId, setLocationSavingBusId] = useState("");
+  const [routeSavingBusId, setRouteSavingBusId] = useState("");
   const [expandedBuses, setExpandedBuses] = useState({});
   const [selectedMonthDate, setSelectedMonthDate] = useState(new Date());
   const [showMonthPicker, setShowMonthPicker] = useState(false);
@@ -315,6 +317,37 @@ export default function OwnerActive() {
     }
   };
 
+  const setBusRoute = async (bus) => {
+    const busId = String(bus.id);
+    const nextRouteId = String(routeDraft[busId] || bus.attachedRoute?.id || "").trim();
+    if (!nextRouteId) {
+      setNotice("Select route first.");
+      return;
+    }
+    try {
+      const auth = await getAuth();
+      if (!auth) return;
+      setRouteSavingBusId(busId);
+      const response = await fetch(`${auth.apiBase}/api/owner/buses/${bus.id}/route`, {
+        method: "PATCH",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${auth.token}`,
+        },
+        body: JSON.stringify({ routeId: nextRouteId }),
+      });
+      const text = await response.text();
+      const data = text ? JSON.parse(text) : {};
+      if (!response.ok) throw new Error(data.message || "Failed to update route");
+      setNotice(`Route updated for ${bus.busNumber}. Set the new start point now.`);
+      await loadDashboard();
+    } catch (err) {
+      setNotice(err.message);
+    } finally {
+      setRouteSavingBusId("");
+    }
+  };
+
   const onRefresh = async () => {
     setRefreshing(true);
     await Promise.all([loadDashboard(), loadPersonnel()]);
@@ -430,6 +463,46 @@ export default function OwnerActive() {
                     <View style={styles.statCell}><Text style={styles.statLabel}>{t("ownerActive", "fare")}</Text><Text style={styles.statValue}>{t("common", "rs")} {formatMoney(bus.fareCollected)}</Text></View>
                   </View>
                   <View style={styles.locationControlWrap}>
+                    <Text style={styles.chipLabel}>Current route</Text>
+                    {Array.isArray(bus.attachedRoutes) && bus.attachedRoutes.length ? (
+                      <>
+                        {isOnLiveTrip ? (
+                          <Text style={styles.noCrewText}>Route cannot be changed while the bus is on a live trip.</Text>
+                        ) : null}
+                        <View style={styles.startPointChoices}>
+                          {bus.attachedRoutes.map((route) => (
+                            <TouchableOpacity
+                              key={`route-${bus.id}-${route.id}`}
+                              style={[
+                                styles.choice,
+                                isOnLiveTrip ? styles.choiceDisabled : null,
+                                String(routeDraft[bus.id] || bus.attachedRoute?.id || "") === String(route.id || "")
+                                  ? styles.choiceActive
+                                  : null,
+                              ]}
+                              disabled={isOnLiveTrip}
+                              onPress={() =>
+                                setRouteDraft((prev) => ({ ...prev, [bus.id]: route.id }))
+                              }
+                            >
+                              <Text style={styles.choiceText}>{route.routeCode}</Text>
+                            </TouchableOpacity>
+                          ))}
+                        </View>
+                        <TouchableOpacity
+                          style={[styles.actionBtn, isOnLiveTrip ? styles.actionBtnDisabled : null]}
+                          onPress={() => setBusRoute(bus)}
+                          disabled={isOnLiveTrip || routeSavingBusId === String(bus.id)}
+                        >
+                          <Text style={styles.actionText}>
+                            {routeSavingBusId === String(bus.id) ? t("common", "saving") : "Set Route"}
+                          </Text>
+                        </TouchableOpacity>
+                      </>
+                    ) : (
+                      <Text style={styles.noCrewText}>Attach multiple routes to this bus from the admin panel first.</Text>
+                    )}
+
                     <Text style={styles.chipLabel}>{t("ownerActive", "busStartPoint")}</Text>
                     {bus.attachedRoute?.source && bus.attachedRoute?.destination ? (
                       <>

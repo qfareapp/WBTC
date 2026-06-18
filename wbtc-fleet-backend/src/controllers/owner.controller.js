@@ -8,10 +8,11 @@ const Conductor = require("../models/Conductor");
 const DriverAssignment = require("../models/DriverAssignment");
 const ConductorAssignment = require("../models/ConductorAssignment");
 const BusCrewMapping = require("../models/BusCrewMapping");
+const RouteDayActivation = require("../models/RouteDayActivation");
 const ApiError = require("../utils/ApiError");
 const asyncHandler = require("../utils/asyncHandler");
 const { computeOwnerPaymentRows, computeOwnerPaymentDetails } = require("../utils/ownerPayments");
-const { getOpsDate, getOpsMonth, toOpsIsoDay, getOpsDayWindow, getOpsPeriodWindow } = require("../utils/opsTime");
+const { getOpsDate, getOpsMonth, getOpsNowParts, toOpsIsoDay, getOpsDayWindow, getOpsPeriodWindow } = require("../utils/opsTime");
 const { getStopFieldsForDirection, hasCoords } = require("../utils/routeStopDirection");
 
 const dayWindowFromIso = (isoDate) => getOpsDayWindow(isoDate);
@@ -87,6 +88,7 @@ const loadOwnerBuses = async (ownerId) =>
   Bus.find({ ownerId })
     .populate("depotId", "depotName depotCode")
     .populate("attachedRouteId", "routeCode routeName source destination")
+    .populate("attachedRouteIds", "routeCode routeName source destination")
     .sort({ busNumber: 1 });
 
 const deactivateExpiredCrewMappings = async (anchorDate = new Date(), extraFilter = {}) => {
@@ -107,6 +109,135 @@ const syncCrewLocationToBus = async ({ bus, driverId, conductorId }) => {
   if (driverId) updates.push(Driver.findByIdAndUpdate(driverId, { $set: { currentLocation: location } }));
   if (conductorId) updates.push(Conductor.findByIdAndUpdate(conductorId, { $set: { currentLocation: location } }));
   if (updates.length) await Promise.all(updates);
+};
+
+const toMinutes = (time) => {
+  if (!time) return null;
+  const [hh, mm] = String(time).split(":").map(Number);
+  if (Number.isNaN(hh) || Number.isNaN(mm)) return null;
+  return hh * 60 + mm;
+};
+
+const fromMinutes = (mins) => {
+  const safe = Math.max(0, Math.min(Number(mins) || 0, 24 * 60 - 1));
+  const hh = String(Math.floor(safe / 60)).padStart(2, "0");
+  const mm = String(safe % 60).padStart(2, "0");
+  return `${hh}:${mm}`;
+};
+
+const buildTimeline = (route, direction) => {
+  if (!route) return [];
+  const startTime = direction === "UP" ? route.firstTripTimeUp : route.firstTripTimeDown;
+  const start = toMinutes(startTime);
+  const end = toMinutes(route.lastTripTime);
+  const duration = Number(route.standardTripTimeMin || 0);
+  const frequency = Number(route.frequencyMin || 0);
+
+  if (start == null || end == null || !duration || !frequency) return [];
+
+  const trips = [];
+  for (let time = start; time <= end; time += frequency) {
+    trips.push({
+      startTime: fromMinutes(time),
+      endTime: fromMinutes(time + duration),
+      direction,
+    });
+  }
+  return trips;
+};
+
+const isTripUpcomingForDate = (date, startTime) => {
+  const tripStartMin = toMinutes(startTime);
+  if (tripStartMin == null) return false;
+
+  const opsDate = getOpsDate();
+  const dateCmp = String(date || "").localeCompare(opsDate);
+  if (dateCmp > 0) return true;
+  if (dateCmp < 0) return false;
+
+  const { nowMinutes } = getOpsNowParts();
+  return tripStartMin >= nowMinutes;
+};
+
+const resyncActiveRouteDayForBus = async ({ routeId, busId, currentLocation, date }) => {
+  const [route, activation] = await Promise.all([
+    Route.findById(routeId).select(
+      "depotId source destination assignmentMode firstTripTimeUp firstTripTimeDown lastTripTime standardTripTimeMin frequencyMin"
+    ),
+    RouteDayActivation.findOne({ date, routeId }).select("busIdsUp busIdsDown autoOffersEnabled"),
+  ]);
+
+  if (!route || route.assignmentMode !== "AUTO" || !activation || activation.autoOffersEnabled === false) {
+    return;
+  }
+
+  const sourceNorm = String(route.source || "").trim().toLowerCase();
+  const destinationNorm = String(route.destination || "").trim().toLowerCase();
+  const currentNorm = String(currentLocation || "").trim().toLowerCase();
+  if (!currentNorm || (currentNorm !== sourceNorm && currentNorm !== destinationNorm)) return;
+
+  const busIdStr = String(busId);
+  const nextBusIdsUp = Array.from(
+    new Set((activation.busIdsUp || []).map((id) => String(id || "")).filter(Boolean))
+  ).filter((id) => id !== busIdStr);
+  const nextBusIdsDown = Array.from(
+    new Set((activation.busIdsDown || []).map((id) => String(id || "")).filter(Boolean))
+  ).filter((id) => id !== busIdStr);
+
+  if (currentNorm === sourceNorm) nextBusIdsUp.push(busIdStr);
+  if (currentNorm === destinationNorm) nextBusIdsDown.push(busIdStr);
+
+  activation.busIdsUp = nextBusIdsUp;
+  activation.busIdsDown = nextBusIdsDown;
+  await activation.save();
+
+  const upTimeline = buildTimeline(route, "UP");
+  const downTimeline = buildTimeline(route, "DOWN");
+  const schedulingBusIdsUp = nextBusIdsUp.length ? nextBusIdsUp : nextBusIdsDown;
+  const schedulingBusIdsDown = nextBusIdsDown.length ? nextBusIdsDown : nextBusIdsUp;
+
+  const createOrUpdateTrip = async (trip, assignedBusId) => {
+    const existing = await TripInstance.findOne({
+      date,
+      routeId: route._id,
+      direction: trip.direction,
+      startTime: trip.startTime,
+    });
+
+    if (!existing) {
+      await TripInstance.create({
+        date,
+        depotId: route.depotId,
+        routeId: route._id,
+        busId: assignedBusId,
+        direction: trip.direction,
+        startTime: trip.startTime,
+        endTime: trip.endTime,
+        status: "Scheduled",
+        releasedForReuse: false,
+      });
+      return;
+    }
+
+    if (["Scheduled", "Cancelled"].includes(existing.status)) {
+      if (existing.status === "Cancelled" && !isTripUpcomingForDate(date, trip.startTime)) return;
+      existing.busId = assignedBusId;
+      existing.endTime = trip.endTime;
+      existing.status = "Scheduled";
+      existing.releasedForReuse = false;
+      await existing.save();
+    }
+  };
+
+  for (let i = 0; i < upTimeline.length; i += 1) {
+    if (!schedulingBusIdsUp.length) break;
+    await createOrUpdateTrip(upTimeline[i], schedulingBusIdsUp[i % schedulingBusIdsUp.length]);
+  }
+
+  for (let i = 0; i < downTimeline.length; i += 1) {
+    if (!schedulingBusIdsDown.length) break;
+    await createOrUpdateTrip(downTimeline[i], schedulingBusIdsDown[i % schedulingBusIdsDown.length]);
+  }
 };
 
 exports.getOwnerFleetDashboard = asyncHandler(async (req, res) => {
@@ -287,6 +418,7 @@ exports.getOwnerFleetDashboard = asyncHandler(async (req, res) => {
     const driver = driverByBus[busIdKey] || null;
     const conductor = conductorByBus[busIdKey] || null;
     const attachedRoute = bus.attachedRouteId || null;
+    const attachedRoutes = Array.isArray(bus.attachedRouteIds) ? bus.attachedRouteIds : [];
     const liveLocation = live
       ? typeof live.lastLatitude === "number" && typeof live.lastLongitude === "number"
         ? {
@@ -345,6 +477,13 @@ exports.getOwnerFleetDashboard = asyncHandler(async (req, res) => {
             destination: attachedRoute.destination || "--",
           }
         : null,
+      attachedRoutes: attachedRoutes.map((route) => ({
+        id: route._id || null,
+        routeCode: route.routeCode || "--",
+        routeName: route.routeName || "Route",
+        source: route.source || "--",
+        destination: route.destination || "--",
+      })),
       lastTripEndLocation,
       liveRoute: live?.routeId
         ? {
@@ -452,6 +591,13 @@ exports.updateOwnerBusLocation = asyncHandler(async (req, res) => {
   bus.currentLocation = nextNorm === sourceNorm ? source : destination;
   await bus.save();
 
+  await resyncActiveRouteDayForBus({
+    routeId: bus.attachedRouteId._id,
+    busId: bus._id,
+    currentLocation: bus.currentLocation,
+    date: getOpsDate(),
+  });
+
   const activeMappings = await BusCrewMapping.find({ busId: bus._id, isActive: true }).select("driverId conductorId");
   const driverIds = Array.from(
     new Set(
@@ -499,6 +645,131 @@ exports.updateOwnerBusLocation = asyncHandler(async (req, res) => {
         source,
         destination,
       },
+    },
+  });
+});
+
+exports.updateOwnerBusRoute = asyncHandler(async (req, res) => {
+  const ownerId = req.user.userId;
+  const { busId } = req.params;
+  const { routeId } = req.body || {};
+
+  const nextRouteId = String(routeId || "").trim();
+  if (!nextRouteId) throw new ApiError(400, "routeId required");
+
+  const bus = await Bus.findOne({ _id: busId, ownerId })
+    .select("busNumber currentLocation attachedRouteId attachedRouteIds")
+    .populate("attachedRouteIds", "routeCode routeName source destination");
+  if (!bus) throw new ApiError(404, "Bus not found in your fleet");
+
+  const activeAssignment = await DriverAssignment.findOne({
+    busId: bus._id,
+    date: getOpsDate(),
+    status: "Active",
+  }).select("_id");
+  if (activeAssignment) {
+    throw new ApiError(409, "Cannot change route while the bus is on a live trip");
+  }
+
+  const attachedRoutes = Array.isArray(bus.attachedRouteIds) ? bus.attachedRouteIds : [];
+  const nextRoute = attachedRoutes.find((route) => String(route?._id || "") === nextRouteId);
+  if (!nextRoute) {
+    throw new ApiError(400, "Selected route is not attached to this bus");
+  }
+
+  bus.attachedRouteId = nextRoute._id;
+  bus.currentLocation = null;
+  await bus.save();
+
+  const opsDate = getOpsDate();
+  const staleTripIds = await TripInstance.find({
+    date: opsDate,
+    busId: bus._id,
+    routeId: { $ne: nextRoute._id },
+    status: { $ne: "Active" },
+    releasedForReuse: { $ne: true },
+  }).distinct("_id");
+
+  if (staleTripIds.length) {
+    await Promise.all([
+      TripInstance.updateMany(
+        { _id: { $in: staleTripIds } },
+        {
+          $set: {
+            releasedForReuse: true,
+          },
+        }
+      ),
+      TripInstance.updateMany(
+        {
+          _id: { $in: staleTripIds },
+          status: "Scheduled",
+        },
+        {
+          $set: {
+            status: "Cancelled",
+          },
+        }
+      ),
+      DriverAssignment.deleteMany({
+        date: opsDate,
+        busId: bus._id,
+        routeId: { $ne: nextRoute._id },
+        status: "Scheduled",
+      }),
+      ConductorAssignment.deleteMany({
+        date: opsDate,
+        busId: bus._id,
+        routeId: { $ne: nextRoute._id },
+        status: "Scheduled",
+      }),
+      RouteDayActivation.updateMany(
+        {
+          date: opsDate,
+          routeId: { $ne: nextRoute._id },
+        },
+        {
+          $pull: {
+            busIdsUp: bus._id,
+            busIdsDown: bus._id,
+          },
+        }
+      ),
+    ]);
+  }
+
+  const activeMappings = await BusCrewMapping.find({ busId: bus._id, isActive: true }).select("driverId conductorId");
+  const driverIds = Array.from(new Set(activeMappings.map((item) => String(item.driverId || "").trim()).filter(Boolean)));
+  const conductorIds = Array.from(new Set(activeMappings.map((item) => String(item.conductorId || "").trim()).filter(Boolean)));
+  const updates = [];
+  if (driverIds.length) {
+    updates.push(Driver.updateMany({ _id: { $in: driverIds } }, { $set: { currentLocation: null } }));
+  }
+  if (conductorIds.length) {
+    updates.push(Conductor.updateMany({ _id: { $in: conductorIds } }, { $set: { currentLocation: null } }));
+  }
+  if (updates.length) await Promise.all(updates);
+
+  res.json({
+    ok: true,
+    bus: {
+      id: bus._id,
+      busNumber: bus.busNumber,
+      currentLocation: null,
+      attachedRoute: {
+        id: nextRoute._id,
+        routeCode: nextRoute.routeCode || "--",
+        routeName: nextRoute.routeName || "Route",
+        source: nextRoute.source || "--",
+        destination: nextRoute.destination || "--",
+      },
+      attachedRoutes: attachedRoutes.map((route) => ({
+        id: route._id,
+        routeCode: route.routeCode || "--",
+        routeName: route.routeName || "Route",
+        source: route.source || "--",
+        destination: route.destination || "--",
+      })),
     },
   });
 });

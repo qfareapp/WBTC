@@ -667,6 +667,7 @@ exports.activateRouteDay = asyncHandler(async (req, res) => {
     date,
     busId: { $in: allIds },
     routeId: { $ne: route._id },
+    status: { $ne: "Cancelled" },
     releasedForReuse: { $ne: true },
   }).select("busId");
   if (conflictingTrips.length > 0) {

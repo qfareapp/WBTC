@@ -28,6 +28,9 @@ exports.loginConductor = asyncHandler(async (req, res) => {
 
   const conductor = await Conductor.findOne({ empId }).select("+passwordHash mustChangePassword");
   if (!conductor) throw new ApiError(401, "Invalid credentials");
+  if (!String(conductor.passwordHash || "").trim()) {
+    throw new ApiError(409, "Conductor password is not initialized. Reset the conductor password from the admin or owner panel.");
+  }
   const passwordOk = await comparePassword(password, conductor.passwordHash);
   if (!passwordOk) throw new ApiError(401, "Invalid credentials");
 
@@ -59,6 +62,9 @@ exports.changeConductorPassword = asyncHandler(async (req, res) => {
 
   const conductor = await Conductor.findById(req.user.userId).select("+passwordHash mustChangePassword");
   if (!conductor) throw new ApiError(404, "Conductor not found");
+  if (!String(conductor.passwordHash || "").trim()) {
+    throw new ApiError(409, "Conductor password is not initialized. Reset the conductor password before changing it.");
+  }
 
   const ok = await comparePassword(currentPassword, conductor.passwordHash);
   if (!ok) throw new ApiError(401, "Current password is incorrect");

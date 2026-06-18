@@ -28,6 +28,7 @@ function BusEntry({ apiBase, token, operatorScope, setOperatorScope }) {
   const [buses, setBuses] = useState([]);
   const [routes, setRoutes] = useState([]);
   const [routeSelectionByBus, setRouteSelectionByBus] = useState({});
+  const [activeRouteSelectionByBus, setActiveRouteSelectionByBus] = useState({});
   const [attachBusyByBus, setAttachBusyByBus] = useState({});
   const [notice, setNotice] = useState(null);
   const [qrValue, setQrValue] = useState("");
@@ -77,6 +78,17 @@ function BusEntry({ apiBase, token, operatorScope, setOperatorScope }) {
         const busRows = data.buses || [];
         setBuses(busRows);
         setRouteSelectionByBus(
+          busRows.reduce((acc, bus) => {
+            if (!bus?._id) return acc;
+            acc[bus._id] = Array.isArray(bus.attachedRouteIds)
+              ? bus.attachedRouteIds.map((route) => route?._id).filter(Boolean)
+              : bus.attachedRouteId?._id
+              ? [bus.attachedRouteId._id]
+              : [];
+            return acc;
+          }, {})
+        );
+        setActiveRouteSelectionByBus(
           busRows.reduce((acc, bus) => {
             if (!bus?._id) return acc;
             acc[bus._id] = bus.attachedRouteId?._id || "";
@@ -150,6 +162,7 @@ function BusEntry({ apiBase, token, operatorScope, setOperatorScope }) {
       busNumber: form.busNumber.trim(),
       depotId: form.depotId || null,
       busType: form.busType,
+      activeRouteId: null,
     };
     setQrValue(JSON.stringify(payload));
     showNotice("success", "QR code generated.");
@@ -258,6 +271,7 @@ function BusEntry({ apiBase, token, operatorScope, setOperatorScope }) {
       depotId: bus.depotId?._id || bus.depotId || null,
       busType: bus.busType || null,
       fuelType: bus.fuelType || null,
+      activeRouteId: bus.attachedRouteId?._id || null,
     });
     setActiveQr({ bus, payload });
   };
@@ -271,7 +285,10 @@ function BusEntry({ apiBase, token, operatorScope, setOperatorScope }) {
       return;
     }
 
-    const selectedRouteId = String(routeSelectionByBus[busId] || "").trim();
+    const selectedRouteIds = Array.isArray(routeSelectionByBus[busId])
+      ? routeSelectionByBus[busId].map((item) => String(item || "").trim()).filter(Boolean)
+      : [];
+    const selectedActiveRouteId = String(activeRouteSelectionByBus[busId] || "").trim();
     setAttachBusyByBus((prev) => ({ ...prev, [busId]: true }));
 
     try {
@@ -281,7 +298,10 @@ function BusEntry({ apiBase, token, operatorScope, setOperatorScope }) {
           "Content-Type": "application/json",
           Authorization: `Bearer ${token}`,
         },
-        body: JSON.stringify({ routeId: selectedRouteId || null }),
+        body: JSON.stringify({
+          routeIds: selectedRouteIds,
+          activeRouteId: selectedActiveRouteId || selectedRouteIds[0] || null,
+        }),
       });
       const text = await response.text();
       const data = text ? JSON.parse(text) : {};
@@ -291,10 +311,18 @@ function BusEntry({ apiBase, token, operatorScope, setOperatorScope }) {
         setBuses((prev) => prev.map((item) => (item._id === data.bus._id ? data.bus : item)));
         setRouteSelectionByBus((prev) => ({
           ...prev,
+          [busId]: Array.isArray(data.bus.attachedRouteIds)
+            ? data.bus.attachedRouteIds.map((route) => route?._id).filter(Boolean)
+            : data.bus.attachedRouteId?._id
+            ? [data.bus.attachedRouteId._id]
+            : [],
+        }));
+        setActiveRouteSelectionByBus((prev) => ({
+          ...prev,
           [busId]: data.bus.attachedRouteId?._id || "",
         }));
       }
-      showNotice("success", selectedRouteId ? "Route attached to bus." : "Route detached from bus.");
+      showNotice("success", selectedRouteIds.length ? "Routes updated for bus." : "Routes detached from bus.");
     } catch (error) {
       showNotice("error", error.message);
     } finally {
@@ -635,18 +663,43 @@ function BusEntry({ apiBase, token, operatorScope, setOperatorScope }) {
                         <td>
                           <div style={{ display: "grid", gap: "8px", minWidth: "220px" }}>
                             <select
-                              value={routeSelectionByBus[busId] ?? (bus.attachedRouteId?._id || "")}
-                              onChange={(event) =>
-                                setRouteSelectionByBus((prev) => ({ ...prev, [busId]: event.target.value }))
-                              }
+                              multiple
+                              value={routeSelectionByBus[busId] ?? []}
+                              onChange={(event) => {
+                                const values = Array.from(event.target.selectedOptions).map((option) => option.value);
+                                setRouteSelectionByBus((prev) => ({ ...prev, [busId]: values }));
+                                setActiveRouteSelectionByBus((prev) => {
+                                  const current = String(prev[busId] || "");
+                                  return {
+                                    ...prev,
+                                    [busId]: values.includes(current) ? current : values[0] || "",
+                                  };
+                                });
+                              }}
                               disabled={!busId}
+                              size={Math.min(Math.max(routeOptions.length, 2), 6)}
                             >
-                              <option value="">No route</option>
                               {routeOptions.map((route) => (
                                 <option key={route._id} value={route._id}>
                                   {route.routeCode} - {route.routeName}
                                 </option>
                               ))}
+                            </select>
+                            <select
+                              value={activeRouteSelectionByBus[busId] ?? (bus.attachedRouteId?._id || "")}
+                              onChange={(event) =>
+                                setActiveRouteSelectionByBus((prev) => ({ ...prev, [busId]: event.target.value }))
+                              }
+                              disabled={!busId || !(routeSelectionByBus[busId] || []).length}
+                            >
+                              <option value="">Select current route</option>
+                              {routeOptions
+                                .filter((route) => (routeSelectionByBus[busId] || []).includes(route._id))
+                                .map((route) => (
+                                  <option key={`active-${route._id}`} value={route._id}>
+                                    {route.routeCode} - {route.routeName}
+                                  </option>
+                                ))}
                             </select>
                             <button
                               className="btn outline"
@@ -655,6 +708,17 @@ function BusEntry({ apiBase, token, operatorScope, setOperatorScope }) {
                               disabled={!busId || Boolean(attachBusyByBus[busId])}
                             >
                               {attachBusyByBus[busId] ? "Saving..." : "Attach"}
+                            </button>
+                            <button
+                              className="btn ghost"
+                              type="button"
+                              onClick={() => {
+                                setRouteSelectionByBus((prev) => ({ ...prev, [busId]: [] }));
+                                setActiveRouteSelectionByBus((prev) => ({ ...prev, [busId]: "" }));
+                              }}
+                              disabled={!busId || Boolean(attachBusyByBus[busId])}
+                            >
+                              Clear
                             </button>
                           </div>
                         </td>

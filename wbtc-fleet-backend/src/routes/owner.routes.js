@@ -12,6 +12,7 @@ const {
   getOwnerPaymentSummary,
   getOwnerBilling,
   updateOwnerBusLocation,
+  updateOwnerBusRoute,
 } = require("../controllers/owner.controller");
 
 router.use(auth, requireRole("OWNER"));
@@ -23,6 +24,7 @@ router.get("/personnel", listOwnerPersonnel);
 router.get("/assign-crew", getOwnerAssignCrewContext);
 router.post("/assign-crew", assignOwnerDailyCrew);
 router.patch("/buses/:busId/status", updateOwnerBusStatus);
+router.patch("/buses/:busId/route", updateOwnerBusRoute);
 router.patch("/buses/:busId/location", updateOwnerBusLocation);
 router.post("/buses/:busId/assign-crew", assignOwnerBusCrew);
 router.delete("/buses/:busId/assign-crew", resetOwnerBusCrew);

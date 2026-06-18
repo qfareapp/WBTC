@@ -752,6 +752,7 @@ const collectEligibleTripOffersForDriver = async ({ driverId, date = today(), de
     .lean();
   const mappedBusDocs = mappedRows.map((row) => row.busId).filter(Boolean);
   const mappedBusIds = new Set(mappedBusDocs.map((bus) => String(bus._id)));
+  const mappedBusById = new Map(mappedBusDocs.map((bus) => [String(bus._id), bus]));
   if (mappedBusIds.size === 0) {
     return {
       date,
@@ -850,16 +851,49 @@ const collectEligibleTripOffersForDriver = async ({ driverId, date = today(), de
     }
 
     const startLocation = getStartLocation(route, trip.direction);
-    let eligibleMappedForRoute = mappedRouteBusDocs.filter((bus) => {
-      if (String(bus.depotId || "") !== String(route.depotId || "")) return false;
-      return isMappedBusEligibleForTrip({
-        bus,
-        route,
-        startLocation,
-        activeBusSet,
-        strictRouteMatch: true,
+    const tripAssignedBusId = String(trip.busId?._id || trip.busId || "");
+    let eligibleMappedForRoute = [];
+
+    if (tripAssignedBusId && mappedBusIds.has(tripAssignedBusId)) {
+      const assignedMappedBus = mappedBusById.get(tripAssignedBusId);
+      if (
+        assignedMappedBus &&
+        String(assignedMappedBus.status || "") === "Active" &&
+        String(assignedMappedBus.depotId || "") === String(route.depotId || "")
+      ) {
+        const strictMatch =
+          isMappedBusEligibleForTrip({
+            bus: assignedMappedBus,
+            route,
+            startLocation: null,
+            activeBusSet,
+            strictRouteMatch: true,
+          }) ||
+          isMappedBusEligibleForTrip({
+            bus: assignedMappedBus,
+            route,
+            startLocation: null,
+            activeBusSet,
+            strictRouteMatch: false,
+          });
+        if (strictMatch) {
+          eligibleMappedForRoute = [assignedMappedBus];
+        }
+      }
+    }
+
+    if (!eligibleMappedForRoute.length) {
+      eligibleMappedForRoute = mappedRouteBusDocs.filter((bus) => {
+        if (String(bus.depotId || "") !== String(route.depotId || "")) return false;
+        return isMappedBusEligibleForTrip({
+          bus,
+          route,
+          startLocation,
+          activeBusSet,
+          strictRouteMatch: true,
+        });
       });
-    });
+    }
     if (!eligibleMappedForRoute.length) {
       eligibleMappedForRoute = mappedRouteBusDocs.filter((bus) => {
         if (String(bus.depotId || "") !== String(route.depotId || "")) return false;

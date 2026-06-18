@@ -10,9 +10,17 @@ async function main() {
 
   await mongoose.connect(process.env.MONGO_URI);
 
+  const missingPasswordFilter = {
+    $or: [
+      { passwordHash: { $exists: false } },
+      { passwordHash: null },
+      { passwordHash: "" },
+    ],
+  };
+
   const [drivers, conductors] = await Promise.all([
-    Driver.find({ passwordHash: { $exists: false } }).select("_id empId name"),
-    Conductor.find({ passwordHash: { $exists: false } }).select("_id empId name"),
+    Driver.find(missingPasswordFilter).select("_id empId name"),
+    Conductor.find(missingPasswordFilter).select("_id empId name"),
   ]);
 
   console.log("Generated temporary passwords:");
