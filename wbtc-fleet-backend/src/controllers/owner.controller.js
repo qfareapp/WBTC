@@ -9,6 +9,7 @@ const DriverAssignment = require("../models/DriverAssignment");
 const ConductorAssignment = require("../models/ConductorAssignment");
 const BusCrewMapping = require("../models/BusCrewMapping");
 const RouteDayActivation = require("../models/RouteDayActivation");
+const User = require("../models/User");
 const ApiError = require("../utils/ApiError");
 const asyncHandler = require("../utils/asyncHandler");
 const { computeOwnerPaymentRows, computeOwnerPaymentDetails } = require("../utils/ownerPayments");
@@ -16,6 +17,14 @@ const { getOpsDate, getOpsMonth, getOpsNowParts, toOpsIsoDay, getOpsDayWindow, g
 const { getStopFieldsForDirection, hasCoords } = require("../utils/routeStopDirection");
 
 const dayWindowFromIso = (isoDate) => getOpsDayWindow(isoDate);
+
+const normalizePayoutBankDetails = (input = {}) => ({
+  accountHolderName: String(input.accountHolderName || "").trim(),
+  bankName: String(input.bankName || "").trim(),
+  accountNumber: String(input.accountNumber || "").trim(),
+  ifscCode: String(input.ifscCode || "").trim().toUpperCase(),
+  branchName: String(input.branchName || "").trim(),
+});
 
 const haversineKm = (lat1, lon1, lat2, lon2) => {
   const R = 6371;
@@ -549,6 +558,54 @@ exports.getOwnerFleetDashboard = asyncHandler(async (req, res) => {
     },
     routeDistribution,
     buses: busRows,
+  });
+});
+
+exports.getOwnerPayoutDetails = asyncHandler(async (req, res) => {
+  const owner = await User.findOne({ _id: req.user.userId, role: "OWNER", active: true })
+    .select("payoutBankDetails")
+    .lean();
+  if (!owner) throw new ApiError(404, "Owner account not found");
+
+  res.json({
+    ok: true,
+    payoutBankDetails: {
+      accountHolderName: owner.payoutBankDetails?.accountHolderName || "",
+      bankName: owner.payoutBankDetails?.bankName || "",
+      accountNumber: owner.payoutBankDetails?.accountNumber || "",
+      ifscCode: owner.payoutBankDetails?.ifscCode || "",
+      branchName: owner.payoutBankDetails?.branchName || "",
+      updatedAt: owner.payoutBankDetails?.updatedAt || null,
+    },
+  });
+});
+
+exports.updateOwnerPayoutDetails = asyncHandler(async (req, res) => {
+  const owner = await User.findOne({ _id: req.user.userId, role: "OWNER", active: true }).select(
+    "payoutBankDetails"
+  );
+  if (!owner) throw new ApiError(404, "Owner account not found");
+
+  const payoutBankDetails = normalizePayoutBankDetails(req.body || {});
+  if (!payoutBankDetails.accountHolderName) throw new ApiError(400, "Account holder name is required");
+  if (!payoutBankDetails.bankName) throw new ApiError(400, "Bank name is required");
+  if (!/^\d{9,18}$/.test(payoutBankDetails.accountNumber)) {
+    throw new ApiError(400, "Account number must be 9 to 18 digits");
+  }
+  if (!/^[A-Z]{4}0[A-Z0-9]{6}$/.test(payoutBankDetails.ifscCode)) {
+    throw new ApiError(400, "Valid IFSC code is required");
+  }
+
+  owner.payoutBankDetails = {
+    ...owner.payoutBankDetails,
+    ...payoutBankDetails,
+    updatedAt: new Date(),
+  };
+  await owner.save();
+
+  res.json({
+    ok: true,
+    payoutBankDetails: owner.payoutBankDetails,
   });
 });
 

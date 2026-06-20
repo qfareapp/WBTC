@@ -17,7 +17,6 @@ import OwnersOverview from "./pages/OwnersOverview.jsx";
 import PaymentsOverview from "./pages/PaymentsOverview.jsx";
 import PassengerUsersOverview from "./pages/PassengerUsersOverview.jsx";
 import Login from "./pages/Login.jsx";
-import Register from "./pages/Register.jsx";
 import PrivacyPolicy from "./pages/PrivacyPolicy.jsx";
 import QfarePassengerPrivacyPolicy from "./pages/QfarePassengerPrivacyPolicy.jsx";
 import QfareDeleteAccount from "./pages/QfareDeleteAccount.jsx";
@@ -76,16 +75,6 @@ function App() {
               <Navigate to={user?.role === "OWNER" ? "/owner" : "/dashboard"} replace />
             ) : (
               <Login apiBase={apiBase} setApiBase={setApiBase} setToken={setToken} setUser={setUser} />
-            )
-          }
-        />
-        <Route
-          path="/register"
-          element={
-            token ? (
-              <Navigate to={user?.role === "OWNER" ? "/owner" : "/dashboard"} replace />
-            ) : (
-              <Register apiBase={apiBase} setApiBase={setApiBase} setToken={setToken} setUser={setUser} />
             )
           }
         />

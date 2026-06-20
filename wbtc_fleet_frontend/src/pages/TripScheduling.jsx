@@ -128,7 +128,7 @@ function TripScheduling({ apiBase, token, operatorScope, setOperatorScope }) {
           <div className="sidebar-brand">
             <div className="brand-mark" />
             <div>
-              <p className="sidebar-title">WBTC Fleet</p>
+              <p className="sidebar-title">Qfare Fleet</p>
               <span className="pill">Trip scheduling</span>
             </div>
           </div>

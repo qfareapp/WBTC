@@ -349,7 +349,7 @@ function BusEntry({ apiBase, token, operatorScope, setOperatorScope }) {
           <div className="sidebar-brand">
             <div className="brand-mark" />
             <div>
-              <p className="sidebar-title">WBTC Fleet</p>
+              <p className="sidebar-title">Qfare Fleet</p>
               <span className="pill">Bus entry</span>
             </div>
           </div>
@@ -835,5 +835,4 @@ function BusEntry({ apiBase, token, operatorScope, setOperatorScope }) {
 }
 
 export default BusEntry;
-
 

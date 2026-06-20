@@ -15,7 +15,7 @@ const { generateTemporaryPassword, hashPassword } = require("../utils/crewPasswo
 
 exports.listOwnersOverview = asyncHandler(async (req, res) => {
   const owners = await User.find({ role: "OWNER" })
-    .select("name username active createdAt")
+    .select("name username active createdAt phoneNumber whatsappNumber email payoutBankDetails")
     .sort({ createdAt: -1 })
     .lean();
 
@@ -95,6 +95,17 @@ exports.listOwnersOverview = asyncHandler(async (req, res) => {
         username: owner.username,
         active: owner.active,
         createdAt: owner.createdAt,
+        phoneNumber: owner.phoneNumber || "",
+        whatsappNumber: owner.whatsappNumber || "",
+        email: owner.email || "",
+        payoutBankDetails: {
+          accountHolderName: owner.payoutBankDetails?.accountHolderName || "",
+          bankName: owner.payoutBankDetails?.bankName || "",
+          accountNumber: owner.payoutBankDetails?.accountNumber || "",
+          ifscCode: owner.payoutBankDetails?.ifscCode || "",
+          branchName: owner.payoutBankDetails?.branchName || "",
+          updatedAt: owner.payoutBankDetails?.updatedAt || null,
+        },
       },
       totalBuses: ownerBuses.length,
       totalRoutes: ownerRoutes.length,

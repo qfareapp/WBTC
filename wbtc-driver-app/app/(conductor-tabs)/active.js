@@ -1,5 +1,5 @@
 ﻿import { useEffect, useRef, useState } from "react";
-import { View, Text, StyleSheet, TouchableOpacity, ScrollView, RefreshControl, Modal, Platform, PermissionsAndroid, NativeModules } from "react-native";
+import { View, Text, StyleSheet, TouchableOpacity, ScrollView, RefreshControl, Modal, Platform, PermissionsAndroid, NativeModules, Animated, PanResponder } from "react-native";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { useRouter } from "expo-router";
 import * as Location from "expo-location";
@@ -105,9 +105,39 @@ export default function ConductorActive() {
     avgTicketPrice: "0.00",
   });
 
+  const [waitingExpanded, setWaitingExpanded] = useState(true);
+  const floatOffset = useRef({ x: 16, y: 200 });
+  const floatPan = useRef(new Animated.ValueXY({ x: 16, y: 200 })).current;
+  const floatPanResponder = useRef(
+    PanResponder.create({
+      onStartShouldSetPanResponder: () => true,
+      onMoveShouldSetPanResponder: () => true,
+      onPanResponderGrant: () => {
+        floatPan.setOffset(floatOffset.current);
+        floatPan.setValue({ x: 0, y: 0 });
+      },
+      onPanResponderMove: Animated.event(
+        [null, { dx: floatPan.x, dy: floatPan.y }],
+        { useNativeDriver: false }
+      ),
+      onPanResponderRelease: (_, gesture) => {
+        const didMove = Math.abs(gesture.dx) > 6 || Math.abs(gesture.dy) > 6;
+        floatOffset.current = {
+          x: floatOffset.current.x + gesture.dx,
+          y: floatOffset.current.y + gesture.dy,
+        };
+        floatPan.flattenOffset();
+        if (!didMove) setWaitingExpanded((prev) => !prev);
+      },
+    })
+  ).current;
+
   const isOnDuty = (conductor?.status || "Available") === "Available";
   const sourceIndex = stops.findIndex((stop) => stop === source);
   const destinationIndex = stops.findIndex((stop) => stop === destination);
+  const totalWaiting = (activeTrip?.waitingSummary?.stops || []).reduce(
+    (sum, item) => sum + (item.passengersWaiting || 0), 0
+  );
   const hasValidDirection =
     sourceIndex >= 0 &&
     destinationIndex >= 0 &&
@@ -309,7 +339,6 @@ export default function ConductorActive() {
       const now = Date.now();
       if (now - lastSentMs < THROTTLE_MS) return;
       lastSentMs = now;
-      // Show raw coordinates immediately — replaces "Acquiring GPS…" right away
       setLocationCoords({ lat: coords.latitude, lng: coords.longitude });
 
       // Reverse-geocode on-device (fast, no backend hop needed for the name)
@@ -320,7 +349,7 @@ export default function ConductorActive() {
       try {
         const auth = await getAuth();
         if (!auth) { console.warn("[GPS] getAuth() returned null — skipping location post"); return; }
-        await fetch(`${auth.apiBase}/api/conductor-trips/location`, {
+        const response = await fetch(`${auth.apiBase}/api/conductor-trips/location`, {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
@@ -332,6 +361,11 @@ export default function ConductorActive() {
             longitude: coords.longitude,
           }),
         });
+        const text = await response.text();
+        const data = text ? JSON.parse(text) : {};
+        if (data?.locationName && !name) {
+          setLocationName(data.locationName);
+        }
       } catch {
         // Non-fatal — location failure must not affect ticket issuing
       }
@@ -672,26 +706,77 @@ export default function ConductorActive() {
 
         {offersLoading ? <Text style={styles.helper}>{t("active", "loadingOffers")}</Text> : null}
         {offers.map((offer, offerIndex) => (
-          <View style={styles.card} key={`offer-${offer.tripInstanceId || offer.route?.routeCode || "na"}-${offerIndex}`}>
-            <View style={styles.cardHeader}>
-              <View>
-                <Text style={styles.cardTitle}>{offer.route?.routeCode || "Route"}</Text>
-                <Text style={styles.cardRow}>{offer.route?.routeName || ""}</Text>
+          <View
+            style={styles.offerCard}
+            key={`offer-${offer.tripInstanceId || offer.route?.routeCode || "na"}-${offerIndex}`}
+          >
+            {/* Header: route code badge + offer pill */}
+            <View style={styles.offerCardHeader}>
+              <View style={styles.offerRouteTag}>
+                <Text style={styles.offerRouteCode}>{offer.route?.routeCode || "Route"}</Text>
               </View>
-              <View style={styles.pill}>
-                <Text style={styles.pillText}>{t("active", "offer")}</Text>
+              <View style={styles.offerLiveBadge}>
+                <View style={styles.offerLiveDot} />
+                <Text style={styles.offerLiveText}>{t("active", "offer")}</Text>
               </View>
             </View>
-            <Text style={styles.cardRow}>{t("active", "bus")}: {offer.bus?.busNumber || "--"}</Text>
-            <Text style={styles.cardRow}>{t("active", "time")}: {offer.startTime || "--"} - {offer.endTime || "--"}</Text>
-            <Text style={styles.cardRow}>{t("active", "pickup")}: {offer.pickupLocation || "--"}</Text>
-            <Text style={styles.cardRow}>{t("active", "drop")}: {offer.dropLocation || "--"}</Text>
-            <View style={styles.offerActions}>
-              <TouchableOpacity style={[styles.primary, { flex: 1 }]} onPress={() => handleOfferAction(offer.tripInstanceId, "accept")}>
-                <Text style={styles.primaryText}>{t("active", "accept")}</Text>
+
+            {/* Route name */}
+            <Text style={styles.offerRouteName}>{offer.route?.routeName || ""}</Text>
+
+            {/* Info strip: bus + time */}
+            <View style={styles.offerInfoStrip}>
+              <View style={styles.offerInfoCell}>
+                <Text style={styles.offerInfoCellIcon}>🚌</Text>
+                <View>
+                  <Text style={styles.offerInfoCellLabel}>{t("active", "bus")}</Text>
+                  <Text style={styles.offerInfoCellValue}>{offer.bus?.busNumber || "--"}</Text>
+                </View>
+              </View>
+              <View style={styles.offerInfoSep} />
+              <View style={styles.offerInfoCell}>
+                <Text style={styles.offerInfoCellIcon}>⏱</Text>
+                <View>
+                  <Text style={styles.offerInfoCellLabel}>{t("active", "time")}</Text>
+                  <Text style={styles.offerInfoCellValue}>{offer.startTime || "--"} – {offer.endTime || "--"}</Text>
+                </View>
+              </View>
+            </View>
+
+            {/* Journey: pickup → drop */}
+            <View style={styles.offerJourney}>
+              <View style={styles.offerJourneyRow}>
+                <View style={styles.offerJourneyDotGreen} />
+                <View style={styles.offerJourneyTextBlock}>
+                  <Text style={styles.offerJourneyLabel}>{t("active", "pickup")}</Text>
+                  <Text style={styles.offerJourneyPlace}>{offer.pickupLocation || "--"}</Text>
+                </View>
+              </View>
+              <View style={styles.offerJourneyConnector} />
+              <View style={styles.offerJourneyRow}>
+                <View style={styles.offerJourneyDotRed} />
+                <View style={styles.offerJourneyTextBlock}>
+                  <Text style={styles.offerJourneyLabel}>{t("active", "drop")}</Text>
+                  <Text style={styles.offerJourneyPlace}>{offer.dropLocation || "--"}</Text>
+                </View>
+              </View>
+            </View>
+
+            {/* Action buttons */}
+            <View style={styles.offerActionsRow}>
+              <TouchableOpacity
+                style={styles.offerAcceptBtn}
+                onPress={() => handleOfferAction(offer.tripInstanceId, "accept")}
+                activeOpacity={0.82}
+              >
+                <Text style={styles.offerAcceptText}>{t("active", "accept")}</Text>
               </TouchableOpacity>
-              <TouchableOpacity style={[styles.secondary, { flex: 1 }]} onPress={() => handleOfferAction(offer.tripInstanceId, "reject")}>
-                <Text style={styles.secondaryText}>{t("active", "reject")}</Text>
+              <TouchableOpacity
+                style={styles.offerRejectBtn}
+                onPress={() => handleOfferAction(offer.tripInstanceId, "reject")}
+                activeOpacity={0.82}
+              >
+                <Text style={styles.offerRejectText}>{t("active", "reject")}</Text>
               </TouchableOpacity>
             </View>
           </View>
@@ -718,10 +803,6 @@ export default function ConductorActive() {
                 <Text style={styles.tripBannerMeta}>Bus {activeTrip.bus?.busNumber || "--"}</Text>
                 {locationName ? (
                   <Text style={styles.tripBannerLocation}>📍 {locationName}</Text>
-                ) : locationCoords ? (
-                  <Text style={styles.tripBannerLocation}>
-                    📍 {locationCoords.lat.toFixed(4)}°N, {locationCoords.lng.toFixed(4)}°E
-                  </Text>
                 ) : locationGranted && (activeTrip?.driverTripStatus === "Active" || activeTrip?.status === "Active") ? (
                   <Text style={styles.tripBannerLocationPending}>📡 Acquiring GPS…</Text>
                 ) : null}
@@ -733,21 +814,6 @@ export default function ConductorActive() {
               >
                 <Text style={styles.qrLaunchBtnText}>Show bus QR for passengers</Text>
               </TouchableOpacity>
-              <Text style={styles.cardRowStrong}>Passengers waiting</Text>
-              {(activeTrip.waitingSummary?.stops || []).length ? (
-                <View style={styles.waitingListWrap}>
-                  {activeTrip.waitingSummary.stops.map((item) => (
-                    <View key={`${item.stopName}-${item.stopIndex}`} style={styles.waitingChip}>
-                      <Text style={styles.waitingChipStop}>{item.stopName}</Text>
-                      <Text style={styles.waitingChipCount}>
-                        {item.passengersWaiting} waiting
-                      </Text>
-                    </View>
-                  ))}
-                </View>
-              ) : (
-                <Text style={styles.helper}>No passengers have marked themselves waiting yet.</Text>
-              )}
               <TouchableOpacity
                 style={styles.stopsToggle}
                 onPress={() => setStopsExpanded((current) => !current)}
@@ -768,98 +834,134 @@ export default function ConductorActive() {
                 </View>
               ) : null}
 
-              <Text style={styles.fieldLabel}>{t("active", "source")}</Text>
-              <View style={styles.selectionWrap}>
-                {stops.map((stop, stopIndex) => (
-                  <TouchableOpacity
-                    key={`src-${stop || "na"}-${stopIndex}`}
-                    style={[
-                      styles.choice,
-                      source === stop ? styles.sourceChoiceActive : null,
-                    ]}
-                    onPress={() => {
-                      setSource(stop);
-                      setNotice("");
-                    }}
-                  >
-                    <Text
-                      style={[
-                        styles.choiceText,
-                        source === stop ? styles.sourceChoiceTextActive : null,
-                      ]}
+              {/* ── Step 1: FROM ── */}
+              <View style={styles.tkStep}>
+                <View style={styles.tkStepHeader}>
+                  <View style={styles.tkStepNumBadge}>
+                    <Text style={styles.tkStepNumText}>1</Text>
+                  </View>
+                  <Text style={styles.tkStepLabel}>{t("active", "source")}</Text>
+                  {source ? (
+                    <View style={styles.tkStepSelectedFrom}>
+                      <Text style={styles.tkStepSelectedText} numberOfLines={1}>{source}</Text>
+                    </View>
+                  ) : null}
+                </View>
+                <View style={styles.tkStopGrid}>
+                  {stops.map((stop, stopIndex) => (
+                    <TouchableOpacity
+                      key={`src-${stop || "na"}-${stopIndex}`}
+                      style={[styles.tkStopChip, source === stop && styles.tkStopChipFrom]}
+                      onPress={() => { setSource(stop); setNotice(""); }}
                     >
-                      {stop}
-                    </Text>
-                  </TouchableOpacity>
-                ))}
+                      <Text style={[styles.tkStopChipText, source === stop && styles.tkStopChipTextFrom]}>
+                        {stop}
+                      </Text>
+                    </TouchableOpacity>
+                  ))}
+                </View>
               </View>
 
-              <Text style={styles.fieldLabel}>{t("active", "destination")}</Text>
-              <View style={styles.selectionWrap}>
-                {stops.map((stop, stopIndex) => {
-                  const disabled = sourceIndex >= 0 && stopIndex <= sourceIndex;
-                  return (
-                  <TouchableOpacity
-                    key={`dst-${stop || "na"}-${stopIndex}`}
-                    style={[
-                      styles.choice,
-                      destination === stop ? styles.destinationChoiceActive : null,
-                      disabled ? styles.choiceDisabled : null,
-                    ]}
-                    onPress={() => {
-                      if (disabled) return;
-                      setDestination(stop);
-                      setNotice("");
-                    }}
-                    disabled={disabled}
-                  >
-                    <Text
-                      style={[
-                        styles.choiceText,
-                        destination === stop ? styles.destinationChoiceTextActive : null,
-                        disabled ? styles.choiceTextDisabled : null,
-                      ]}
-                    >
-                      {stop}
-                    </Text>
-                  </TouchableOpacity>
-                  );
-                })}
+              {/* Journey summary bar */}
+              {(source || destination) ? (
+                <View style={styles.tkJourneySummary}>
+                  <View style={styles.tkJourneyDotGreen} />
+                  <Text style={styles.tkJourneyFrom} numberOfLines={1}>{source || "—"}</Text>
+                  <Text style={styles.tkJourneyArrow}>⟶</Text>
+                  <Text style={styles.tkJourneyTo} numberOfLines={1}>{destination || "—"}</Text>
+                  <View style={styles.tkJourneyDotRed} />
+                </View>
+              ) : null}
+
+              {/* ── Step 2: TO ── */}
+              <View style={styles.tkStep}>
+                <View style={styles.tkStepHeader}>
+                  <View style={[styles.tkStepNumBadge, styles.tkStepNumBadgeTo]}>
+                    <Text style={styles.tkStepNumText}>2</Text>
+                  </View>
+                  <Text style={styles.tkStepLabel}>{t("active", "destination")}</Text>
+                  {destination ? (
+                    <View style={styles.tkStepSelectedTo}>
+                      <Text style={styles.tkStepSelectedText} numberOfLines={1}>{destination}</Text>
+                    </View>
+                  ) : null}
+                </View>
+                <View style={styles.tkStopGrid}>
+                  {stops.map((stop, stopIndex) => {
+                    const disabled = sourceIndex >= 0 && stopIndex <= sourceIndex;
+                    return (
+                      <TouchableOpacity
+                        key={`dst-${stop || "na"}-${stopIndex}`}
+                        style={[
+                          styles.tkStopChip,
+                          destination === stop && styles.tkStopChipTo,
+                          disabled && styles.tkStopChipDisabled,
+                        ]}
+                        onPress={() => {
+                          if (disabled) return;
+                          setDestination(stop);
+                          setNotice("");
+                        }}
+                        disabled={disabled}
+                      >
+                        <Text style={[
+                          styles.tkStopChipText,
+                          destination === stop && styles.tkStopChipTextTo,
+                          disabled && styles.tkStopChipTextDisabled,
+                        ]}>
+                          {stop}
+                        </Text>
+                      </TouchableOpacity>
+                    );
+                  })}
+                </View>
               </View>
 
-              <Text style={styles.fieldLabel}>{t("active", "passengersMax")}</Text>
-              <View style={styles.selectionWrap}>
-                {[1, 2, 3, 4, 5].map((count) => (
-                  <TouchableOpacity
-                    key={`pax-${count}`}
-                    style={[
-                      styles.choice,
-                      passengerCount === count ? styles.passengerChoiceActive : null,
-                    ]}
-                    onPress={() => setPassengerCount(count)}
-                  >
-                    <Text
-                      style={[
-                        styles.choiceText,
-                        passengerCount === count ? styles.passengerChoiceTextActive : null,
-                      ]}
+              {/* ── Step 3: PASSENGERS ── */}
+              <View style={styles.tkStep}>
+                <View style={styles.tkStepHeader}>
+                  <View style={[styles.tkStepNumBadge, styles.tkStepNumBadgePax]}>
+                    <Text style={styles.tkStepNumText}>3</Text>
+                  </View>
+                  <Text style={styles.tkStepLabel}>{t("active", "passengersMax")}</Text>
+                </View>
+                <View style={styles.tkPaxRow}>
+                  {[1, 2, 3, 4, 5].map((count) => (
+                    <TouchableOpacity
+                      key={`pax-${count}`}
+                      style={[styles.tkPaxBtn, passengerCount === count && styles.tkPaxBtnActive]}
+                      onPress={() => setPassengerCount(count)}
                     >
-                      {count}
-                    </Text>
-                  </TouchableOpacity>
-                ))}
+                      <Text style={[styles.tkPaxBtnText, passengerCount === count && styles.tkPaxBtnTextActive]}>
+                        {count}
+                      </Text>
+                    </TouchableOpacity>
+                  ))}
+                </View>
               </View>
 
-              <View style={styles.farePanel}>
-                <Text style={styles.farePanelLabel}>{t("active", "autoFare")}</Text>
-                <Text style={styles.fareText}>{fare == null ? "--" : `Rs ${fare}`}</Text>
-                <Text style={styles.fareMeta}>
-                  {t("active", "total", { count: passengerCount })}: {fare == null ? "--" : `Rs ${formatMoney(Number(fare) * passengerCount)}`}
-                </Text>
+              {/* Fare summary card */}
+              <View style={styles.tkFareCard}>
+                <Text style={styles.tkFareCardLabel}>{t("active", "autoFare")}</Text>
+                <View style={styles.tkFareRow}>
+                  <View style={styles.tkFareItem}>
+                    <Text style={styles.tkFareSubLabel}>প্রতি যাত্রী</Text>
+                    <Text style={styles.tkFareValue}>{fare == null ? "--" : `Rs ${fare}`}</Text>
+                  </View>
+                  <Text style={styles.tkFareMult}>× {passengerCount}</Text>
+                  <View style={[styles.tkFareItem, { alignItems: "flex-end" }]}>
+                    <Text style={styles.tkFareSubLabel}>{t("active", "total", { count: passengerCount })}</Text>
+                    <Text style={styles.tkFareTotalValue}>
+                      {fare == null ? "--" : `Rs ${formatMoney(Number(fare) * passengerCount)}`}
+                    </Text>
+                  </View>
+                </View>
               </View>
 
               {!activeTrip?.ticketingEnabled ? (
-                <Text style={styles.helper}>{t("active", "waitingDriver")}</Text>
+                <View style={styles.tkNoticeBox}>
+                  <Text style={styles.tkNoticeText}>⏳ {t("active", "waitingDriver")}</Text>
+                </View>
               ) : null}
 
               {activeTrip?.driverEnded ? (
@@ -872,18 +974,25 @@ export default function ConductorActive() {
                 </View>
               ) : null}
 
+              {/* Generate ticket button */}
               <TouchableOpacity
-                style={styles.issueButton}
+                style={[
+                  styles.tkIssueBtn,
+                  (issuing || !activeTrip?.ticketingEnabled) && styles.tkIssueBtnDisabled,
+                ]}
                 onPress={issueTicket}
                 disabled={issuing || !activeTrip?.ticketingEnabled}
+                activeOpacity={0.84}
               >
-                <Text style={styles.primaryText}>{issuing ? t("active", "generating") : t("active", "generateTicket")}</Text>
+                <Text style={styles.tkIssueBtnText}>
+                  {issuing ? t("active", "generating") : t("active", "generateTicket")}
+                </Text>
               </TouchableOpacity>
 
               {lastTicket ? (
-                <View style={styles.ticketBox}>
-                  <Text style={styles.ticketTitle}>{t("active", "ticketGenerated")}</Text>
-                  <Text style={styles.ticketRow}>ID: {lastTicket.bookingId || "--"}</Text>
+                <View style={styles.tkLastTicket}>
+                  <Text style={styles.tkLastTicketTitle}>{t("active", "ticketGenerated")} ✓</Text>
+                  <Text style={styles.tkLastTicketId}>ID: {lastTicket.bookingId || "--"}</Text>
                 </View>
               ) : null}
             </>
@@ -1017,6 +1126,49 @@ export default function ConductorActive() {
           </View>
         </View>
       </Modal>
+
+      {/* ── Floating passengers-waiting bubble ── */}
+      {activeTrip ? (
+        <Animated.View
+          style={[styles.floatBubble, { left: floatPan.x, top: floatPan.y }]}
+          {...floatPanResponder.panHandlers}
+        >
+          {/* Header / drag handle */}
+          <View style={styles.floatBubbleHeader}>
+            <Text style={styles.floatBubbleIcon}>👥</Text>
+            <Text style={styles.floatBubbleTitle}>
+              {totalWaiting > 0 ? `${totalWaiting} waiting` : "No waiting"}
+            </Text>
+            {totalWaiting > 0 ? (
+              <View style={styles.floatBubbleBadge}>
+                <Text style={styles.floatBubbleBadgeText}>{totalWaiting}</Text>
+              </View>
+            ) : null}
+            <Text style={styles.floatBubbleChevron}>{waitingExpanded ? "▲" : "▼"}</Text>
+          </View>
+
+          {/* Stop list */}
+          {waitingExpanded ? (
+            (activeTrip.waitingSummary?.stops || []).length > 0 ? (
+              <View style={styles.floatBubbleList}>
+                {activeTrip.waitingSummary.stops.map((item) => (
+                  <View key={`fw-${item.stopName}-${item.stopIndex}`} style={styles.floatBubbleRow}>
+                    <View style={styles.floatBubbleStopDot} />
+                    <Text style={styles.floatBubbleStop} numberOfLines={1}>
+                      {item.stopName}
+                    </Text>
+                    <View style={styles.floatBubbleCountBadge}>
+                      <Text style={styles.floatBubbleCount}>{item.passengersWaiting}</Text>
+                    </View>
+                  </View>
+                ))}
+              </View>
+            ) : (
+              <Text style={styles.floatBubbleEmpty}>None yet</Text>
+            )
+          ) : null}
+        </Animated.View>
+      ) : null}
     </View>
   );
 }
@@ -1658,6 +1810,596 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     gap: 12,
     marginTop: 16,
+  },
+
+  // ── Offer card ──────────────────────────────────────────────────────────────
+  offerCard: {
+    marginTop: 16,
+    backgroundColor: "#0D2242",
+    borderRadius: 22,
+    padding: 18,
+    borderWidth: 1.5,
+    borderColor: "rgba(0,180,240,0.28)",
+    borderLeftWidth: 4,
+    borderLeftColor: "#00B4F0",
+    shadowColor: "#00B4F0",
+    shadowOpacity: 0.16,
+    shadowRadius: 20,
+    shadowOffset: { width: 0, height: 6 },
+    elevation: 6,
+  },
+  offerCardHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    marginBottom: 8,
+  },
+  offerRouteTag: {
+    backgroundColor: "rgba(0,180,240,0.16)",
+    borderWidth: 1,
+    borderColor: "rgba(0,180,240,0.36)",
+    borderRadius: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 5,
+  },
+  offerRouteCode: {
+    color: "#7DD3FC",
+    fontSize: 22,
+    fontWeight: "900",
+    letterSpacing: 0.5,
+  },
+  offerLiveBadge: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 5,
+    backgroundColor: "rgba(0,200,122,0.13)",
+    borderWidth: 1,
+    borderColor: "rgba(0,200,122,0.34)",
+    borderRadius: 999,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+  },
+  offerLiveDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: "#00C87A",
+  },
+  offerLiveText: {
+    color: "#00C87A",
+    fontSize: 10,
+    fontWeight: "800",
+    letterSpacing: 1,
+    textTransform: "uppercase",
+  },
+  offerRouteName: {
+    fontSize: 15,
+    fontWeight: "700",
+    color: "#CBD5E1",
+    marginBottom: 14,
+  },
+  offerInfoStrip: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "rgba(255,255,255,0.05)",
+    borderRadius: 14,
+    paddingVertical: 12,
+    paddingHorizontal: 14,
+    marginBottom: 14,
+  },
+  offerInfoCell: {
+    flex: 1,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+  },
+  offerInfoSep: {
+    width: 1,
+    height: 36,
+    backgroundColor: "rgba(255,255,255,0.1)",
+    marginHorizontal: 10,
+  },
+  offerInfoCellIcon: {
+    fontSize: 18,
+  },
+  offerInfoCellLabel: {
+    fontSize: 9,
+    color: "rgba(148,163,184,0.75)",
+    textTransform: "uppercase",
+    letterSpacing: 0.7,
+    fontWeight: "700",
+  },
+  offerInfoCellValue: {
+    color: "#F1F5F9",
+    fontWeight: "800",
+    fontSize: 13,
+    marginTop: 2,
+  },
+  offerJourney: {
+    backgroundColor: "rgba(255,255,255,0.04)",
+    borderRadius: 14,
+    paddingVertical: 12,
+    paddingHorizontal: 14,
+    marginBottom: 16,
+  },
+  offerJourneyRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
+  },
+  offerJourneyDotGreen: {
+    width: 10,
+    height: 10,
+    borderRadius: 5,
+    backgroundColor: "#00C87A",
+    borderWidth: 2,
+    borderColor: "rgba(0,200,122,0.38)",
+  },
+  offerJourneyDotRed: {
+    width: 10,
+    height: 10,
+    borderRadius: 5,
+    backgroundColor: "#F87171",
+    borderWidth: 2,
+    borderColor: "rgba(248,113,113,0.38)",
+  },
+  offerJourneyConnector: {
+    width: 2,
+    height: 16,
+    backgroundColor: "rgba(255,255,255,0.14)",
+    marginLeft: 4,
+    marginVertical: 3,
+  },
+  offerJourneyTextBlock: {
+    flex: 1,
+  },
+  offerJourneyLabel: {
+    fontSize: 9,
+    color: "rgba(148,163,184,0.72)",
+    textTransform: "uppercase",
+    letterSpacing: 0.7,
+    fontWeight: "700",
+  },
+  offerJourneyPlace: {
+    color: "#E2E8F0",
+    fontWeight: "700",
+    fontSize: 13,
+    marginTop: 1,
+  },
+  offerActionsRow: {
+    flexDirection: "row",
+    gap: 10,
+  },
+  offerAcceptBtn: {
+    flex: 1,
+    backgroundColor: "#059669",
+    borderWidth: 1,
+    borderColor: "rgba(16,185,129,0.4)",
+    paddingVertical: 14,
+    borderRadius: 14,
+    alignItems: "center",
+    shadowColor: "#059669",
+    shadowOpacity: 0.28,
+    shadowRadius: 10,
+    shadowOffset: { width: 0, height: 4 },
+    elevation: 4,
+  },
+  offerAcceptText: {
+    color: "#FFFFFF",
+    fontWeight: "800",
+    fontSize: 14,
+    letterSpacing: 0.3,
+  },
+  offerRejectBtn: {
+    flex: 1,
+    backgroundColor: "rgba(148,163,184,0.1)",
+    borderWidth: 1,
+    borderColor: "rgba(148,163,184,0.2)",
+    paddingVertical: 14,
+    borderRadius: 14,
+    alignItems: "center",
+  },
+  offerRejectText: {
+    color: "#94A3B8",
+    fontWeight: "700",
+    fontSize: 14,
+  },
+
+  // ── Ticket booking redesign ──────────────────────────────────────────────────
+  tkStep: {
+    marginTop: 14,
+    backgroundColor: "rgba(255,255,255,0.04)",
+    borderRadius: 18,
+    padding: 14,
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.08)",
+  },
+  tkStepHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    marginBottom: 12,
+  },
+  tkStepNumBadge: {
+    width: 26,
+    height: 26,
+    borderRadius: 13,
+    backgroundColor: "rgba(34,197,94,0.2)",
+    borderWidth: 1.5,
+    borderColor: "rgba(34,197,94,0.5)",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  tkStepNumBadgeTo: {
+    backgroundColor: "rgba(249,115,22,0.2)",
+    borderColor: "rgba(249,115,22,0.5)",
+  },
+  tkStepNumBadgePax: {
+    backgroundColor: "rgba(168,85,247,0.2)",
+    borderColor: "rgba(168,85,247,0.5)",
+  },
+  tkStepNumText: {
+    color: "#F8FAFC",
+    fontSize: 12,
+    fontWeight: "800",
+  },
+  tkStepLabel: {
+    color: "rgba(148,163,184,0.9)",
+    fontSize: 11,
+    fontWeight: "700",
+    textTransform: "uppercase",
+    letterSpacing: 0.8,
+    flex: 1,
+  },
+  tkStepSelectedFrom: {
+    backgroundColor: "rgba(34,197,94,0.18)",
+    borderWidth: 1,
+    borderColor: "rgba(34,197,94,0.4)",
+    borderRadius: 999,
+    paddingHorizontal: 10,
+    paddingVertical: 3,
+    maxWidth: 120,
+  },
+  tkStepSelectedTo: {
+    backgroundColor: "rgba(249,115,22,0.18)",
+    borderWidth: 1,
+    borderColor: "rgba(249,115,22,0.4)",
+    borderRadius: 999,
+    paddingHorizontal: 10,
+    paddingVertical: 3,
+    maxWidth: 120,
+  },
+  tkStepSelectedText: {
+    color: "#F8FAFC",
+    fontSize: 11,
+    fontWeight: "700",
+  },
+  tkStopGrid: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 8,
+  },
+  tkStopChip: {
+    paddingHorizontal: 15,
+    paddingVertical: 11,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.14)",
+    backgroundColor: "rgba(255,255,255,0.06)",
+  },
+  tkStopChipFrom: {
+    borderColor: "rgba(34,197,94,0.55)",
+    backgroundColor: "rgba(34,197,94,0.2)",
+  },
+  tkStopChipTo: {
+    borderColor: "rgba(249,115,22,0.55)",
+    backgroundColor: "rgba(249,115,22,0.2)",
+  },
+  tkStopChipDisabled: {
+    borderColor: "rgba(148,163,184,0.1)",
+    backgroundColor: "rgba(148,163,184,0.04)",
+    opacity: 0.38,
+  },
+  tkStopChipText: {
+    color: "rgba(226,232,240,0.88)",
+    fontSize: 13,
+    fontWeight: "600",
+  },
+  tkStopChipTextFrom: {
+    color: "#BBF7D0",
+    fontWeight: "800",
+  },
+  tkStopChipTextTo: {
+    color: "#FED7AA",
+    fontWeight: "800",
+  },
+  tkStopChipTextDisabled: {
+    color: "rgba(148,163,184,0.6)",
+  },
+  tkJourneySummary: {
+    marginTop: 10,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    backgroundColor: "rgba(255,255,255,0.05)",
+    borderRadius: 14,
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.1)",
+  },
+  tkJourneyDotGreen: {
+    width: 9,
+    height: 9,
+    borderRadius: 5,
+    backgroundColor: "#00C87A",
+    flexShrink: 0,
+  },
+  tkJourneyDotRed: {
+    width: 9,
+    height: 9,
+    borderRadius: 5,
+    backgroundColor: "#F87171",
+    flexShrink: 0,
+  },
+  tkJourneyFrom: {
+    color: "#BBF7D0",
+    fontSize: 13,
+    fontWeight: "700",
+    flex: 1,
+  },
+  tkJourneyArrow: {
+    color: "rgba(148,163,184,0.5)",
+    fontSize: 14,
+    fontWeight: "700",
+    flexShrink: 0,
+    paddingHorizontal: 2,
+  },
+  tkJourneyTo: {
+    color: "#FED7AA",
+    fontSize: 13,
+    fontWeight: "700",
+    flex: 1,
+    textAlign: "right",
+  },
+  tkPaxRow: {
+    flexDirection: "row",
+    gap: 8,
+  },
+  tkPaxBtn: {
+    flex: 1,
+    paddingVertical: 16,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.14)",
+    backgroundColor: "rgba(255,255,255,0.06)",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  tkPaxBtnActive: {
+    borderColor: "rgba(168,85,247,0.6)",
+    backgroundColor: "rgba(168,85,247,0.24)",
+  },
+  tkPaxBtnText: {
+    color: "rgba(226,232,240,0.85)",
+    fontSize: 18,
+    fontWeight: "700",
+  },
+  tkPaxBtnTextActive: {
+    color: "#E9D5FF",
+    fontWeight: "800",
+  },
+  tkFareCard: {
+    marginTop: 14,
+    backgroundColor: "rgba(0,200,122,0.07)",
+    borderWidth: 1,
+    borderColor: "rgba(0,200,122,0.24)",
+    borderRadius: 18,
+    paddingHorizontal: 18,
+    paddingVertical: 14,
+  },
+  tkFareCardLabel: {
+    fontSize: 10,
+    textTransform: "uppercase",
+    letterSpacing: 0.8,
+    color: "#6EE7B7",
+    fontWeight: "700",
+    marginBottom: 10,
+  },
+  tkFareRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+  },
+  tkFareItem: {
+    flex: 1,
+  },
+  tkFareSubLabel: {
+    fontSize: 10,
+    color: "rgba(148,163,184,0.7)",
+    marginBottom: 3,
+    fontWeight: "600",
+  },
+  tkFareValue: {
+    fontSize: 24,
+    fontWeight: "800",
+    color: "#F1F5F9",
+  },
+  tkFareMult: {
+    fontSize: 20,
+    fontWeight: "700",
+    color: "rgba(148,163,184,0.45)",
+    paddingHorizontal: 10,
+  },
+  tkFareTotalValue: {
+    fontSize: 24,
+    fontWeight: "800",
+    color: "#00C87A",
+    textAlign: "right",
+  },
+  tkNoticeBox: {
+    marginTop: 12,
+    backgroundColor: "rgba(251,191,36,0.1)",
+    borderWidth: 1,
+    borderColor: "rgba(251,191,36,0.28)",
+    borderRadius: 12,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+  },
+  tkNoticeText: {
+    color: "#FCD34D",
+    fontSize: 13,
+    fontWeight: "600",
+  },
+  tkIssueBtn: {
+    marginTop: 16,
+    backgroundColor: "#0D8FD6",
+    paddingVertical: 18,
+    borderRadius: 18,
+    alignItems: "center",
+    shadowColor: "#0D8FD6",
+    shadowOpacity: 0.35,
+    shadowRadius: 16,
+    shadowOffset: { width: 0, height: 6 },
+    elevation: 6,
+  },
+  tkIssueBtnDisabled: {
+    backgroundColor: "rgba(148,163,184,0.14)",
+    shadowOpacity: 0,
+    elevation: 0,
+  },
+  tkIssueBtnText: {
+    color: "#FFFFFF",
+    fontWeight: "800",
+    fontSize: 17,
+    letterSpacing: 0.4,
+  },
+  tkLastTicket: {
+    marginTop: 12,
+    backgroundColor: "rgba(0,200,122,0.1)",
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: "rgba(0,200,122,0.28)",
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+  },
+  tkLastTicketTitle: {
+    fontSize: 13,
+    fontWeight: "800",
+    color: "#6EE7B7",
+  },
+  tkLastTicketId: {
+    fontSize: 12,
+    color: "rgba(148,163,184,0.8)",
+    fontWeight: "600",
+  },
+
+  // ── Floating passengers-waiting bubble ──────────────────────────────────────
+  floatBubble: {
+    position: "absolute",
+    zIndex: 60,
+    minWidth: 155,
+    maxWidth: 220,
+    backgroundColor: "#0B1F3A",
+    borderRadius: 18,
+    borderWidth: 1.5,
+    borderColor: "rgba(56,189,248,0.4)",
+    shadowColor: "#38BDF8",
+    shadowOpacity: 0.25,
+    shadowRadius: 16,
+    shadowOffset: { width: 0, height: 4 },
+    elevation: 12,
+    overflow: "hidden",
+  },
+  floatBubbleHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    paddingHorizontal: 12,
+    paddingVertical: 11,
+  },
+  floatBubbleIcon: {
+    fontSize: 15,
+  },
+  floatBubbleTitle: {
+    flex: 1,
+    color: "#E0F2FE",
+    fontWeight: "700",
+    fontSize: 12,
+  },
+  floatBubbleBadge: {
+    backgroundColor: "#0369A1",
+    borderRadius: 999,
+    minWidth: 20,
+    height: 20,
+    alignItems: "center",
+    justifyContent: "center",
+    paddingHorizontal: 5,
+  },
+  floatBubbleBadgeText: {
+    color: "#FFFFFF",
+    fontSize: 10,
+    fontWeight: "800",
+  },
+  floatBubbleChevron: {
+    color: "rgba(148,163,184,0.55)",
+    fontSize: 9,
+    fontWeight: "700",
+    marginLeft: 2,
+  },
+  floatBubbleList: {
+    borderTopWidth: 1,
+    borderTopColor: "rgba(56,189,248,0.14)",
+    paddingHorizontal: 10,
+    paddingTop: 7,
+    paddingBottom: 10,
+    gap: 6,
+  },
+  floatBubbleRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 7,
+  },
+  floatBubbleStopDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: "#F59E0B",
+    flexShrink: 0,
+  },
+  floatBubbleStop: {
+    flex: 1,
+    color: "#CBD5E1",
+    fontSize: 12,
+    fontWeight: "600",
+  },
+  floatBubbleCountBadge: {
+    backgroundColor: "rgba(56,189,248,0.18)",
+    borderWidth: 1,
+    borderColor: "rgba(56,189,248,0.38)",
+    borderRadius: 999,
+    minWidth: 26,
+    height: 22,
+    alignItems: "center",
+    justifyContent: "center",
+    paddingHorizontal: 5,
+  },
+  floatBubbleCount: {
+    color: "#38BDF8",
+    fontSize: 11,
+    fontWeight: "800",
+  },
+  floatBubbleEmpty: {
+    borderTopWidth: 1,
+    borderTopColor: "rgba(56,189,248,0.1)",
+    paddingHorizontal: 12,
+    paddingVertical: 9,
+    color: "rgba(148,163,184,0.6)",
+    fontSize: 11,
+    fontStyle: "italic",
   },
 });
 

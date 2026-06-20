@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import OperatorToggle from "./components/OperatorToggle.jsx";
 import "./App.css";
 import { getOpsDate } from "./utils/opsTime.js";
@@ -17,6 +17,7 @@ const createActivity = (type, message) => ({
 });
 
 function Dashboard({ apiBase, setApiBase, token, setToken, user, setUser, operatorScope, setOperatorScope }) {
+  const navigate = useNavigate();
   const [notice, setNotice] = useState(null);
   const [activity, setActivity] = useState([]);
 
@@ -60,6 +61,13 @@ function Dashboard({ apiBase, setApiBase, token, setToken, user, setUser, operat
 
   const addActivity = (type, message) => {
     setActivity((prev) => [createActivity(type, message), ...prev].slice(0, 8));
+  };
+
+  const handleLogout = () => {
+    setToken("");
+    setUser(null);
+    showNotice("success", "Logged out.");
+    navigate("/", { replace: true });
   };
 
   const apiFetch = async (path, options = {}) => {
@@ -363,7 +371,7 @@ function Dashboard({ apiBase, setApiBase, token, setToken, user, setUser, operat
           <div className="sidebar-brand">
             <div className="brand-mark" />
             <div>
-              <p className="sidebar-title">WBTC Fleet</p>
+              <p className="sidebar-title">Qfare Fleet</p>
               <span className="pill">Ops console</span>
             </div>
           </div>
@@ -384,17 +392,15 @@ function Dashboard({ apiBase, setApiBase, token, setToken, user, setUser, operat
             <Link className="nav-item" to="/qfare-privacy-policy">QFare Privacy Policy</Link>
           </nav>
           <div className="sidebar-footer">
-            <span className="pill">API: {apiBase}</span>
-            <button
-              className="btn ghost"
-              type="button"
-              onClick={() => {
-                setToken("");
-                setUser(null);
-              }}
-            >
-              Clear session
-            </button>
+            {token ? (
+              <button className="btn ghost" type="button" onClick={handleLogout}>
+                Logout
+              </button>
+            ) : (
+              <Link className="btn ghost" to="/">
+                Login
+              </Link>
+            )}
           </div>
         </aside>
 
@@ -403,7 +409,7 @@ function Dashboard({ apiBase, setApiBase, token, setToken, user, setUser, operat
             <div className="brand">
               <div className="brand-mark" />
               <div>
-                <h1>WBTC Fleet Ops</h1>
+                <h1>Qfare Fleet Ops</h1>
                 <span className="pill">{operatorScope} operations console</span>
               </div>
             </div>
@@ -411,6 +417,15 @@ function Dashboard({ apiBase, setApiBase, token, setToken, user, setUser, operat
               <OperatorToggle value={operatorScope} onChange={setOperatorScope} />
               <span className="pill">{user?.name || "Guest"}</span>
               <span className="pill">Role: {user?.role || "VIEWER"}</span>
+              {token ? (
+                <button className="btn ghost" type="button" onClick={handleLogout}>
+                  Logout
+                </button>
+              ) : (
+                <Link className="btn ghost" to="/">
+                  Login
+                </Link>
+              )}
             </div>
           </header>
 

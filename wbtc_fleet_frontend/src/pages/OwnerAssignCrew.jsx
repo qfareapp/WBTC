@@ -123,7 +123,6 @@ function OwnerAssignCrew({ apiBase, token, user, setToken, setUser }) {
             <Link className="nav-item" to="/owner/billing">Billing</Link>
           </nav>
           <div className="sidebar-footer">
-            <span className="pill">API: {apiBase}</span>
             <button
               className="btn ghost"
               type="button"

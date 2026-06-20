@@ -12,7 +12,7 @@ const signToken = (user) =>
   );
 
 exports.register = asyncHandler(async (req, res) => {
-  const { name, username, password, role, depotId } = req.body;
+  const { name, username, password, role, depotId, phoneNumber, whatsappNumber, email } = req.body;
 
   const exists = await User.findOne({ username });
   if (exists) throw new ApiError(409, "Username already exists");
@@ -23,6 +23,9 @@ exports.register = asyncHandler(async (req, res) => {
     username,
     passwordHash,
     role,
+    phoneNumber: String(phoneNumber || "").trim(),
+    whatsappNumber: String(whatsappNumber || "").trim(),
+    email: String(email || "").trim().toLowerCase(),
     depotId: depotId || null,
     mustChangePassword: false,
     passwordUpdatedAt: new Date(),
@@ -30,7 +33,15 @@ exports.register = asyncHandler(async (req, res) => {
 
   res.status(201).json({
     ok: true,
-    user: { id: user._id, name: user.name, username: user.username, role: user.role },
+    user: {
+      id: user._id,
+      name: user.name,
+      username: user.username,
+      role: user.role,
+      phoneNumber: user.phoneNumber,
+      whatsappNumber: user.whatsappNumber,
+      email: user.email,
+    },
     token: signToken(user),
     mustChangePassword: Boolean(user.mustChangePassword),
   });
@@ -55,6 +66,9 @@ exports.login = asyncHandler(async (req, res) => {
       username: user.username,
       role: user.role,
       depotId: user.depotId,
+      phoneNumber: user.phoneNumber,
+      whatsappNumber: user.whatsappNumber,
+      email: user.email,
     },
   });
 });

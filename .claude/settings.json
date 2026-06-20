@@ -45,7 +45,11 @@
       "Bash(node run-old.js)",
       "Bash(node run-isolate.js)",
       "Bash(node run-old-target-fix.js)",
-      "Bash(tasklist)"
+      "Bash(tasklist)",
+      "Bash(node --input-type=module --experimental-vm-modules)",
+      "Bash(npx --yes acorn --ecma2022 --module src/pages/OwnersOverview.jsx)",
+      "Bash(npx vite *)",
+      "Bash(node -e ' *)"
     ],
     "additionalDirectories": [
       "C:\\Users\\Pranjal Mullick\\.gradle\\caches\\8.14.3\\transforms"

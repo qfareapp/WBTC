@@ -85,7 +85,7 @@ function LiveTrips({ apiBase, token }) {
           <div className="sidebar-brand">
             <div className="brand-mark" />
             <div>
-              <p className="sidebar-title">WBTC Fleet</p>
+              <p className="sidebar-title">Qfare Fleet</p>
               <span className="pill">Live operations</span>
             </div>
           </div>

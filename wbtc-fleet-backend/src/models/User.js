@@ -11,11 +11,22 @@ const UserSchema = new mongoose.Schema(
       default: "VIEWER",
       index: true,
     },
+    phoneNumber: { type: String, default: "" },
+    whatsappNumber: { type: String, default: "" },
+    email: { type: String, default: "" },
     depotId: { type: mongoose.Schema.Types.ObjectId, ref: "Depot", default: null },
     active: { type: Boolean, default: true },
     mustChangePassword: { type: Boolean, default: false, index: true },
     passwordUpdatedAt: { type: Date, default: null },
     passwordResetAt: { type: Date, default: null },
+    payoutBankDetails: {
+      accountHolderName: { type: String, default: "" },
+      bankName: { type: String, default: "" },
+      accountNumber: { type: String, default: "" },
+      ifscCode: { type: String, default: "" },
+      branchName: { type: String, default: "" },
+      updatedAt: { type: Date, default: null },
+    },
   },
   { timestamps: true }
 );

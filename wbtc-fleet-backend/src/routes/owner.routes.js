@@ -13,11 +13,15 @@ const {
   getOwnerBilling,
   updateOwnerBusLocation,
   updateOwnerBusRoute,
+  getOwnerPayoutDetails,
+  updateOwnerPayoutDetails,
 } = require("../controllers/owner.controller");
 
 router.use(auth, requireRole("OWNER"));
 
 router.get("/dashboard", getOwnerFleetDashboard);
+router.get("/payout-details", getOwnerPayoutDetails);
+router.put("/payout-details", updateOwnerPayoutDetails);
 router.get("/payment-summary", getOwnerPaymentSummary);
 router.get("/billing", getOwnerBilling);
 router.get("/personnel", listOwnerPersonnel);

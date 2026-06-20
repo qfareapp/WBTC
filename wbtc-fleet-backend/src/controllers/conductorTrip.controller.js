@@ -245,8 +245,6 @@ const collectEligibleTripOffersForConductor = async ({ conductorId, date = today
   const mappedDriverIds = Array.from(
     new Set(mappedRows.map((row) => String(row.driverId || "")).filter(Boolean))
   );
-  const { nowMinutes } = getOpsNowParts();
-
   const driverAcceptedRows = await DriverAssignment.find({
     date,
     status: { $in: ["Scheduled", "Active"] },
@@ -322,13 +320,6 @@ const collectEligibleTripOffersForConductor = async ({ conductorId, date = today
       trackSkip(trip, "conductor_rejected_trip");
       continue;
     }
-
-    const tripStartMinutes = toMinutes(trip.startTime);
-    if (String(trip.status || "") !== "Active" && tripStartMinutes !== null && tripStartMinutes < nowMinutes - 10) {
-      trackSkip(trip, "trip_offer_expired");
-      continue;
-    }
-
     const pickupLocation = getStartLocation(route, trip.direction);
     const mappedBusId = String(acceptedDriverRow.busId || trip.busId?._id || trip.busId || "");
     if (!mappedBusId) {
@@ -472,12 +463,6 @@ exports.acceptConductorOffer = asyncHandler(async (req, res) => {
     status: { $in: ["Scheduled", "Active"] },
   });
   if (activeAssignment) throw new ApiError(409, "Finish current trip before accepting a new offer");
-
-  const { nowMinutes } = getOpsNowParts();
-  const tripStartMinutes = toMinutes(trip.startTime);
-  if (tripStartMinutes !== null && tripStartMinutes < nowMinutes - 10) {
-    throw new ApiError(409, "Trip offer expired");
-  }
 
   const driverAssignment = await DriverAssignment.findOne({
     date: trip.date,

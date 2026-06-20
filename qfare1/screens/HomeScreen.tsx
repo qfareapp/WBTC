@@ -1259,8 +1259,8 @@ lb.style.left=W/2+'px';lb.style.top=H/2+'px';map.appendChild(lb);
                                 : 'No tickets booked yet'
                               : load.onboard !== null
                                 ? load.capacity > 0
-                                  ? `${load.onboard} / ${load.capacity} seats occupied`
-                                  : `${load.onboard} passengers onboard`
+                                  ? `${load.onboard} / ${load.capacity} seats occupied${load.totalBooked > 0 ? ` · ${load.totalBooked} ticket${load.totalBooked !== 1 ? 's' : ''} booked` : ''}`
+                                  : `${load.onboard} passengers onboard${load.totalBooked > 0 ? ` · ${load.totalBooked} ticket${load.totalBooked !== 1 ? 's' : ''} booked` : ''}`
                                 : 'Estimating...'}
                           </Text>
                         </View>

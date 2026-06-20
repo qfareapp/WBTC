@@ -1,9 +1,9 @@
 import { useState } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { useNavigate } from "react-router-dom";
 import "../App.css";
 import "./Auth.css";
 
-function Login({ apiBase, setApiBase, setToken, setUser }) {
+function Login({ apiBase, setToken, setUser }) {
   const navigate = useNavigate();
   const [form, setForm] = useState({ username: "", password: "" });
   const [error, setError] = useState("");
@@ -40,7 +40,7 @@ function Login({ apiBase, setApiBase, setToken, setUser }) {
         <div className="auth-brand">
           <span className="auth-mark" />
           <div>
-            <h1>WBTC Fleet Ops</h1>
+            <h1>Qfare Fleet Ops</h1>
             <p className="auth-subtitle">Sign in to access the dashboard.</p>
           </div>
         </div>
@@ -48,14 +48,6 @@ function Login({ apiBase, setApiBase, setToken, setUser }) {
         {error ? <div className="auth-error">{error}</div> : null}
 
         <form className="auth-form" onSubmit={handleSubmit}>
-          <label>
-            API base URL
-            <input
-              value={apiBase}
-              onChange={(event) => setApiBase(event.target.value)}
-              placeholder="http://localhost:5000"
-            />
-          </label>
           <label>
             Username
             <input
@@ -80,9 +72,6 @@ function Login({ apiBase, setApiBase, setToken, setUser }) {
             <button className="btn primary" type="submit">
               Sign in
             </button>
-            <span className="auth-link">
-              Need an account? <Link to="/register">Register</Link>
-            </span>
           </div>
         </form>
       </div>

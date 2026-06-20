@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { ActivityIndicator, Linking, ScrollView, StyleSheet, Text, TouchableOpacity, View } from "react-native";
+import { ActivityIndicator, Linking, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from "react-native";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { useRouter } from "expo-router";
 import { Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
@@ -15,6 +15,15 @@ const MUST_CHANGE_PASSWORD_KEY = "wbtc_must_change_password";
 const PRIVACY_POLICY_URL = "https://wbtc-rose.vercel.app/privacy-policy";
 const FAQS_URL = "https://wbtc-rose.vercel.app/faqs";
 const HELP_WHATSAPP_NUMBER = "919831003953";
+
+const EMPTY_PAYOUT = {
+  accountHolderName: "",
+  bankName: "",
+  accountNumber: "",
+  ifscCode: "",
+  branchName: "",
+  updatedAt: null,
+};
 
 const formatMoney = (value) => {
   const num = Number(value);
@@ -39,6 +48,9 @@ export default function OwnerProfile() {
   const [breakdownOpen, setBreakdownOpen] = useState(false);
   const [notice, setNotice] = useState("");
   const [refreshing, setRefreshing] = useState(false);
+  const [payoutFormOpen, setPayoutFormOpen] = useState(false);
+  const [payoutSaving, setPayoutSaving] = useState(false);
+  const [payoutDetails, setPayoutDetails] = useState(EMPTY_PAYOUT);
 
   const loadPaymentSummary = useCallback(async () => {
     const [apiBase, token] = await Promise.all([
@@ -70,6 +82,32 @@ export default function OwnerProfile() {
     }
   }, [t]);
 
+  const loadPayoutDetails = useCallback(async () => {
+    const [apiBase, token] = await Promise.all([
+      AsyncStorage.getItem(API_BASE_KEY),
+      AsyncStorage.getItem(TOKEN_KEY),
+    ]);
+    if (!apiBase || !token) return;
+    try {
+      const response = await fetch(`${apiBase}/api/owner/payout-details`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      const text = await response.text();
+      const data = text ? JSON.parse(text) : {};
+      if (!response.ok) throw new Error(data.message || t("ownerProfile", "failedLoadPayoutDetails"));
+      setPayoutDetails({
+        accountHolderName: data.payoutBankDetails?.accountHolderName || "",
+        bankName: data.payoutBankDetails?.bankName || "",
+        accountNumber: data.payoutBankDetails?.accountNumber || "",
+        ifscCode: data.payoutBankDetails?.ifscCode || "",
+        branchName: data.payoutBankDetails?.branchName || "",
+        updatedAt: data.payoutBankDetails?.updatedAt || null,
+      });
+    } catch (err) {
+      setNotice(err.message);
+    }
+  }, [t]);
+
   useEffect(() => {
     const loadProfile = async () => {
       const ownerJson = await AsyncStorage.getItem(OWNER_KEY);
@@ -77,7 +115,62 @@ export default function OwnerProfile() {
     };
     loadProfile();
     loadPaymentSummary();
-  }, [loadPaymentSummary]);
+    loadPayoutDetails();
+  }, [loadPaymentSummary, loadPayoutDetails]);
+
+  const handlePayoutFieldChange = (field, value) => {
+    setPayoutDetails((prev) => ({
+      ...prev,
+      [field]: field === "ifscCode" ? value.toUpperCase() : value,
+    }));
+  };
+
+  const handleSavePayoutDetails = async () => {
+    const [apiBase, token] = await Promise.all([
+      AsyncStorage.getItem(API_BASE_KEY),
+      AsyncStorage.getItem(TOKEN_KEY),
+    ]);
+    if (!apiBase || !token) {
+      router.replace("/login");
+      return;
+    }
+
+    setPayoutSaving(true);
+    try {
+      const response = await fetch(`${apiBase}/api/owner/payout-details`, {
+        method: "PUT",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({
+          accountHolderName: payoutDetails.accountHolderName,
+          bankName: payoutDetails.bankName,
+          accountNumber: payoutDetails.accountNumber,
+          ifscCode: payoutDetails.ifscCode,
+          branchName: payoutDetails.branchName,
+        }),
+      });
+      const text = await response.text();
+      const data = text ? JSON.parse(text) : {};
+      if (!response.ok) throw new Error(data.message || t("ownerProfile", "failedSavePayoutDetails"));
+
+      setPayoutDetails({
+        accountHolderName: data.payoutBankDetails?.accountHolderName || "",
+        bankName: data.payoutBankDetails?.bankName || "",
+        accountNumber: data.payoutBankDetails?.accountNumber || "",
+        ifscCode: data.payoutBankDetails?.ifscCode || "",
+        branchName: data.payoutBankDetails?.branchName || "",
+        updatedAt: data.payoutBankDetails?.updatedAt || null,
+      });
+      setPayoutFormOpen(false);
+      setNotice(t("ownerProfile", "payoutUpdated"));
+    } catch (err) {
+      setNotice(err.message);
+    } finally {
+      setPayoutSaving(false);
+    }
+  };
 
   const handleLogout = async () => {
     await AsyncStorage.multiRemove([TOKEN_KEY, USER_ROLE_KEY, OWNER_KEY, API_BASE_KEY, MUST_CHANGE_PASSWORD_KEY]);
@@ -131,6 +224,100 @@ export default function OwnerProfile() {
           <Text style={styles.label}>{t("ownerProfile", "role")}</Text>
           <Text style={styles.valueAccent}>{owner?.role || "OWNER"}</Text>
         </View>
+      </View>
+
+      <View style={styles.card}>
+        <View style={styles.cardStripPayout} />
+        <TouchableOpacity
+          style={styles.collapseToggle}
+          onPress={() => setPayoutFormOpen((prev) => !prev)}
+          activeOpacity={0.85}
+        >
+          <View style={styles.collapseMain}>
+            <Text style={styles.billingTitle}>{t("ownerProfile", "payoutDetails")}</Text>
+            <Text style={styles.cardSubtitle}>{t("ownerProfile", "payoutSubtitle")}</Text>
+          </View>
+          <Ionicons
+            name={payoutFormOpen ? "chevron-up-outline" : "chevron-down-outline"}
+            size={18}
+            color="rgba(255,255,255,0.75)"
+          />
+        </TouchableOpacity>
+
+        {payoutDetails.updatedAt ? (
+          <Text style={styles.billingRange}>
+            {t("ownerProfile", "payoutUpdatedAt")}: {new Date(payoutDetails.updatedAt).toLocaleString()}
+          </Text>
+        ) : (
+          <Text style={styles.billingRange}>{t("ownerProfile", "payoutMissing")}</Text>
+        )}
+
+        {!payoutFormOpen ? (
+          <TouchableOpacity style={styles.inlineAction} onPress={() => setPayoutFormOpen(true)}>
+            <Text style={styles.inlineActionText}>
+              {payoutDetails.accountNumber
+                ? t("ownerProfile", "updatePayoutDetails")
+                : t("ownerProfile", "addPayoutDetails")}
+            </Text>
+          </TouchableOpacity>
+        ) : (
+          <View style={styles.formBlock}>
+            <Text style={styles.inputLabel}>{t("ownerProfile", "accountHolderName")}</Text>
+            <TextInput
+              style={styles.input}
+              value={payoutDetails.accountHolderName}
+              onChangeText={(value) => handlePayoutFieldChange("accountHolderName", value)}
+              placeholder={t("ownerProfile", "accountHolderName")}
+              placeholderTextColor="rgba(255,255,255,0.24)"
+            />
+
+            <Text style={styles.inputLabel}>{t("ownerProfile", "bankName")}</Text>
+            <TextInput
+              style={styles.input}
+              value={payoutDetails.bankName}
+              onChangeText={(value) => handlePayoutFieldChange("bankName", value)}
+              placeholder={t("ownerProfile", "bankName")}
+              placeholderTextColor="rgba(255,255,255,0.24)"
+            />
+
+            <Text style={styles.inputLabel}>{t("ownerProfile", "accountNumber")}</Text>
+            <TextInput
+              style={styles.input}
+              value={payoutDetails.accountNumber}
+              onChangeText={(value) => handlePayoutFieldChange("accountNumber", value.replace(/[^0-9]/g, ""))}
+              placeholder={t("ownerProfile", "accountNumber")}
+              placeholderTextColor="rgba(255,255,255,0.24)"
+              keyboardType="number-pad"
+            />
+
+            <Text style={styles.inputLabel}>{t("ownerProfile", "ifscCode")}</Text>
+            <TextInput
+              style={styles.input}
+              value={payoutDetails.ifscCode}
+              onChangeText={(value) => handlePayoutFieldChange("ifscCode", value.replace(/[^a-zA-Z0-9]/g, ""))}
+              placeholder={t("ownerProfile", "ifscCode")}
+              placeholderTextColor="rgba(255,255,255,0.24)"
+              autoCapitalize="characters"
+            />
+
+            <Text style={styles.inputLabel}>{t("ownerProfile", "branchName")}</Text>
+            <TextInput
+              style={styles.input}
+              value={payoutDetails.branchName}
+              onChangeText={(value) => handlePayoutFieldChange("branchName", value)}
+              placeholder={t("ownerProfile", "branchName")}
+              placeholderTextColor="rgba(255,255,255,0.24)"
+            />
+
+            <TouchableOpacity style={styles.primaryAction} onPress={handleSavePayoutDetails} disabled={payoutSaving}>
+              {payoutSaving ? (
+                <ActivityIndicator color="#FFFFFF" size="small" />
+              ) : (
+                <Text style={styles.primaryActionText}>{t("ownerProfile", "savePayoutDetails")}</Text>
+              )}
+            </TouchableOpacity>
+          </View>
+        )}
       </View>
 
       <View style={styles.card}>
@@ -399,6 +586,14 @@ const styles = StyleSheet.create({
     height: 4,
     backgroundColor: "#A78BFA",
   },
+  cardStripPayout: {
+    position: "absolute",
+    top: 0,
+    left: 0,
+    right: 0,
+    height: 4,
+    backgroundColor: "#00C87A",
+  },
   cardStripBilling: {
     position: "absolute",
     top: 0,
@@ -492,6 +687,14 @@ const styles = StyleSheet.create({
     fontWeight: "800",
     letterSpacing: 0.8,
   },
+  collapseMain: {
+    flex: 1,
+  },
+  cardSubtitle: {
+    marginTop: 4,
+    color: "rgba(255,255,255,0.42)",
+    fontSize: 12,
+  },
   billingHead: {
     marginTop: 4,
     marginBottom: 8,
@@ -524,6 +727,55 @@ const styles = StyleSheet.create({
     marginBottom: 10,
     color: "rgba(255,255,255,0.38)",
     fontSize: 12,
+  },
+  inlineAction: {
+    marginTop: 6,
+    alignSelf: "flex-start",
+    paddingVertical: 10,
+    paddingHorizontal: 14,
+    borderRadius: 12,
+    backgroundColor: "rgba(0,200,122,0.14)",
+    borderWidth: 1,
+    borderColor: "rgba(0,200,122,0.24)",
+  },
+  inlineActionText: {
+    color: "#86EFAC",
+    fontWeight: "800",
+  },
+  formBlock: {
+    marginTop: 6,
+  },
+  inputLabel: {
+    marginTop: 12,
+    color: "rgba(255,255,255,0.45)",
+    fontSize: 11,
+    textTransform: "uppercase",
+    letterSpacing: 0.9,
+    fontWeight: "700",
+  },
+  input: {
+    marginTop: 8,
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.1)",
+    borderRadius: 14,
+    paddingHorizontal: 14,
+    paddingVertical: 13,
+    fontSize: 15,
+    color: "#FFFFFF",
+    backgroundColor: "rgba(255,255,255,0.06)",
+  },
+  primaryAction: {
+    marginTop: 16,
+    backgroundColor: "#00C87A",
+    paddingVertical: 14,
+    borderRadius: 16,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  primaryActionText: {
+    color: "#04111F",
+    fontWeight: "800",
+    letterSpacing: 0.3,
   },
   payLabelWrap: {
     flexDirection: "row",

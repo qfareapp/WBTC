@@ -21,7 +21,7 @@ const OWNER_KEY = "wbtc_owner_profile";
 const USER_ROLE_KEY = "wbtc_user_role";
 const MUST_CHANGE_PASSWORD_KEY = "wbtc_must_change_password";
 const PRODUCTION_API_BASE = "https://wbtc-aduk.onrender.com";
-const LOCAL_API_HOST = "192.168.16.22";
+const LOCAL_API_HOST = "192.168.15.183";
 const LOCAL_API_PORT = "5000";
 
 const getExpoHostUri = () => {
