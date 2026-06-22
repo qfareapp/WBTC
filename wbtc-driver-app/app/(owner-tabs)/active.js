@@ -317,6 +317,31 @@ export default function OwnerActive() {
     }
   };
 
+  const resetBusStartPoint = async (bus) => {
+    const busId = String(bus.id);
+    try {
+      const auth = await getAuth();
+      if (!auth) return;
+      setLocationSavingBusId(busId);
+      const response = await fetch(`${auth.apiBase}/api/owner/buses/${bus.id}/location/reset`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${auth.token}`,
+        },
+      });
+      const text = await response.text();
+      const data = text ? JSON.parse(text) : {};
+      if (!response.ok) throw new Error(data.message || "Failed to reset start point");
+      setLocationDraft((prev) => ({ ...prev, [busId]: "" }));
+      setNotice(data.message || `Start point reset for ${bus.busNumber}.`);
+      await loadDashboard();
+    } catch (err) {
+      setNotice(err.message);
+    } finally {
+      setLocationSavingBusId("");
+    }
+  };
+
   const setBusRoute = async (bus) => {
     const busId = String(bus.id);
     const nextRouteId = String(routeDraft[busId] || bus.attachedRoute?.id || "").trim();
@@ -547,6 +572,15 @@ export default function OwnerActive() {
                         >
                           <Text style={styles.actionText}>
                             {locationSavingBusId === String(bus.id) ? t("common", "saving") : t("ownerActive", "setStartPoint")}
+                          </Text>
+                        </TouchableOpacity>
+                        <TouchableOpacity
+                          style={[styles.actionBtn, styles.resetBtn, isOnLiveTrip ? styles.actionBtnDisabled : null]}
+                          onPress={() => resetBusStartPoint(bus)}
+                          disabled={isOnLiveTrip || locationSavingBusId === String(bus.id)}
+                        >
+                          <Text style={styles.resetText}>
+                            {locationSavingBusId === String(bus.id) ? t("common", "saving") : "Reset start point"}
                           </Text>
                         </TouchableOpacity>
                       </>

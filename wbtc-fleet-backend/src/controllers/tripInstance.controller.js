@@ -577,6 +577,21 @@ exports.completeTrip = asyncHandler(async (req, res) => {
     if (assignment && assignment.driverId) {
       updates.push(Driver.findByIdAndUpdate(assignment.driverId, { $set: { currentLocation: endLocation } }));
     }
+    if (trip.busId) {
+      const activeMappings = await BusCrewMapping.find({ busId: trip.busId, isActive: true }).select("driverId conductorId");
+      const driverIds = Array.from(
+        new Set(activeMappings.map((mapping) => String(mapping.driverId || "").trim()).filter(Boolean))
+      );
+      const conductorIds = Array.from(
+        new Set(activeMappings.map((mapping) => String(mapping.conductorId || "").trim()).filter(Boolean))
+      );
+      if (driverIds.length) {
+        updates.push(Driver.updateMany({ _id: { $in: driverIds } }, { $set: { currentLocation: endLocation } }));
+      }
+      if (conductorIds.length) {
+        updates.push(Conductor.updateMany({ _id: { $in: conductorIds } }, { $set: { currentLocation: endLocation } }));
+      }
+    }
     if (updates.length) await Promise.all(updates);
   } else if (trip.busId && typeof trip.closingKm === "number") {
     await Bus.findByIdAndUpdate(trip.busId, { $set: { lastOdometerKm: trip.closingKm } });

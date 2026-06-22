@@ -120,6 +120,37 @@ const syncCrewLocationToBus = async ({ bus, driverId, conductorId }) => {
   if (updates.length) await Promise.all(updates);
 };
 
+const syncMappedCrewLocation = async ({ busId, location }) => {
+  const activeMappings = await BusCrewMapping.find({ busId, isActive: true }).select("driverId conductorId");
+  const driverIds = Array.from(
+    new Set(activeMappings.map((mapping) => String(mapping.driverId || "").trim()).filter(Boolean))
+  );
+  const conductorIds = Array.from(
+    new Set(activeMappings.map((mapping) => String(mapping.conductorId || "").trim()).filter(Boolean))
+  );
+  const updates = [];
+  if (driverIds.length) {
+    updates.push(Driver.updateMany({ _id: { $in: driverIds } }, { $set: { currentLocation: location || null } }));
+  }
+  if (conductorIds.length) {
+    updates.push(Conductor.updateMany({ _id: { $in: conductorIds } }, { $set: { currentLocation: location || null } }));
+  }
+  if (updates.length) await Promise.all(updates);
+};
+
+const removeBusFromRouteDayActivation = async ({ routeId, busId, date }) => {
+  if (!routeId || !busId || !date) return;
+  await RouteDayActivation.updateOne(
+    { date, routeId },
+    {
+      $pull: {
+        busIdsUp: busId,
+        busIdsDown: busId,
+      },
+    }
+  );
+};
+
 const toMinutes = (time) => {
   if (!time) return null;
   const [hh, mm] = String(time).split(":").map(Number);
@@ -613,12 +644,13 @@ exports.updateOwnerBusLocation = asyncHandler(async (req, res) => {
   const ownerId = req.user.userId;
   const { busId } = req.params;
   const { location } = req.body;
+  const opsDate = getOpsDate();
 
   const nextLocation = String(location || "").trim();
   if (!nextLocation) throw new ApiError(400, "location required");
 
   const bus = await Bus.findOne({ _id: busId, ownerId })
-    .select("busNumber currentLocation attachedRouteId")
+    .select("busNumber currentLocation attachedRouteId locationLockedForDate locationLockedAt")
     .populate("attachedRouteId", "routeCode routeName source destination");
   if (!bus) throw new ApiError(404, "Bus not found in your fleet");
   if (!bus.attachedRouteId) throw new ApiError(400, "Attach this bus to a route before setting start location");
@@ -645,49 +677,24 @@ exports.updateOwnerBusLocation = asyncHandler(async (req, res) => {
     );
   }
 
+  const currentNorm = String(bus.currentLocation || "").trim().toLowerCase();
+  const isLockedForToday = String(bus.locationLockedForDate || "") === opsDate;
+  if (isLockedForToday && currentNorm && currentNorm !== nextNorm) {
+    throw new ApiError(409, "Start point already locked for today. Reset it before setting again.");
+  }
+
   bus.currentLocation = nextNorm === sourceNorm ? source : destination;
+  bus.locationLockedForDate = opsDate;
+  bus.locationLockedAt = new Date();
   await bus.save();
 
   await resyncActiveRouteDayForBus({
     routeId: bus.attachedRouteId._id,
     busId: bus._id,
     currentLocation: bus.currentLocation,
-    date: getOpsDate(),
+    date: opsDate,
   });
-
-  const activeMappings = await BusCrewMapping.find({ busId: bus._id, isActive: true }).select("driverId conductorId");
-  const driverIds = Array.from(
-    new Set(
-      activeMappings
-        .map((mapping) => String(mapping.driverId || "").trim())
-        .filter(Boolean)
-    )
-  );
-  const conductorIds = Array.from(
-    new Set(
-      activeMappings
-        .map((mapping) => String(mapping.conductorId || "").trim())
-        .filter(Boolean)
-    )
-  );
-  const updates = [];
-  if (driverIds.length) {
-    updates.push(
-      Driver.updateMany(
-        { _id: { $in: driverIds } },
-        { $set: { currentLocation: bus.currentLocation } }
-      )
-    );
-  }
-  if (conductorIds.length) {
-    updates.push(
-      Conductor.updateMany(
-        { _id: { $in: conductorIds } },
-        { $set: { currentLocation: bus.currentLocation } }
-      )
-    );
-  }
-  if (updates.length) await Promise.all(updates);
+  await syncMappedCrewLocation({ busId: bus._id, location: bus.currentLocation });
 
   res.json({
     ok: true,
@@ -703,6 +710,51 @@ exports.updateOwnerBusLocation = asyncHandler(async (req, res) => {
         destination,
       },
     },
+  });
+});
+
+exports.resetOwnerBusLocation = asyncHandler(async (req, res) => {
+  const ownerId = req.user.userId;
+  const { busId } = req.params;
+  const opsDate = getOpsDate();
+
+  const bus = await Bus.findOne({ _id: busId, ownerId })
+    .select("busNumber currentLocation attachedRouteId")
+    .populate("attachedRouteId", "routeCode routeName source destination");
+  if (!bus) throw new ApiError(404, "Bus not found in your fleet");
+
+  const activeAssignment = await DriverAssignment.findOne({
+    busId: bus._id,
+    date: opsDate,
+    status: "Active",
+  }).select("_id");
+  if (activeAssignment) {
+    throw new ApiError(409, "Cannot reset start point while the bus is on a live trip");
+  }
+
+  bus.currentLocation = null;
+  bus.locationLockedForDate = null;
+  bus.locationLockedAt = null;
+  await bus.save();
+
+  if (bus.attachedRouteId?._id) {
+    await removeBusFromRouteDayActivation({
+      routeId: bus.attachedRouteId._id,
+      busId: bus._id,
+      date: opsDate,
+    });
+  }
+
+  await syncMappedCrewLocation({ busId: bus._id, location: null });
+
+  res.json({
+    ok: true,
+    bus: {
+      id: bus._id,
+      busNumber: bus.busNumber,
+      currentLocation: null,
+    },
+    message: "Start point reset. Set a new start point to receive fresh trip offers.",
   });
 });
 
@@ -736,6 +788,8 @@ exports.updateOwnerBusRoute = asyncHandler(async (req, res) => {
 
   bus.attachedRouteId = nextRoute._id;
   bus.currentLocation = null;
+  bus.locationLockedForDate = null;
+  bus.locationLockedAt = null;
   await bus.save();
 
   const opsDate = getOpsDate();
@@ -795,17 +849,7 @@ exports.updateOwnerBusRoute = asyncHandler(async (req, res) => {
     ]);
   }
 
-  const activeMappings = await BusCrewMapping.find({ busId: bus._id, isActive: true }).select("driverId conductorId");
-  const driverIds = Array.from(new Set(activeMappings.map((item) => String(item.driverId || "").trim()).filter(Boolean)));
-  const conductorIds = Array.from(new Set(activeMappings.map((item) => String(item.conductorId || "").trim()).filter(Boolean)));
-  const updates = [];
-  if (driverIds.length) {
-    updates.push(Driver.updateMany({ _id: { $in: driverIds } }, { $set: { currentLocation: null } }));
-  }
-  if (conductorIds.length) {
-    updates.push(Conductor.updateMany({ _id: { $in: conductorIds } }, { $set: { currentLocation: null } }));
-  }
-  if (updates.length) await Promise.all(updates);
+  await syncMappedCrewLocation({ busId: bus._id, location: null });
 
   res.json({
     ok: true,

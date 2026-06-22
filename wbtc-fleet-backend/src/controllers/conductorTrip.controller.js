@@ -327,6 +327,14 @@ const collectEligibleTripOffersForConductor = async ({ conductorId, date = today
       continue;
     }
     const mappedBus = mappedBusById.get(mappedBusId) || trip.busId || null;
+    if (
+      pickupLocation &&
+      normalizeLocation(mappedBus?.currentLocation) &&
+      normalizeLocation(mappedBus.currentLocation) !== normalizeLocation(pickupLocation)
+    ) {
+      trackSkip(trip, "bus_not_at_pickup_location");
+      continue;
+    }
 
     const eligibility = await ensureConductorEligibleForBus({ busId: mappedBusId, conductorId, date });
     if (!eligibility.ok) {

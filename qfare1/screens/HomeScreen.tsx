@@ -168,6 +168,16 @@ type NearbyLiveTripsResponse = {
   trips: NearbyLiveTrip[];
 };
 
+type OccupancyVisual = {
+  label: string;
+  detail: string;
+  color: string;
+  bg: string;
+  icon: keyof typeof Ionicons.glyphMap;
+  percent: number | null;
+  barPercent: number | null;
+};
+
 const normalizeStopName = (value: string) => value.trim().toLowerCase();
 
 const haversineKm = (lat1: number, lon1: number, lat2: number, lon2: number) => {
@@ -637,15 +647,105 @@ const HomeScreen: React.FC<Props> = ({ navigation }) => {
     } catch { /* non-fatal */ }
   };
 
-  const loadConfig = (status: TripLoad['status']) => {
-    switch (status) {
-      case 'empty':    return { label: 'Empty',      color: palette.textFaint,  bg: 'rgba(255,255,255,0.05)', icon: 'people-outline' as const };
-      case 'light':    return { label: 'Light',      color: '#34D399',          bg: 'rgba(52,211,153,0.1)',   icon: 'people-outline' as const };
-      case 'available':return { label: 'Available',  color: palette.accent,     bg: 'rgba(0,200,122,0.12)',   icon: 'people-outline' as const };
-      case 'filling':  return { label: 'Filling Up', color: palette.gold,       bg: 'rgba(251,191,36,0.12)',  icon: 'people-outline' as const };
-      case 'packed':   return { label: 'Packed',     color: palette.danger,     bg: 'rgba(239,68,68,0.12)',   icon: 'people-outline' as const };
-      default:         return { label: 'Load N/A',   color: palette.textFaint,  bg: 'rgba(255,255,255,0.04)', icon: 'people-outline' as const };
+  const getOccupancyVisual = (load: TripLoad): OccupancyVisual => {
+    if (load.status === 'unavailable' || load.capacity <= 0) {
+      return {
+        label: 'Bus Load',
+        detail: 'Occupancy updating',
+        color: palette.textFaint,
+        bg: 'rgba(255,255,255,0.04)',
+        icon: 'people-outline',
+        percent: null,
+        barPercent: null,
+      };
     }
+
+    const onboard = typeof load.onboard === 'number' ? load.onboard : null;
+    const booked = Number.isFinite(load.totalBooked) ? load.totalBooked : 0;
+    const effectiveLoad = onboard !== null ? Math.max(onboard, booked) : booked;
+    const occupancyPct = Math.max(0, Math.round((effectiveLoad / load.capacity) * 100));
+
+    if (occupancyPct === 0) {
+      return {
+        label: 'Empty',
+        detail: 'Seats widely available',
+        color: palette.textFaint,
+        bg: 'rgba(255,255,255,0.05)',
+        icon: 'people-outline',
+        percent: 0,
+        barPercent: 0,
+      };
+    }
+
+    if (occupancyPct <= 30) {
+      return {
+        label: 'Light',
+        detail: 'Light occupancy',
+        color: '#34D399',
+        bg: 'rgba(52,211,153,0.1)',
+        icon: 'people-outline',
+        percent: occupancyPct,
+        barPercent: occupancyPct,
+      };
+    }
+
+    if (occupancyPct <= 60) {
+      return {
+        label: 'Moderate',
+        detail: 'Moderate occupancy',
+        color: '#a3b635',
+        bg: 'rgba(163,182,53,0.12)',
+        icon: 'people-outline',
+        percent: occupancyPct,
+        barPercent: occupancyPct,
+      };
+    }
+
+    if (occupancyPct <= 85) {
+      return {
+        label: 'Busy',
+        detail: 'Bus is getting crowded',
+        color: palette.gold,
+        bg: 'rgba(251,191,36,0.12)',
+        icon: 'people-outline',
+        percent: occupancyPct,
+        barPercent: occupancyPct,
+      };
+    }
+
+    if (occupancyPct <= 100) {
+      return {
+        label: 'Packed',
+        detail: 'High occupancy',
+        color: palette.danger,
+        bg: 'rgba(239,68,68,0.12)',
+        icon: 'people-outline',
+        percent: occupancyPct,
+        barPercent: occupancyPct,
+      };
+    }
+
+    if (occupancyPct <= 115) {
+      return {
+        label: 'Very High',
+        detail: 'Very high occupancy',
+        color: '#b91c1c',
+        bg: 'rgba(185,28,28,0.14)',
+        icon: 'alert-circle-outline',
+        percent: occupancyPct,
+        barPercent: 100,
+      };
+    }
+
+    return {
+      label: 'Extremely Crowded',
+      detail: 'Occupancy is extremely high',
+      color: '#7f1d1d',
+      bg: 'rgba(127,29,29,0.16)',
+      icon: 'warning-outline',
+      percent: occupancyPct,
+      barPercent: 100,
+    };
   };
 
   const formatEta = (trip: LiveTrip) => {
@@ -1300,42 +1400,31 @@ lb.style.left=W/2+'px';lb.style.top=H/2+'px';map.appendChild(lb);
                 )}
 
                 {load ? (() => {
-                  const isUnavailable = load.status === 'unavailable';
-                  const cfg = loadConfig(load.status);
+                  const occupancy = getOccupancyVisual(load);
                   return (
-                    <View style={[styles.loadBanner, { backgroundColor: cfg.bg }]}>
+                    <View style={[styles.loadBanner, { backgroundColor: occupancy.bg }]}>
                       <View style={styles.loadBannerLeft}>
-                        <Ionicons name={cfg.icon} size={15} color={cfg.color} />
+                        <Ionicons name={occupancy.icon} size={15} color={occupancy.color} />
                         <View style={{ flex: 1 }}>
-                          <Text style={[styles.loadStatusText, { color: cfg.color }]}>
-                            {isUnavailable ? 'Bus Load' : cfg.label}
+                          <Text style={[styles.loadStatusText, { color: occupancy.color }]}>
+                            {occupancy.label}
                           </Text>
-                          <Text style={styles.loadSubText}>
-                            {isUnavailable
-                              ? load.totalBooked > 0
-                                ? `${load.totalBooked} ticket${load.totalBooked !== 1 ? 's' : ''} booked · live tracking needs stop coordinates`
-                                : 'No tickets booked yet'
-                              : load.onboard !== null
-                                ? load.capacity > 0
-                                  ? `${load.onboard} / ${load.capacity} seats occupied${load.totalBooked > 0 ? ` · ${load.totalBooked} ticket${load.totalBooked !== 1 ? 's' : ''} booked` : ''}`
-                                  : `${load.onboard} passengers onboard${load.totalBooked > 0 ? ` · ${load.totalBooked} ticket${load.totalBooked !== 1 ? 's' : ''} booked` : ''}`
-                                : 'Estimating...'}
-                          </Text>
+                          <Text style={styles.loadSubText}>{occupancy.detail}</Text>
                         </View>
                       </View>
-                      {!isUnavailable && load.capacity > 0 && load.loadPercent !== null ? (
+                      {occupancy.barPercent !== null ? (
                         <View style={styles.loadBarWrap}>
                           <View style={styles.loadBarTrack}>
                             <View style={[
                               styles.loadBarFill,
                               {
-                                width: `${Math.min(load.loadPercent, 100)}%` as any,
-                                backgroundColor: cfg.color,
+                                width: `${occupancy.barPercent}%` as any,
+                                backgroundColor: occupancy.color,
                               }
                             ]} />
                           </View>
-                          <Text style={[styles.loadPercent, { color: cfg.color }]}>
-                            {load.loadPercent}%
+                          <Text style={[styles.loadPercent, { color: occupancy.color }]}>
+                            {occupancy.percent}%
                           </Text>
                         </View>
                       ) : null}
@@ -1776,7 +1865,10 @@ lb.style.left=W/2+'px';lb.style.top=H/2+'px';map.appendChild(lb);
           <View style={styles.sectionTitleRow}>
             <View style={styles.sectionBar} />
             <Text style={styles.sectionTitle}>Live buses near you</Text>
-            <Text style={styles.sectionMeta}>Within 5 km</Text>
+            <View style={styles.nearbyMetaRow}>
+              <View style={styles.nearbyMetaPulse} />
+              <Text style={styles.sectionMeta}>Within 5 km</Text>
+            </View>
           </View>
 
           {locationBootState === 'pending' || nearbyLiveLoading ? (
@@ -1802,54 +1894,67 @@ lb.style.left=W/2+'px';lb.style.top=H/2+'px';map.appendChild(lb);
             <View style={styles.nearbyTripsList}>
               {nearbyLiveTrips.map(trip => {
                 const isExpanded = expandedNearbyTripId === trip.tripId;
+                const tripFrom = trip.direction === 'UP' ? trip.source : trip.destination;
+                const tripTo   = trip.direction === 'UP' ? trip.destination : trip.source;
                 return (
-                <View
-                  key={trip.tripId}
-                  style={styles.nearbyLiveTripCard}
-                >
-                  <View style={styles.nearbyLiveTripAccent} />
-                  <TouchableOpacity
-                    style={styles.nearbyLiveTripHeader}
-                    activeOpacity={0.8}
-                    onPress={() => {
-                      setExpandedNearbyTripId(current => current === trip.tripId ? null : trip.tripId);
-                    }}
-                  >
-                    <View style={styles.nearbyLiveTripIconShell}>
-                      <Ionicons name="bus-outline" size={20} color={palette.accent} />
-                    </View>
-                    <View style={styles.nearbyLiveTripLeft}>
-                      <View style={styles.nearbyLiveTripMetaRow}>
-                        <Text style={styles.liveBus}>{trip.busNumber}</Text>
-                        <View style={styles.routeCodeBadge}>
-                          <Text style={styles.routeCodeBadgeText}>{trip.routeCode}</Text>
+                  <View key={trip.tripId} style={styles.nearbyLiveTripCard}>
+                    <TouchableOpacity
+                      style={styles.nearbyLiveTripHeader}
+                      activeOpacity={0.8}
+                      onPress={() => {
+                        setExpandedNearbyTripId(current => current === trip.tripId ? null : trip.tripId);
+                      }}
+                    >
+                      {/* Bus icon */}
+                      <View style={styles.nearbyLiveTripIconShell}>
+                        <Ionicons name="bus" size={21} color={palette.accent} />
+                      </View>
+
+                      {/* Info block */}
+                      <View style={styles.nearbyLiveTripLeft}>
+                        <View style={styles.nearbyTopRow}>
+                          <Text style={styles.nearbyBusNumber}>{trip.busNumber}</Text>
+                          <View style={styles.nearbyRouteBadge}>
+                            <Text style={styles.nearbyRouteBadgeText}>{trip.routeCode}</Text>
+                          </View>
+                          <View style={styles.nearbyLiveDot} />
+                        </View>
+                        <View style={styles.nearbyJourneyStrip}>
+                          <View style={styles.nearbyJourneyRow}>
+                            <View style={styles.nearbyDotGreen} />
+                            <Text style={styles.nearbyJourneyStop}>{tripFrom}</Text>
+                          </View>
+                          <View style={styles.nearbyJourneyConnector} />
+                          <View style={styles.nearbyJourneyRow}>
+                            <View style={styles.nearbyDotRed} />
+                            <Text style={styles.nearbyJourneyStop}>{tripTo}</Text>
+                          </View>
                         </View>
                       </View>
-                      <Text style={styles.nearbyLiveTripRoute}>
-                        {trip.source} {'->'} {trip.destination}
-                      </Text>
-                    </View>
-                    <View style={styles.nearbyLiveTripRight}>
-                      <View style={styles.nearbyLiveEtaPill}>
-                        <Ionicons name="timer-outline" size={12} color={palette.accent} />
-                        <Text style={styles.collapsedEtaText}>{trip.minutesAway} min</Text>
-                        <Text style={styles.collapsedEtaStop}>away</Text>
-                      </View>
-                      <Ionicons
-                        name={isExpanded ? 'chevron-up-outline' : 'chevron-down-outline'}
-                        size={16}
-                        color={palette.textFaint}
-                      />
-                    </View>
-                  </TouchableOpacity>
 
-                  {isExpanded && (
-                    <>
-                      {(() => {
-                        const lat = Number(trip.lastLatitude);
-                        const lng = Number(trip.lastLongitude);
-                        const busLabel = (trip.busNumber || 'Bus').replace(/['"\\]/g, '');
-                        const mapHtml = `<!DOCTYPE html><html><head>
+                      {/* ETA block */}
+                      <View style={styles.nearbyEtaBlock}>
+                        <View style={styles.nearbyEtaPill}>
+                          <Text style={styles.nearbyEtaNumber}>{trip.minutesAway}</Text>
+                          <Text style={styles.nearbyEtaUnit}>min</Text>
+                        </View>
+                        <Text style={styles.nearbyEtaLabel}>away</Text>
+                        <Ionicons
+                          name={isExpanded ? 'chevron-up' : 'chevron-down'}
+                          size={14}
+                          color={palette.textFaint}
+                        />
+                      </View>
+                    </TouchableOpacity>
+
+                    {isExpanded && (
+                      <>
+                        <View style={styles.nearbyExpandDivider} />
+                        {(() => {
+                          const lat = Number(trip.lastLatitude);
+                          const lng = Number(trip.lastLongitude);
+                          const busLabel = (trip.busNumber || 'Bus').replace(/['"\\]/g, '');
+                          const mapHtml = `<!DOCTYPE html><html><head>
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
 <style>
 *{margin:0;padding:0;box-sizing:border-box}
@@ -1880,35 +1985,35 @@ m.style.left=W/2+'px';m.style.top=H/2+'px';map.appendChild(m);
 var lb=document.createElement('div');lb.id='label';lb.innerText='${busLabel}';
 lb.style.left=W/2+'px';lb.style.top=H/2+'px';map.appendChild(lb);
 </script></body></html>`;
-                        return (
-                          <WebView
-                            style={styles.liveMap}
-                            originWhitelist={['*']}
-                            javaScriptEnabled
-                            domStorageEnabled
-                            source={{ html: mapHtml }}
-                          />
-                        );
-                      })()}
-
-                      <View style={styles.busLocationBlock}>
-                        <View style={styles.busLocationIconCol}>
-                          <Ionicons name="navigate" size={16} color={palette.gold} />
+                          return (
+                            <WebView
+                              style={styles.liveMap}
+                              originWhitelist={['*']}
+                              javaScriptEnabled
+                              domStorageEnabled
+                              source={{ html: mapHtml }}
+                            />
+                          );
+                        })()}
+                        <View style={styles.busLocationBlock}>
+                          <View style={styles.busLocationIconCol}>
+                            <Ionicons name="navigate" size={16} color={palette.gold} />
+                          </View>
+                          <View style={styles.busLocationTextCol}>
+                            <Text style={styles.busLocationStopName}>
+                              {trip.lastLocationName || 'Live location available'}
+                            </Text>
+                            <Text style={styles.busLocationSub}>
+                              {trip.distanceKm} km from you
+                              {trip.lastLocationAt ? ` · ${formatUpdated(trip.lastLocationAt)}` : ''}
+                            </Text>
+                          </View>
                         </View>
-                        <View style={styles.busLocationTextCol}>
-                          <Text style={styles.busLocationStopName}>
-                            {trip.lastLocationName || 'Live location available'}
-                          </Text>
-                          <Text style={styles.busLocationSub}>
-                            {trip.distanceKm} km from you
-                            {trip.lastLocationAt ? ` · ${formatUpdated(trip.lastLocationAt)}` : ''}
-                          </Text>
-                        </View>
-                      </View>
-                    </>
-                  )}
-                </View>
-              )})}
+                      </>
+                    )}
+                  </View>
+                );
+              })}
             </View>
           ) : (
             <View style={styles.emptyState}>
@@ -2543,79 +2648,165 @@ const styles = StyleSheet.create({
   routeStops: { color: palette.textFaint, marginTop: 6, lineHeight: 18, fontSize: 12 },
   nearbyTripsList: { gap: 12 },
   nearbyLiveTripCard: {
-    backgroundColor: '#fcfdff',
-    borderRadius: 22,
-    padding: 16,
-    borderWidth: 1,
-    borderColor: 'rgba(142, 180, 215, 0.34)',
+    backgroundColor: palette.surface,
+    borderRadius: 20,
+    borderLeftWidth: 4,
+    borderLeftColor: palette.accent,
+    borderWidth: 1.5,
+    borderColor: 'rgba(142, 180, 215, 0.28)',
     shadowColor: '#9ab5cf',
-    shadowOffset: { width: 0, height: 12 },
-    shadowOpacity: 0.16,
-    shadowRadius: 24,
-    elevation: 6,
-    gap: 12,
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.13,
+    shadowRadius: 18,
+    elevation: 4,
     overflow: 'hidden',
-  },
-  nearbyLiveTripAccent: {
-    position: 'absolute',
-    left: 0,
-    top: 0,
-    bottom: 0,
-    width: 4,
-    backgroundColor: palette.accent,
   },
   nearbyLiveTripHeader: {
     flexDirection: 'row',
     alignItems: 'flex-start',
     gap: 12,
+    padding: 14,
   },
   nearbyLiveTripIconShell: {
-    width: 42,
-    height: 42,
+    width: 46,
+    height: 46,
     borderRadius: 14,
     backgroundColor: 'rgba(0, 184, 135, 0.12)',
-    borderWidth: 1,
-    borderColor: 'rgba(0, 184, 135, 0.20)',
+    borderWidth: 1.5,
+    borderColor: 'rgba(0, 184, 135, 0.22)',
     alignItems: 'center',
     justifyContent: 'center',
-    shadowColor: '#9ad5c4',
-    shadowOffset: { width: 0, height: 6 },
-    shadowOpacity: 0.18,
-    shadowRadius: 10,
-    elevation: 2,
+    flexShrink: 0,
   },
   nearbyLiveTripLeft: {
     flex: 1,
-    gap: 6,
-    paddingTop: 1,
+    gap: 5,
   },
-  nearbyLiveTripMetaRow: {
+  nearbyTopRow: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 8,
     flexWrap: 'wrap',
   },
-  nearbyLiveTripRoute: {
-    color: '#415771',
-    fontSize: 14,
-    fontWeight: '600',
-    lineHeight: 20,
+  nearbyBusNumber: {
+    color: palette.text,
+    fontSize: 15,
+    fontWeight: '800',
   },
-  nearbyLiveTripRight: {
-    alignItems: 'flex-end',
-    gap: 10,
-    minWidth: 92,
+  nearbyRouteBadge: {
+    backgroundColor: palette.blueSoft,
+    borderWidth: 1,
+    borderColor: 'rgba(31, 120, 219, 0.22)',
+    borderRadius: 8,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
   },
-  nearbyLiveEtaPill: {
+  nearbyRouteBadgeText: {
+    color: palette.blue,
+    fontSize: 12,
+    fontWeight: '800',
+  },
+  nearbyLiveDot: {
+    width: 7,
+    height: 7,
+    borderRadius: 4,
+    backgroundColor: palette.accent,
+  },
+  nearbyDirectionRow: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 5,
-    paddingHorizontal: 10,
-    paddingVertical: 7,
-    borderRadius: 999,
-    backgroundColor: 'rgba(0, 184, 135, 0.10)',
+  },
+  nearbyDirectionText: {
+    color: palette.blue,
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  nearbyJourneyStrip: {
+    gap: 2,
+    marginTop: 4,
+  },
+  nearbyJourneyRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 7,
+  },
+  nearbyJourneyConnector: {
+    width: 1.5,
+    height: 7,
+    backgroundColor: 'rgba(16, 36, 60, 0.18)',
+    marginLeft: 3,
+  },
+  nearbyDotGreen: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: '#00b887',
+    flexShrink: 0,
+  },
+  nearbyDotRed: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: '#d74262',
+    flexShrink: 0,
+  },
+  nearbyJourneyStop: {
+    color: palette.textMuted,
+    fontSize: 11.5,
+    fontWeight: '600',
+    flex: 1,
+  },
+  nearbyEtaBlock: {
+    alignItems: 'center',
+    gap: 2,
+    paddingTop: 2,
+    minWidth: 58,
+  },
+  nearbyEtaPill: {
+    flexDirection: 'row',
+    alignItems: 'baseline',
+    gap: 2,
+    backgroundColor: 'rgba(0, 184, 135, 0.12)',
+    borderRadius: 10,
+    paddingHorizontal: 9,
+    paddingVertical: 5,
     borderWidth: 1,
-    borderColor: 'rgba(0, 184, 135, 0.16)',
+    borderColor: 'rgba(0, 184, 135, 0.22)',
+  },
+  nearbyEtaNumber: {
+    color: palette.accent,
+    fontSize: 22,
+    fontWeight: '800',
+    lineHeight: 26,
+  },
+  nearbyEtaUnit: {
+    color: palette.accent,
+    fontSize: 11,
+    fontWeight: '700',
+    lineHeight: 26,
+  },
+  nearbyEtaLabel: {
+    color: palette.textFaint,
+    fontSize: 10.5,
+    fontWeight: '600',
+  },
+  nearbyExpandDivider: {
+    height: 1,
+    backgroundColor: palette.border,
+    marginHorizontal: 14,
+  },
+  nearbyMetaRow: {
+    marginLeft: 'auto',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  nearbyMetaPulse: {
+    width: 7,
+    height: 7,
+    borderRadius: 4,
+    backgroundColor: palette.accent,
   },
 
   // Live section

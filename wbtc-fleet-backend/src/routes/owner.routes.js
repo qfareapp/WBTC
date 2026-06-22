@@ -12,6 +12,7 @@ const {
   getOwnerPaymentSummary,
   getOwnerBilling,
   updateOwnerBusLocation,
+  resetOwnerBusLocation,
   updateOwnerBusRoute,
   getOwnerPayoutDetails,
   updateOwnerPayoutDetails,
@@ -30,6 +31,7 @@ router.post("/assign-crew", assignOwnerDailyCrew);
 router.patch("/buses/:busId/status", updateOwnerBusStatus);
 router.patch("/buses/:busId/route", updateOwnerBusRoute);
 router.patch("/buses/:busId/location", updateOwnerBusLocation);
+router.post("/buses/:busId/location/reset", resetOwnerBusLocation);
 router.post("/buses/:busId/assign-crew", assignOwnerBusCrew);
 router.delete("/buses/:busId/assign-crew", resetOwnerBusCrew);
 

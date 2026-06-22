@@ -865,14 +865,14 @@ const collectEligibleTripOffersForDriver = async ({ driverId, date = today(), de
           isMappedBusEligibleForTrip({
             bus: assignedMappedBus,
             route,
-            startLocation: null,
+            startLocation,
             activeBusSet,
             strictRouteMatch: true,
           }) ||
           isMappedBusEligibleForTrip({
             bus: assignedMappedBus,
             route,
-            startLocation: null,
+            startLocation,
             activeBusSet,
             strictRouteMatch: false,
           });

@@ -11,6 +11,8 @@ const BusSchema = new mongoose.Schema(
       default: [],
     },
     currentLocation: { type: String, default: null, index: true },
+    locationLockedForDate: { type: String, default: null, index: true },
+    locationLockedAt: { type: Date, default: null },
     busType: { type: String, default: "Non-AC" },
     seatingCapacity: { type: Number, default: 0 },
     fuelType: { type: String, enum: ["Diesel", "CNG", "Electric"], default: "Diesel" },
