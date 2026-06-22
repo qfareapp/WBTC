@@ -1,6 +1,8 @@
 const router = require("express").Router();
+const { body } = require("express-validator");
 const passengerAuth = require("../middleware/passengerAuth");
 const { createRateLimit, getClientIp } = require("../middleware/rateLimit");
+const validate = require("../middleware/validate");
 const {
   sendOtp,
   verifyOtp,
@@ -24,9 +26,19 @@ const otpVerifyRateLimit = createRateLimit({
   message: "Too many OTP verification attempts. Please wait before trying again.",
 });
 
+const emailValidation = body("email")
+  .isEmail()
+  .withMessage("Valid email is required")
+  .normalizeEmail();
+
+const otpValidation = body("otp")
+  .trim()
+  .matches(/^\d{6}$/)
+  .withMessage("OTP must be a 6-digit code");
+
 // Public
-router.post("/send-otp", otpSendRateLimit, sendOtp);
-router.post("/verify-otp", otpVerifyRateLimit, verifyOtp);
+router.post("/send-otp", otpSendRateLimit, validate([emailValidation]), sendOtp);
+router.post("/verify-otp", otpVerifyRateLimit, validate([emailValidation, otpValidation]), verifyOtp);
 
 // Protected (requires valid passenger JWT)
 router.post("/complete-profile", passengerAuth, completeProfile);

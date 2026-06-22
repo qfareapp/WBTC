@@ -27,7 +27,7 @@ const Perf = () => (
 type TripStatus = 'Active' | 'Completed' | 'Cancelled' | 'Scheduled' | null;
 
 const TicketScreen: React.FC<Props> = ({ route, navigation }) => {
-  const { user } = useAuth();
+  const { user, token } = useAuth();
   const {
     source, destination, fare, passengerCount,
     busNumber, routeCode, routeName, bookingId, bookedAt, tripInstanceId,
@@ -44,7 +44,8 @@ const TicketScreen: React.FC<Props> = ({ route, navigation }) => {
     const check = async () => {
       try {
         const data = await apiGet<{ valid: boolean; tripStatus: TripStatus; tripEndedAt: string | null }>(
-          `/api/public/bookings/${encodeURIComponent(bookingId)}/status`
+          `/api/public/bookings/${encodeURIComponent(bookingId)}/status`,
+          token || undefined
         );
         setTripStatus(data.tripStatus);
         setTicketValid(data.valid);
@@ -59,7 +60,7 @@ const TicketScreen: React.FC<Props> = ({ route, navigation }) => {
     void check();
     const interval = setInterval(() => { void check(); }, 12000);
     return () => clearInterval(interval);
-  }, [bookingId, user?.id]);
+  }, [bookingId, user?.id, token]);
 
   const ticketId = bookingId || `TKT-${busNumber}-${Date.now()}`;
   const farePerPerson = passengerCount > 1 ? fare / passengerCount : null;

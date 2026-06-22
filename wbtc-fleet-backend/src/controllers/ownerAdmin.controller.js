@@ -13,6 +13,82 @@ const {
 } = require("../utils/ownerPayments");
 const { generateTemporaryPassword, hashPassword } = require("../utils/crewPassword");
 
+const hasPayoutBankDetails = (details = {}) =>
+  Boolean(
+    details.accountHolderName ||
+      details.bankName ||
+      details.accountNumber ||
+      details.ifscCode ||
+      details.branchName
+  );
+
+const maskAccountNumber = (value = "") => {
+  const raw = String(value || "").trim();
+  if (!raw) return "";
+  if (raw.length <= 4) return raw;
+  return `${"*".repeat(Math.max(raw.length - 4, 0))}${raw.slice(-4)}`;
+};
+
+const maskIfscCode = (value = "") => {
+  const raw = String(value || "").trim().toUpperCase();
+  if (!raw) return "";
+  if (raw.length <= 4) return raw;
+  return `${raw.slice(0, 4)}${"*".repeat(Math.max(raw.length - 4, 0))}`;
+};
+
+const serializePayoutBankDetails = (details = {}, role = "VIEWER") => {
+  const linked = hasPayoutBankDetails(details);
+  if (!linked) {
+    return {
+      linked: false,
+      visibility: "none",
+      accountHolderName: "",
+      bankName: "",
+      accountNumber: "",
+      ifscCode: "",
+      branchName: "",
+      updatedAt: null,
+    };
+  }
+
+  if (role === "ADMIN") {
+    return {
+      linked: true,
+      visibility: "full",
+      accountHolderName: details.accountHolderName || "",
+      bankName: details.bankName || "",
+      accountNumber: details.accountNumber || "",
+      ifscCode: details.ifscCode || "",
+      branchName: details.branchName || "",
+      updatedAt: details.updatedAt || null,
+    };
+  }
+
+  if (role === "DEPOT_MANAGER") {
+    return {
+      linked: true,
+      visibility: "masked",
+      accountHolderName: details.accountHolderName || "",
+      bankName: details.bankName || "",
+      accountNumber: maskAccountNumber(details.accountNumber),
+      ifscCode: maskIfscCode(details.ifscCode),
+      branchName: details.branchName || "",
+      updatedAt: details.updatedAt || null,
+    };
+  }
+
+  return {
+    linked: true,
+    visibility: "restricted",
+    accountHolderName: "Restricted",
+    bankName: "Restricted",
+    accountNumber: "Restricted",
+    ifscCode: "Restricted",
+    branchName: "Restricted",
+    updatedAt: details.updatedAt || null,
+  };
+};
+
 exports.listOwnersOverview = asyncHandler(async (req, res) => {
   const owners = await User.find({ role: "OWNER" })
     .select("name username active createdAt phoneNumber whatsappNumber email payoutBankDetails")
@@ -98,14 +174,7 @@ exports.listOwnersOverview = asyncHandler(async (req, res) => {
         phoneNumber: owner.phoneNumber || "",
         whatsappNumber: owner.whatsappNumber || "",
         email: owner.email || "",
-        payoutBankDetails: {
-          accountHolderName: owner.payoutBankDetails?.accountHolderName || "",
-          bankName: owner.payoutBankDetails?.bankName || "",
-          accountNumber: owner.payoutBankDetails?.accountNumber || "",
-          ifscCode: owner.payoutBankDetails?.ifscCode || "",
-          branchName: owner.payoutBankDetails?.branchName || "",
-          updatedAt: owner.payoutBankDetails?.updatedAt || null,
-        },
+        payoutBankDetails: serializePayoutBankDetails(owner.payoutBankDetails, req.user?.role),
       },
       totalBuses: ownerBuses.length,
       totalRoutes: ownerRoutes.length,

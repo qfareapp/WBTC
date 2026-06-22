@@ -12,14 +12,14 @@ const {
   resetOwnerPassword,
 } = require("../controllers/ownerAdmin.controller");
 
-router.use(auth, requireRole("ADMIN", "DEPOT_MANAGER", "SCHEDULER", "VIEWER"));
+router.use(auth);
 
-router.get("/", listOwnersOverview);
-router.get("/payments", listOwnerDuePayments);
-router.get("/:ownerId/payments/details", getOwnerPaymentBreakdown);
+router.get("/", requireRole("ADMIN", "DEPOT_MANAGER", "SCHEDULER", "VIEWER"), listOwnersOverview);
+router.get("/payments", requireRole("ADMIN", "DEPOT_MANAGER"), listOwnerDuePayments);
+router.get("/:ownerId/payments/details", requireRole("ADMIN", "DEPOT_MANAGER"), getOwnerPaymentBreakdown);
 router.post("/:ownerId/payments/virtual-pay", requireRole("ADMIN", "DEPOT_MANAGER"), virtualPayOwnerDue);
-router.get("/tag-context", getOwnerTagContext);
-router.get("/buses/:busId/routes", getBusAttachedRoutes);
+router.get("/tag-context", requireRole("ADMIN", "DEPOT_MANAGER", "SCHEDULER", "VIEWER"), getOwnerTagContext);
+router.get("/buses/:busId/routes", requireRole("ADMIN", "DEPOT_MANAGER", "SCHEDULER", "VIEWER"), getBusAttachedRoutes);
 router.post("/:ownerId/tag-bus", requireRole("ADMIN", "DEPOT_MANAGER"), tagBusToOwner);
 router.post("/:ownerId/reset-password", requireRole("ADMIN", "DEPOT_MANAGER"), resetOwnerPassword);
 

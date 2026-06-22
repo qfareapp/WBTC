@@ -981,8 +981,12 @@ exports.handleRazorpayWebhook = asyncHandler(async (req, res) => {
  */
 exports.getBookingStatus = asyncHandler(async (req, res) => {
   const { bookingId } = req.params;
-  const booking = await TicketBooking.findOne({ bookingId }).select(
-    "tripInstanceId status routeId destination"
+  const booking = await TicketBooking.findOne({
+    bookingId,
+    issuedByRole: "PASSENGER_APP",
+    issuedById: req.passenger?.passengerId || null,
+  }).select(
+    "tripInstanceId status routeId destination issuedById issuedByRole"
   );
   if (!booking) throw new ApiError(404, "Booking not found");
 

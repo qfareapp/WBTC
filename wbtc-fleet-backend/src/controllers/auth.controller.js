@@ -48,7 +48,8 @@ exports.register = asyncHandler(async (req, res) => {
 });
 
 exports.login = asyncHandler(async (req, res) => {
-  const { username, password } = req.body;
+  const username = String(req.body?.username || "").trim();
+  const password = String(req.body?.password || "");
 
   const user = await User.findOne({ username, active: true });
   if (!user) throw new ApiError(401, "Invalid credentials");
@@ -74,20 +75,24 @@ exports.login = asyncHandler(async (req, res) => {
 });
 
 exports.changePassword = asyncHandler(async (req, res) => {
-  const { currentPassword, newPassword } = req.body;
+  const currentPassword = String(req.body?.currentPassword || "");
+  const newPassword = String(req.body?.newPassword || "").trim();
 
   if (!currentPassword || !newPassword) throw new ApiError(400, "currentPassword and newPassword required");
-  if (String(newPassword).trim().length < 8) {
+  if (newPassword.length < 8) {
     throw new ApiError(400, "New password must be at least 8 characters");
+  }
+  if (currentPassword === newPassword) {
+    throw new ApiError(400, "New password must be different from current password");
   }
 
   const user = await User.findById(req.user.userId);
   if (!user || !user.active) throw new ApiError(404, "User not found");
 
-  const ok = await comparePassword(String(currentPassword), user.passwordHash);
+  const ok = await comparePassword(currentPassword, user.passwordHash);
   if (!ok) throw new ApiError(401, "Current password is incorrect");
 
-  user.passwordHash = await hashPassword(String(newPassword).trim());
+  user.passwordHash = await hashPassword(newPassword);
   user.mustChangePassword = false;
   user.passwordUpdatedAt = new Date();
   await user.save();
