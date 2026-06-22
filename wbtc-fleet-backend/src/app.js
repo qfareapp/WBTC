@@ -7,11 +7,22 @@ const errorHandler = require("./middleware/errorHandler");
 
 const app = express();
 
+const DEFAULT_ALLOWED_ORIGINS = [
+  "https://wbtc-rose.vercel.app",
+];
+
 const parseAllowedOrigins = () =>
-  String(process.env.CORS_ALLOWED_ORIGINS || "")
+  String(process.env.CORS_ALLOWED_ORIGINS || DEFAULT_ALLOWED_ORIGINS.join(","))
     .split(",")
-    .map(origin => origin.trim())
+    .map((origin) => origin.trim())
     .filter(Boolean);
+
+const isAllowedDevelopmentOrigin = (origin) =>
+  origin.startsWith("http://localhost:") ||
+  origin.startsWith("http://127.0.0.1:") ||
+  origin.startsWith("http://192.168.") ||
+  origin.startsWith("http://10.") ||
+  origin.startsWith("http://172.");
 
 const buildCorsOriginChecker = () => {
   const allowedOrigins = parseAllowedOrigins();
@@ -27,16 +38,8 @@ const buildCorsOriginChecker = () => {
       return callback(null, true);
     }
 
-    if (isDevelopment) {
-      const localhostAllowed =
-        origin.startsWith("http://localhost:") ||
-        origin.startsWith("http://127.0.0.1:") ||
-        origin.startsWith("http://192.168.") ||
-        origin.startsWith("http://10.") ||
-        origin.startsWith("http://172.");
-      if (localhostAllowed) {
-        return callback(null, true);
-      }
+    if (isDevelopment && isAllowedDevelopmentOrigin(origin)) {
+      return callback(null, true);
     }
 
     return callback(new ApiError(403, "Origin not allowed by CORS policy"));
