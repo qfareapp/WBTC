@@ -1,5 +1,6 @@
 import React, { createContext, useContext, useEffect, useState } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import * as SecureStore from 'expo-secure-store';
 import { apiPost, apiGet } from './api';
 
 // ---------------------------------------------------------------------------
@@ -38,6 +39,27 @@ type AuthContextValue = AuthState & {
 const TOKEN_KEY = 'passenger_token';
 const USER_KEY  = 'passenger_user';
 
+const getStoredToken = async () => {
+  const token = await SecureStore.getItemAsync(TOKEN_KEY);
+  if (token) {
+    return token;
+  }
+
+  const legacyToken = await AsyncStorage.getItem(TOKEN_KEY);
+  if (legacyToken) {
+    await SecureStore.setItemAsync(TOKEN_KEY, legacyToken);
+    await AsyncStorage.removeItem(TOKEN_KEY);
+  }
+  return legacyToken;
+};
+
+const clearStoredSession = async () => {
+  await Promise.all([
+    SecureStore.deleteItemAsync(TOKEN_KEY),
+    AsyncStorage.multiRemove([TOKEN_KEY, USER_KEY]),
+  ]);
+};
+
 // ---------------------------------------------------------------------------
 // Context
 // ---------------------------------------------------------------------------
@@ -51,9 +73,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   useEffect(() => {
     (async () => {
       try {
-        const [token, userJson] = await AsyncStorage.multiGet([TOKEN_KEY, USER_KEY]);
-        const t = token[1];
-        const u = userJson[1] ? (JSON.parse(userJson[1]) as PassengerUser) : null;
+        const [t, userJson] = await Promise.all([getStoredToken(), AsyncStorage.getItem(USER_KEY)]);
+        const u = userJson ? (JSON.parse(userJson) as PassengerUser) : null;
         if (!t) {
           setState({ token: null, user: null, loading: false });
           return;
@@ -67,7 +88,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           await AsyncStorage.setItem(USER_KEY, JSON.stringify(data.user));
           setState({ token: t, user: data.user, loading: false });
         } catch {
-          await AsyncStorage.multiRemove([TOKEN_KEY, USER_KEY]);
+          await clearStoredSession();
           setState({ token: null, user: null, loading: false });
         }
       } catch {
@@ -77,7 +98,11 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   }, []);
 
   const persist = async (token: string, user: PassengerUser) => {
-    await AsyncStorage.multiSet([[TOKEN_KEY, token], [USER_KEY, JSON.stringify(user)]]);
+    await Promise.all([
+      SecureStore.setItemAsync(TOKEN_KEY, token),
+      AsyncStorage.setItem(USER_KEY, JSON.stringify(user)),
+      AsyncStorage.removeItem(TOKEN_KEY),
+    ]);
     setState({ token, user, loading: false });
   };
 
@@ -121,13 +146,13 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       await AsyncStorage.setItem(USER_KEY, JSON.stringify(data.user));
       setState(prev => ({ ...prev, user: data.user }));
     } catch {
-      await AsyncStorage.multiRemove([TOKEN_KEY, USER_KEY]);
+      await clearStoredSession();
       setState({ token: null, user: null, loading: false });
     }
   };
 
   const logout = async () => {
-    await AsyncStorage.multiRemove([TOKEN_KEY, USER_KEY]);
+    await clearStoredSession();
     setState({ token: null, user: null, loading: false });
   };
 

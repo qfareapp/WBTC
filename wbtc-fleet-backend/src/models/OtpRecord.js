@@ -2,9 +2,11 @@ const mongoose = require("mongoose");
 
 const OtpRecordSchema = new mongoose.Schema({
   email: { type: String, required: true, lowercase: true, trim: true, index: true },
-  otp: { type: String, required: true },
+  otpHash: { type: String, required: true },
   expiresAt: { type: Date, required: true },
   used: { type: Boolean, default: false },
+  attemptCount: { type: Number, default: 0 },
+  lastAttemptAt: { type: Date, default: null },
 }, { timestamps: true });
 
 // Auto-delete expired records after 10 minutes

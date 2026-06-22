@@ -9,6 +9,23 @@ const ApiError = require("../utils/ApiError");
 
 const QFARE_LOGO_PATH = path.resolve(__dirname, "../../../qfare1/assets/qfare-logo.png");
 const QFARE_LOGO_CID = "qfare-logo";
+const OTP_TTL_MS = 10 * 60 * 1000;
+const OTP_REQUEST_COOLDOWN_MS = 60 * 1000;
+const OTP_MAX_ATTEMPTS = 5;
+
+const getOtpSecret = () => String(process.env.OTP_SECRET || process.env.JWT_SECRET || "").trim();
+
+const hashOtp = (email, otp) =>
+  crypto
+    .createHmac("sha256", getOtpSecret())
+    .update(`${String(email || "").toLowerCase().trim()}:${String(otp || "").trim()}`)
+    .digest("hex");
+
+const safeEqualHex = (left, right) => {
+  const leftBuffer = Buffer.from(String(left || ""), "hex");
+  const rightBuffer = Buffer.from(String(right || ""), "hex");
+  return leftBuffer.length === rightBuffer.length && crypto.timingSafeEqual(leftBuffer, rightBuffer);
+};
 
 function getTransport() {
   return nodemailer.createTransport({
@@ -113,25 +130,7 @@ function getOtpEmailHtml(otp, includeLogo) {
 }
 
 exports.directLogin = async (req, res, next) => {
-  try {
-    const email = (req.body.email || "").toLowerCase().trim();
-    if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
-      return next(new ApiError(400, "Valid email is required"));
-    }
-
-    let passenger = await PassengerUser.findOne({ email });
-    if (!passenger) {
-      passenger = await PassengerUser.create({ email });
-    }
-
-    res.json({
-      ok: true,
-      token: signPassengerToken(passenger),
-      user: serializePassenger(passenger),
-    });
-  } catch (err) {
-    next(err);
-  }
+  next(new ApiError(403, "Direct login is disabled. Use OTP verification."));
 };
 
 exports.sendOtp = async (req, res, next) => {
@@ -141,11 +140,22 @@ exports.sendOtp = async (req, res, next) => {
       return next(new ApiError(400, "Valid email is required"));
     }
 
+    const latestRecord = await OtpRecord.findOne({ email }).sort({ createdAt: -1 }).select("createdAt");
+    if (latestRecord?.createdAt && Date.now() - new Date(latestRecord.createdAt).getTime() < OTP_REQUEST_COOLDOWN_MS) {
+      return next(new ApiError(429, "Please wait before requesting another OTP."));
+    }
+
     const otp = String(crypto.randomInt(100000, 999999));
-    const expiresAt = new Date(Date.now() + 10 * 60 * 1000);
+    const expiresAt = new Date(Date.now() + OTP_TTL_MS);
 
     await OtpRecord.updateMany({ email, used: false }, { used: true });
-    await OtpRecord.create({ email, otp, expiresAt });
+    await OtpRecord.create({
+      email,
+      otpHash: hashOtp(email, otp),
+      expiresAt,
+      attemptCount: 0,
+      lastAttemptAt: null,
+    });
 
     const transport = getTransport();
     const hasEmbeddedLogo = fs.existsSync(QFARE_LOGO_PATH);
@@ -191,11 +201,26 @@ exports.verifyOtp = async (req, res, next) => {
       return next(new ApiError(400, "OTP expired or not found. Please request a new one."));
     }
 
-    if (record.otp !== otp) {
+    if (record.attemptCount >= OTP_MAX_ATTEMPTS) {
+      record.used = true;
+      record.lastAttemptAt = new Date();
+      await record.save();
+      return next(new ApiError(429, "Too many incorrect OTP attempts. Please request a new one."));
+    }
+
+    const providedOtpHash = hashOtp(email, otp);
+    if (!safeEqualHex(record.otpHash, providedOtpHash)) {
+      record.attemptCount += 1;
+      record.lastAttemptAt = new Date();
+      if (record.attemptCount >= OTP_MAX_ATTEMPTS) {
+        record.used = true;
+      }
+      await record.save();
       return next(new ApiError(400, "Incorrect OTP. Please try again."));
     }
 
     record.used = true;
+    record.lastAttemptAt = new Date();
     await record.save();
 
     let passenger = await PassengerUser.findOne({ email });

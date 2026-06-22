@@ -7,8 +7,44 @@ const errorHandler = require("./middleware/errorHandler");
 
 const app = express();
 
+const parseAllowedOrigins = () =>
+  String(process.env.CORS_ALLOWED_ORIGINS || "")
+    .split(",")
+    .map(origin => origin.trim())
+    .filter(Boolean);
+
+const buildCorsOriginChecker = () => {
+  const allowedOrigins = parseAllowedOrigins();
+  const isDevelopment = process.env.NODE_ENV !== "production";
+
+  return (origin, callback) => {
+    // Native mobile apps and non-browser clients often omit Origin entirely.
+    if (!origin) {
+      return callback(null, true);
+    }
+
+    if (allowedOrigins.includes(origin)) {
+      return callback(null, true);
+    }
+
+    if (isDevelopment) {
+      const localhostAllowed =
+        origin.startsWith("http://localhost:") ||
+        origin.startsWith("http://127.0.0.1:") ||
+        origin.startsWith("http://192.168.") ||
+        origin.startsWith("http://10.") ||
+        origin.startsWith("http://172.");
+      if (localhostAllowed) {
+        return callback(null, true);
+      }
+    }
+
+    return callback(new ApiError(403, "Origin not allowed by CORS policy"));
+  };
+};
+
 const corsOptions = {
-  origin: true,
+  origin: buildCorsOriginChecker(),
   credentials: true,
   methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
   allowedHeaders: ["Content-Type", "Authorization"],
