@@ -7,6 +7,7 @@ import HomeScreen from '../screens/HomeScreen';
 import QRScannerScreen from '../screens/QRScannerScreen';
 import TicketScreen from '../screens/TicketScreen';
 import ProfileScreen from '../screens/ProfileScreen';
+import SupportScreen from '../screens/SupportScreen';
 import LoginScreen from '../screens/LoginScreen';
 import OtpScreen from '../screens/OtpScreen';
 import CompleteProfileScreen from '../screens/CompleteProfileScreen';
@@ -33,6 +34,7 @@ export type RootStackParamList = {
     email: string;
   };
   CompleteProfile: undefined;
+  Support: undefined;
 };
 
 export type BottomTabParamList = {
@@ -192,6 +194,7 @@ const AppNavigator = () => {
     >
       <Stack.Screen name="Tabs" component={TabsNavigator} options={{ headerShown: false }} />
       <Stack.Screen name="Ticket" component={TicketScreen} options={{ title: 'Digital Ticket' }} />
+      <Stack.Screen name="Support" component={SupportScreen} options={{ headerShown: false }} />
     </Stack.Navigator>
   );
 };

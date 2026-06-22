@@ -20,8 +20,11 @@ const {
   getBookingAnalytics,
   getPassengerRegistry,
 } = require("../controllers/public.controller");
+const { getSupportMenu } = require("../controllers/support.controller");
 
 router.get("/scan", getBusRouteByQr);
+router.get("/support/menu", passengerAuth, getSupportMenu);
+router.get("/support/menu/:nodeId", passengerAuth, getSupportMenu);
 router.get("/stops/nearest", getNearestStop);
 router.get("/trips/nearby", getNearbyLiveTrips);
 router.get("/routes", listPublicRoutes);

@@ -33,6 +33,7 @@ import { palette } from '../lib/theme';
 import QfareLogo from '../components/QfareLogo';
 
 const WAITING_DISCLAIMER_ACK_KEY = 'passenger_waiting_disclaimer_ack';
+const FAVORITE_STOPS_STORAGE_KEY = 'qfare_favorite_stops';
 const heroTopInset = Platform.OS === 'android' ? (StatusBar.currentHeight ?? 0) + 18 : 56;
 const today = (() => {
   const now = new Date();
@@ -315,6 +316,9 @@ const getTripProgressState = (
 const getWaitingDisclaimerStorageKey = (userId: string) =>
   `${WAITING_DISCLAIMER_ACK_KEY}:${userId}`;
 
+const getFavoriteStopsStorageKey = (userId?: string | null) =>
+  userId ? `${FAVORITE_STOPS_STORAGE_KEY}:${userId}` : FAVORITE_STOPS_STORAGE_KEY;
+
 const HomeScreen: React.FC<Props> = ({ navigation }) => {
   const { token, user } = useAuth();
   const tabBarHeight = useBottomTabBarHeight();
@@ -355,6 +359,7 @@ const HomeScreen: React.FC<Props> = ({ navigation }) => {
   const [expandedNearbyTripId, setExpandedNearbyTripId] = useState<string | null>(null);
   const liveButtonPulse = useRef(new Animated.Value(0)).current;
   const hasResolvedStartupLocation = useRef(false);
+  const favoriteStopsHydrated = useRef(false);
 
   const loadRoutes = async () => {
     setLoadingRoutes(true);
@@ -373,6 +378,11 @@ const HomeScreen: React.FC<Props> = ({ navigation }) => {
   useEffect(() => {
     void loadRoutes();
   }, []);
+
+  useEffect(() => {
+    favoriteStopsHydrated.current = false;
+    setFavoriteStops([]);
+  }, [user?.id]);
 
   useEffect(() => {
     if (hasResolvedStartupLocation.current) {
@@ -465,9 +475,57 @@ const HomeScreen: React.FC<Props> = ({ navigation }) => {
   }, [routes]);
 
   useEffect(() => {
-    if (!allStops.length || favoriteStops.length) return;
-    setFavoriteStops(allStops.slice(0, maxFavoriteStops));
-  }, [allStops, favoriteStops.length]);
+    if (!allStops.length || favoriteStopsHydrated.current) return;
+
+    let cancelled = false;
+
+    const hydrateFavoriteStops = async () => {
+      try {
+        const raw = await AsyncStorage.getItem(getFavoriteStopsStorageKey(user?.id));
+        if (cancelled) return;
+
+        if (raw) {
+          const parsed = JSON.parse(raw);
+          if (Array.isArray(parsed)) {
+            const availableStopMap = new Map(allStops.map(stop => [normalizeStopName(stop), stop] as const));
+            const sanitized = parsed
+              .map(value => (typeof value === 'string' ? value.trim() : ''))
+              .filter(Boolean)
+              .map(value => availableStopMap.get(normalizeStopName(value)) ?? null)
+              .filter((value): value is string => Boolean(value));
+            const unique = sanitized.filter(
+              (stop, index) => sanitized.findIndex(item => normalizeStopName(item) === normalizeStopName(stop)) === index
+            );
+
+            setFavoriteStops(unique.slice(0, maxFavoriteStops));
+            favoriteStopsHydrated.current = true;
+            return;
+          }
+        }
+      } catch {
+        // Fall back to defaults when persisted favorites are unavailable.
+      }
+
+      if (!cancelled) {
+        setFavoriteStops(allStops.slice(0, maxFavoriteStops));
+        favoriteStopsHydrated.current = true;
+      }
+    };
+
+    void hydrateFavoriteStops();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [allStops, maxFavoriteStops, user?.id]);
+
+  useEffect(() => {
+    if (!favoriteStopsHydrated.current) return;
+    void AsyncStorage.setItem(
+      getFavoriteStopsStorageKey(user?.id),
+      JSON.stringify(favoriteStops.slice(0, maxFavoriteStops))
+    );
+  }, [favoriteStops, maxFavoriteStops, user?.id]);
 
   const availableFavoriteStops = useMemo(
     () => allStops.filter(stop => !favoriteStops.some(favorite => favorite.toLowerCase() === stop.toLowerCase())),

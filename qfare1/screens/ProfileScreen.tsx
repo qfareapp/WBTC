@@ -1,5 +1,5 @@
-import React, { useCallback, useState } from 'react';
-import { ActivityIndicator, Alert, Linking, Platform, ScrollView, StatusBar, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import React, { useCallback, useEffect, useState } from 'react';
+import { ActivityIndicator, Alert, KeyboardAvoidingView, Linking, Modal, Platform, ScrollView, StatusBar, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
 import { CompositeNavigationProp } from '@react-navigation/native';
 import { BottomTabNavigationProp, useBottomTabBarHeight } from '@react-navigation/bottom-tabs';
@@ -23,16 +23,61 @@ const PRIVACY_POLICY_URL = 'https://wbtc-rose.vercel.app/qfare-privacy-policy';
 const topInset = Platform.OS === 'android' ? (StatusBar.currentHeight ?? 0) + 14 : 20;
 
 const ProfileScreen: React.FC<Props> = ({ navigation }) => {
-  const { user, logout } = useAuth();
+  const { user, logout, completeProfile } = useAuth();
   const tabBarHeight = useBottomTabBarHeight();
   const [tickets, setTickets] = useState<StoredTicket[]>([]);
   const [validating, setValidating] = useState(false);
+  const [editVisible, setEditVisible] = useState(false);
+  const [savingProfile, setSavingProfile] = useState(false);
+  const [contactForm, setContactForm] = useState({
+    phone: user?.phone ?? '',
+    address1: user?.address1 ?? '',
+    address2: user?.address2 ?? '',
+  });
+
+  useEffect(() => {
+    setContactForm({
+      phone: user?.phone ?? '',
+      address1: user?.address1 ?? '',
+      address2: user?.address2 ?? '',
+    });
+  }, [user?.phone, user?.address1, user?.address2]);
 
   const handleLogout = () => {
     Alert.alert('Sign Out', 'Are you sure you want to sign out?', [
       { text: 'Cancel', style: 'cancel' },
       { text: 'Sign Out', style: 'destructive', onPress: logout },
     ]);
+  };
+
+  const setContactField = (key: 'phone' | 'address1' | 'address2') => (value: string) => {
+    setContactForm(current => ({ ...current, [key]: value }));
+  };
+
+  const handleSaveContact = async () => {
+    if (!user?.name?.trim()) {
+      Alert.alert('Profile incomplete', 'Passenger name is missing. Please complete your profile again.');
+      return;
+    }
+
+    setSavingProfile(true);
+    try {
+      await completeProfile({
+        name: user.name.trim(),
+        phone: contactForm.phone.trim(),
+        address1: contactForm.address1.trim(),
+        address2: contactForm.address2.trim(),
+      });
+      setEditVisible(false);
+    } catch (err: any) {
+      Alert.alert('Update failed', err?.message || 'Could not update contact details.');
+    } finally {
+      setSavingProfile(false);
+    }
+  };
+
+  const handleOpenSupport = () => {
+    navigation.navigate('Support');
   };
 
   useFocusEffect(
@@ -231,6 +276,13 @@ const ProfileScreen: React.FC<Props> = ({ navigation }) => {
       {/* User details card */}
       {user && (
         <View style={styles.userDetailsCard}>
+          <View style={styles.detailsHeader}>
+            <Text style={styles.detailsTitle}>Contact details</Text>
+            <TouchableOpacity style={styles.editDetailsButton} onPress={() => setEditVisible(true)} activeOpacity={0.8}>
+              <Ionicons name="create-outline" size={14} color={palette.blue} />
+              <Text style={styles.editDetailsButtonText}>Edit</Text>
+            </TouchableOpacity>
+          </View>
           <View style={styles.userDetailRow}>
             <Ionicons name="mail-outline" size={14} color={palette.textFaint} />
             <Text style={styles.userDetailText}>{user.email}</Text>
@@ -248,6 +300,11 @@ const ProfileScreen: React.FC<Props> = ({ navigation }) => {
                 {[user.address1, user.address2].filter(Boolean).join(', ')}
               </Text>
             </View>
+          ) : null}
+          {!user.phone && !user.address1 ? (
+            <Text style={styles.userDetailPlaceholder}>
+              Add your mobile number and address for easier booking contact details.
+            </Text>
           ) : null}
         </View>
       )}
@@ -331,12 +388,88 @@ const ProfileScreen: React.FC<Props> = ({ navigation }) => {
         )}
       </View>
 
+      <View style={styles.section}>
+        <View style={styles.sectionHeader}>
+          <View style={[styles.sectionBar, styles.sectionBarBlue]} />
+          <Text style={styles.sectionTitle}>Contact Us</Text>
+        </View>
+        <TouchableOpacity style={styles.contactCard} onPress={handleOpenSupport} activeOpacity={0.8}>
+          <View style={styles.contactIconWrap}>
+            <Ionicons name="logo-whatsapp" size={18} color="#25D366" />
+          </View>
+          <View style={styles.contactCopy}>
+            <Text style={styles.contactTitle}>Support Center</Text>
+            <Text style={styles.contactText}>Start with guided help, then continue to WhatsApp only if you still need escalation.</Text>
+          </View>
+          <Ionicons name="chevron-forward" size={16} color={palette.textFaint} />
+        </TouchableOpacity>
+      </View>
+
       <View style={styles.versionRow}>
         <Text style={styles.versionText}>qfare · v1.0.0</Text>
         <Text style={styles.privacyLink} onPress={() => { void Linking.openURL(PRIVACY_POLICY_URL); }}>
           Privacy Policy
         </Text>
       </View>
+      <Modal visible={editVisible} transparent animationType="slide" onRequestClose={() => !savingProfile && setEditVisible(false)}>
+        <View style={styles.modalBackdrop}>
+          <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={styles.modalKeyboardWrap}>
+            <View style={styles.modalCard}>
+              <View style={styles.modalHeader}>
+                <View style={styles.modalHeaderText}>
+                  <Text style={styles.modalTitle}>Update contact details</Text>
+                  <Text style={styles.modalSubtitle}>Mobile number and address can be changed here.</Text>
+                </View>
+                <TouchableOpacity style={styles.modalClose} onPress={() => !savingProfile && setEditVisible(false)} disabled={savingProfile}>
+                  <Ionicons name="close" size={18} color={palette.textMuted} />
+                </TouchableOpacity>
+              </View>
+              <View style={styles.fieldGroup}>
+                <Text style={styles.fieldLabel}>Mobile number</Text>
+                <TextInput
+                  style={styles.fieldInput}
+                  value={contactForm.phone}
+                  onChangeText={setContactField('phone')}
+                  placeholder="e.g. 9876543210"
+                  placeholderTextColor={palette.textFaint}
+                  keyboardType="phone-pad"
+                  editable={!savingProfile}
+                />
+              </View>
+              <View style={styles.fieldGroup}>
+                <Text style={styles.fieldLabel}>Address line 1</Text>
+                <TextInput
+                  style={styles.fieldInput}
+                  value={contactForm.address1}
+                  onChangeText={setContactField('address1')}
+                  placeholder="House / Flat / Block no."
+                  placeholderTextColor={palette.textFaint}
+                  editable={!savingProfile}
+                />
+              </View>
+              <View style={styles.fieldGroup}>
+                <Text style={styles.fieldLabel}>Address line 2</Text>
+                <TextInput
+                  style={styles.fieldInput}
+                  value={contactForm.address2}
+                  onChangeText={setContactField('address2')}
+                  placeholder="Street, Locality, City"
+                  placeholderTextColor={palette.textFaint}
+                  editable={!savingProfile}
+                />
+              </View>
+              <View style={styles.modalActions}>
+                <TouchableOpacity style={styles.cancelButton} onPress={() => setEditVisible(false)} disabled={savingProfile} activeOpacity={0.8}>
+                  <Text style={styles.cancelButtonText}>Cancel</Text>
+                </TouchableOpacity>
+                <TouchableOpacity style={[styles.saveButton, savingProfile && styles.saveButtonDisabled]} onPress={handleSaveContact} disabled={savingProfile} activeOpacity={0.8}>
+                  {savingProfile ? <ActivityIndicator size="small" color="#fff" /> : <Text style={styles.saveButtonText}>Save</Text>}
+                </TouchableOpacity>
+              </View>
+            </View>
+          </KeyboardAvoidingView>
+        </View>
+      </Modal>
     </ScrollView>
   );
 };
@@ -356,8 +489,28 @@ const styles = StyleSheet.create({
     backgroundColor: palette.surface, borderWidth: 1, borderColor: palette.border,
     borderRadius: 16, padding: 14, marginBottom: 16, gap: 10,
   },
+  detailsHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 12,
+  },
+  detailsTitle: { color: palette.text, fontSize: 14, fontWeight: '800' },
+  editDetailsButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    backgroundColor: palette.blueSoft,
+    borderWidth: 1,
+    borderColor: 'rgba(68, 153, 255, 0.25)',
+    borderRadius: 999,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+  },
+  editDetailsButtonText: { color: palette.blue, fontSize: 11.5, fontWeight: '800' },
   userDetailRow: { flexDirection: 'row', alignItems: 'center', gap: 10 },
   userDetailText: { color: palette.textMuted, fontSize: 13, flex: 1 },
+  userDetailPlaceholder: { color: palette.textFaint, fontSize: 12.5, lineHeight: 18 },
 
   avatarSection: { alignItems: 'center', marginBottom: 20, gap: 10 },
   avatarCircle: {
@@ -470,6 +623,29 @@ const styles = StyleSheet.create({
   },
   emptyTitle: { color: palette.textMuted, fontSize: 14, fontWeight: '700' },
   emptyText: { color: palette.textFaint, fontSize: 12.5, textAlign: 'center', lineHeight: 18 },
+  contactCard: {
+    backgroundColor: palette.surface,
+    borderWidth: 1,
+    borderColor: palette.border,
+    borderRadius: 18,
+    padding: 16,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+  },
+  contactIconWrap: {
+    width: 42,
+    height: 42,
+    borderRadius: 14,
+    backgroundColor: 'rgba(37, 211, 102, 0.10)',
+    borderWidth: 1,
+    borderColor: 'rgba(37, 211, 102, 0.22)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  contactCopy: { flex: 1 },
+  contactTitle: { color: palette.text, fontSize: 14, fontWeight: '800' },
+  contactText: { color: palette.textMuted, fontSize: 12.5, lineHeight: 18, marginTop: 4 },
 
   versionRow: { alignItems: 'center', marginTop: 6 },
   versionText: { color: palette.textFaint, fontSize: 12, fontWeight: '600' },
@@ -480,6 +656,85 @@ const styles = StyleSheet.create({
     marginTop: 8,
     textDecorationLine: 'underline',
   },
+  modalBackdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(15, 23, 42, 0.32)',
+    justifyContent: 'flex-end',
+  },
+  modalKeyboardWrap: {
+    width: '100%',
+  },
+  modalCard: {
+    backgroundColor: palette.surface,
+    borderTopLeftRadius: 24,
+    borderTopRightRadius: 24,
+    padding: 20,
+    paddingBottom: 28,
+    gap: 14,
+  },
+  modalHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'flex-start',
+    gap: 12,
+  },
+  modalHeaderText: { flex: 1 },
+  modalTitle: { color: palette.text, fontSize: 17, fontWeight: '800' },
+  modalSubtitle: { color: palette.textMuted, fontSize: 12.5, marginTop: 4 },
+  modalClose: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: palette.surfaceMuted,
+    borderWidth: 1,
+    borderColor: palette.border,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  fieldGroup: { gap: 7 },
+  fieldLabel: {
+    color: palette.textFaint,
+    fontSize: 12,
+    fontWeight: '700',
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+  },
+  fieldInput: {
+    backgroundColor: palette.surfaceMuted,
+    borderWidth: 1,
+    borderColor: palette.border,
+    borderRadius: 12,
+    paddingHorizontal: 14,
+    paddingVertical: 13,
+    color: palette.text,
+    fontSize: 14,
+  },
+  modalActions: {
+    flexDirection: 'row',
+    gap: 10,
+    marginTop: 6,
+  },
+  cancelButton: {
+    flex: 1,
+    backgroundColor: palette.surfaceMuted,
+    borderWidth: 1,
+    borderColor: palette.border,
+    borderRadius: 14,
+    paddingVertical: 14,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  cancelButtonText: { color: palette.textMuted, fontSize: 14, fontWeight: '700' },
+  saveButton: {
+    flex: 1,
+    backgroundColor: palette.accent,
+    borderRadius: 14,
+    paddingVertical: 14,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  saveButtonDisabled: { opacity: 0.6 },
+  saveButtonText: { color: '#fff', fontSize: 14, fontWeight: '800' },
 });
 
 export default ProfileScreen;
