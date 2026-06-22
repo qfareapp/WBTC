@@ -28,6 +28,10 @@ const safeEqualHex = (left, right) => {
 };
 
 function getTransport() {
+  if (!process.env.SMTP_HOST || !process.env.SMTP_USER || !process.env.SMTP_PASS) {
+    throw new ApiError(503, "OTP email service is not configured");
+  }
+
   return nodemailer.createTransport({
     host: process.env.SMTP_HOST,
     port: parseInt(process.env.SMTP_PORT || "587", 10),
@@ -148,15 +152,6 @@ exports.sendOtp = async (req, res, next) => {
     const otp = String(crypto.randomInt(100000, 999999));
     const expiresAt = new Date(Date.now() + OTP_TTL_MS);
 
-    await OtpRecord.updateMany({ email, used: false }, { used: true });
-    await OtpRecord.create({
-      email,
-      otpHash: hashOtp(email, otp),
-      expiresAt,
-      attemptCount: 0,
-      lastAttemptAt: null,
-    });
-
     const transport = getTransport();
     const hasEmbeddedLogo = fs.existsSync(QFARE_LOGO_PATH);
     await transport.sendMail({
@@ -174,6 +169,15 @@ exports.sendOtp = async (req, res, next) => {
             },
           ]
         : [],
+    });
+
+    await OtpRecord.updateMany({ email, used: false }, { used: true });
+    await OtpRecord.create({
+      email,
+      otpHash: hashOtp(email, otp),
+      expiresAt,
+      attemptCount: 0,
+      lastAttemptAt: null,
     });
 
     res.json({ ok: true, message: "OTP sent to your email" });
