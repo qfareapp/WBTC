@@ -29,8 +29,8 @@ router.post(
   validate([
     body("username")
       .trim()
-      .isLength({ min: 3, max: 64 })
-      .withMessage("username must be between 3 and 64 characters"),
+      .isLength({ min: 1, max: 64 })
+      .withMessage("username is required"),
     body("password")
       .isString()
       .isLength({ min: 1, max: 128 })
