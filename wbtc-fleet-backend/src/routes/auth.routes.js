@@ -33,8 +33,8 @@ router.post(
       .withMessage("username must be between 3 and 64 characters"),
     body("password")
       .isString()
-      .isLength({ min: 8, max: 128 })
-      .withMessage("password must be between 8 and 128 characters"),
+      .isLength({ min: 1, max: 128 })
+      .withMessage("password is required"),
   ]),
   login
 );
@@ -45,8 +45,8 @@ router.post(
   validate([
     body("currentPassword")
       .isString()
-      .isLength({ min: 8, max: 128 })
-      .withMessage("currentPassword must be between 8 and 128 characters"),
+      .isLength({ min: 1, max: 128 })
+      .withMessage("currentPassword is required"),
     body("newPassword")
       .isString()
       .isLength({ min: 8, max: 128 })
