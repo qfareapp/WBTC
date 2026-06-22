@@ -40,12 +40,33 @@ type SupportNode = {
   helperText?: string;
   allowEscalation?: boolean;
   resolutionHints?: string[];
+  recentBookingScope?: string;
   options: SupportOption[];
+};
+
+type SupportBooking = {
+  bookingId: string;
+  busNumber: string | null;
+  routeId: string | null;
+  source: string | null;
+  destination: string | null;
+  fare: number;
+  passengerCount: number;
+  status: string | null;
+  paymentMode: string | null;
+  paymentStatus: string | null;
+  razorpayOrderId: string | null;
+  razorpayPaymentId: string | null;
+  bookedAt: string | null;
+  paymentCapturedAt: string | null;
 };
 
 type SupportResponse = {
   ok: boolean;
   node: SupportNode;
+  context?: {
+    recentBookings?: SupportBooking[];
+  };
 };
 
 const LOCAL_SUPPORT_TREE: Record<string, SupportNode> = {
@@ -252,6 +273,7 @@ const SupportScreen: React.FC<Props> = ({ navigation }) => {
   const [error, setError] = useState<string | null>(null);
   const [currentNode, setCurrentNode] = useState<SupportNode | null>(null);
   const [history, setHistory] = useState<SupportNode[]>([]);
+  const [recentBookings, setRecentBookings] = useState<SupportBooking[]>([]);
 
   const loadNode = async (nodeId?: string, mode: 'replace' | 'push' = 'replace') => {
     if (!token) {
@@ -266,6 +288,7 @@ const SupportScreen: React.FC<Props> = ({ navigation }) => {
       const path = nodeId ? `/api/public/support/menu/${encodeURIComponent(nodeId)}` : '/api/public/support/menu';
       const data = await apiGet<SupportResponse>(path, token);
       setCurrentNode(data.node);
+      setRecentBookings(data.context?.recentBookings ?? []);
       setHistory(current =>
         mode === 'push'
           ? [...current, data.node]
@@ -278,6 +301,7 @@ const SupportScreen: React.FC<Props> = ({ navigation }) => {
       if (message === 'Route not found') {
         const localNode = getLocalSupportNode(nodeId);
         setCurrentNode(localNode);
+        setRecentBookings([]);
         setHistory(current => (mode === 'push' ? [...current, localNode] : [localNode]));
       } else {
         setError(message);
@@ -319,6 +343,10 @@ const SupportScreen: React.FC<Props> = ({ navigation }) => {
 
   const handleEscalate = () => {
     const flowSummary = trail.filter(title => title !== 'QFare Support').join(' > ') || 'General support';
+    const recentSummary = recentBookings.slice(0, 2).map(booking => {
+      const paymentRef = booking.razorpayPaymentId || booking.razorpayOrderId || '--';
+      return `Booking ${booking.bookingId} | Payment ref: ${paymentRef} | Status: ${booking.paymentStatus || booking.status || '--'}`;
+    });
     const message = [
       'Hello Admin, I need help.',
       'Role: Passenger',
@@ -327,6 +355,8 @@ const SupportScreen: React.FC<Props> = ({ navigation }) => {
       `Email: ${user?.email || '--'}`,
       `Support flow: ${flowSummary}`,
       currentNode ? `Current topic: ${currentNode.title}` : null,
+      recentSummary.length ? 'Recent bookings:' : null,
+      ...recentSummary,
     ]
       .filter(Boolean)
       .join('\n');
@@ -427,6 +457,40 @@ const SupportScreen: React.FC<Props> = ({ navigation }) => {
               <Text style={styles.leafText}>If this did not fully solve your issue, escalate it to WhatsApp support below.</Text>
             </View>
           )}
+
+          {recentBookings.length ? (
+            <View style={styles.recentSection}>
+              <Text style={styles.recentSectionTitle}>
+                {currentNode.recentBookingScope === 'payments' ? 'Recent payment-related bookings' : 'Recent bookings'}
+              </Text>
+              <View style={styles.recentList}>
+                {recentBookings.map(booking => (
+                  <View key={booking.bookingId} style={styles.recentCard}>
+                    <View style={styles.recentTopRow}>
+                      <Text style={styles.recentBookingId}>{booking.bookingId}</Text>
+                      <Text style={styles.recentStatus}>{booking.paymentStatus || booking.status || '--'}</Text>
+                    </View>
+                    <Text style={styles.recentRouteText}>
+                      {[booking.source, booking.destination].filter(Boolean).join(' -> ') || 'Route details unavailable'}
+                    </Text>
+                    <Text style={styles.recentMetaText}>
+                      {`Fare: Rs ${booking.fare.toFixed(2)} | Pax: ${booking.passengerCount} | ${booking.paymentMode || '--'}`}
+                    </Text>
+                    {(booking.razorpayPaymentId || booking.razorpayOrderId) ? (
+                      <Text style={styles.recentMetaText}>
+                        {`Payment ref: ${booking.razorpayPaymentId || booking.razorpayOrderId}`}
+                      </Text>
+                    ) : null}
+                    {booking.bookedAt ? (
+                      <Text style={styles.recentMetaText}>
+                        {`Booked: ${new Date(booking.bookedAt).toLocaleString()}`}
+                      </Text>
+                    ) : null}
+                  </View>
+                ))}
+              </View>
+            </View>
+          ) : null}
 
           {currentNode.allowEscalation ? (
             <TouchableOpacity style={styles.whatsappButton} onPress={handleEscalate} activeOpacity={0.85}>
@@ -574,6 +638,27 @@ const styles = StyleSheet.create({
     alignItems: 'flex-start',
   },
   leafText: { flex: 1, color: palette.textMuted, fontSize: 12.5, lineHeight: 18 },
+  recentSection: { marginTop: 16, gap: 10 },
+  recentSectionTitle: { color: palette.text, fontSize: 14, fontWeight: '800' },
+  recentList: { gap: 10 },
+  recentCard: {
+    backgroundColor: palette.surface,
+    borderWidth: 1,
+    borderColor: palette.border,
+    borderRadius: 16,
+    padding: 14,
+    gap: 6,
+  },
+  recentTopRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    gap: 10,
+  },
+  recentBookingId: { color: palette.text, fontSize: 12.5, fontWeight: '800' },
+  recentStatus: { color: palette.accent, fontSize: 11.5, fontWeight: '800' },
+  recentRouteText: { color: palette.textMuted, fontSize: 12.5, fontWeight: '700' },
+  recentMetaText: { color: palette.textFaint, fontSize: 11.5, lineHeight: 16 },
   whatsappButton: {
     marginTop: 14,
     backgroundColor: '#1fa855',

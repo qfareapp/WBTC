@@ -6,6 +6,7 @@ const SUPPORT_TREE = {
       "Tell us what you need help with. Choose the option that matches your issue.",
     helperText: "You can continue with guided support or switch to WhatsApp anytime.",
     allowEscalation: true,
+    recentBookingScope: "all",
     options: [
       {
         id: "booking_issue",
@@ -32,6 +33,7 @@ const SUPPORT_TREE = {
     title: "Booking issue",
     message: "Pick the booking problem you are facing.",
     allowEscalation: true,
+    recentBookingScope: "all",
     options: [
       {
         id: "ticket_not_received",
@@ -58,6 +60,7 @@ const SUPPORT_TREE = {
     title: "Payment issue",
     message: "Choose the payment issue you need help with.",
     allowEscalation: true,
+    recentBookingScope: "payments",
     options: [
       {
         id: "money_debited_no_ticket",
@@ -112,6 +115,7 @@ const SUPPORT_TREE = {
       "First, open Profile > Live Tickets and pull to refresh once. If the ticket still does not appear, contact support and include your booking ID, route, payment time, and registered email.",
     helperText: "Escalate if the ticket is still missing after one refresh.",
     allowEscalation: true,
+    recentBookingScope: "all",
     resolutionHints: ["Refresh Live Tickets once", "Keep booking/payment details ready"],
     options: [],
   },
@@ -121,6 +125,7 @@ const SUPPORT_TREE = {
     message:
       "If the booking is not yet used, contact support immediately with your booking ID and the correct source/destination details. Include what you selected and what you intended to select.",
     allowEscalation: true,
+    recentBookingScope: "all",
     resolutionHints: ["Share booking ID", "Mention correct and incorrect stop details"],
     options: [],
   },
@@ -130,6 +135,7 @@ const SUPPORT_TREE = {
     message:
       "For faster help, share: booking ID, route code, bus number if visible, travel date, payment time, and your registered QFare email or passenger ID.",
     allowEscalation: true,
+    recentBookingScope: "all",
     resolutionHints: ["Booking ID", "Route code", "Travel date and payment time"],
     options: [],
   },
@@ -139,6 +145,7 @@ const SUPPORT_TREE = {
     message:
       "Please wait a short while and refresh your Live Tickets once. If the ticket is still missing, contact support with your payment reference, amount, time of payment, and passenger ID.",
     allowEscalation: true,
+    recentBookingScope: "payments",
     resolutionHints: ["Refresh once", "Keep payment reference and amount ready"],
     options: [],
   },
@@ -148,6 +155,7 @@ const SUPPORT_TREE = {
     message:
       "Refund timing depends on the payment provider and bank. Contact support with your booking ID or payment reference if the refund has not appeared within the expected bank settlement time.",
     allowEscalation: true,
+    recentBookingScope: "payments",
     resolutionHints: ["Share booking ID or payment reference", "Mention when the charge happened"],
     options: [],
   },
@@ -157,6 +165,7 @@ const SUPPORT_TREE = {
     message:
       "Contact support with both transaction references, the charged amounts, and your passenger ID. This helps the team verify whether one payment failed or both were captured.",
     allowEscalation: true,
+    recentBookingScope: "payments",
     resolutionHints: ["Share both transaction references", "Mention both charged amounts"],
     options: [],
   },
